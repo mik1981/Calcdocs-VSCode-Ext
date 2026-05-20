@@ -3,6 +3,7 @@ import * as vscode from "vscode";
 import { formatPreviewNumber } from "../core/preview";
 import type { CalcDocsState } from "../core/state";
 import { pickWord } from "../utils/editor";
+import { buildCopyLink } from "../utils/hoverActions";
 
 function buildYamlHoverMarkdown(state: CalcDocsState, symbol: string): vscode.MarkdownString {
   const entry = state.formulaIndex.get(symbol);
@@ -16,12 +17,15 @@ function buildYamlHoverMarkdown(state: CalcDocsState, symbol: string): vscode.Ma
 
   if (typeof entry.valueCalc === "number" && Number.isFinite(entry.valueCalc)) {
     lines.push(`- Value: \`${formatPreviewNumber(state, entry.valueCalc)}\``);
+    lines.push(`  ${buildCopyLink(String(entry.valueCalc))}`);
   } else {
     lines.push("- Value: `unresolved`");
   }
 
-  if (entry.unit) {
-    lines.push(`- Unit: \`${entry.unit}\``);
+  // Non mostrare stringhe dimensionali grezze come "I^1" o "M^1 L^2 T^-3"
+  const unitToShow = entry.unit && !/^[MLTIK]/.test(entry.unit) ? entry.unit : undefined;
+  if (unitToShow) {
+    lines.push(`- Unit: \`${unitToShow}\``);
   }
 
   if (entry.exprType) {
@@ -79,8 +83,8 @@ function buildYamlHoverMarkdown(state: CalcDocsState, symbol: string): vscode.Ma
   }
 
   const markdown = new vscode.MarkdownString(lines.join("\n"));
-  markdown.isTrusted = false;
-  markdown.supportHtml = false;
+  markdown.isTrusted = true;
+  markdown.supportHtml = true;
   return markdown;
 }
 
@@ -107,7 +111,30 @@ export function registerYamlHoverProvider(
 
         const entry = state.formulaIndex.get(symbol);
         if (!entry) {
-          return undefined;
+          // return undefined;
+          // Fallback: simbolo C/C referenziato dentro un'espressione YAML
+          const cValue = state.symbolValues.get(symbol);
+          const cUnit  = state.symbolUnits.get(symbol);
+          const cExpr  = state.allDefines.get(symbol);
+
+          if (cValue === undefined && cUnit === undefined) {
+            return undefined;
+          }
+
+          const cRange = document.getWordRangeAtPosition(position, /[A-Za-z_]\w*/);
+          if (!cRange) return undefined;
+
+          const cLines: string[] = [`### ${symbol}  *(C/C)*`];
+          if (cValue !== undefined) cLines.push(`- Value: \`${formatPreviewNumber(state, cValue)}\``);
+          if (cUnit)                cLines.push(`- Unit: \`${cUnit}\``);
+          if (cExpr && cExpr !== String(cValue)) {
+            cLines.push('', '**Expression:**', '```c', cExpr, '```');
+          }
+
+          const cMd = new vscode.MarkdownString(cLines.join('\n'));
+          cMd.isTrusted = true;
+          cMd.supportHtml = true;
+          return new vscode.Hover(cMd, cRange);
         }
 
         const range = document.getWordRangeAtPosition(position, /[A-Za-z_]\w*/);

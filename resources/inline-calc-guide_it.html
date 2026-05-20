@@ -188,5 +188,44 @@ const float VREF = 3.3; // V</code></pre>
       <li>Usa inline per verifiche veloci direttamente nel sorgente.</li>
     </ol>
   </div>
+
+  <h2>11) Unità supportate (incl. prefissi SI)</h2>
+  <div class="card">
+    <p>Le unità sono parsingate da <code>src/engine/units.ts</code> e possono comparire in YAML (<code>unit:</code>) o nelle espressioni inline (es. <code>// = 12V</code>).</p>
+    <p class="muted">Regola chiave: le conversioni tra unità sono consentite solo quando le <b>dimensioni</b> coincidono. Somma/sottrazione richiede la stessa dimensione; moltiplicazione/divisione genera un’unità composita.</p>
+
+    <h3>11.1) Uso dei prefissi SI / engineering</h3>
+    <p>Per le unità <b>prefixabili</b>, CalcDocs accetta moltiplicatori engineering tramite prefisso prepended:</p>
+    <pre><code>prefixes: q, r, y, z, a, f, p, n, u, m, c, d, da, h, k, M, G, T
+example: mV, kOhm, uA, MHz</code></pre>
+    <p class="muted">Alcune unità non-SI hanno anche alias predefiniti (es. <code>kohm</code> per <code>kOhm</code>, <code>in</code> per inch, <code>ft</code> per feet, ecc.).</p>
+
+    <h3>11.2) Scrivere unità composte</h3>
+    <p>Puoi moltiplicare/dividere unità con operatori e parentesi, e usare potenze con <code>^</code>:</p>
+    <pre><code>V/m
+m/s
+N*m
+W/(m*K)
+m2/s
+A/mm2
+Ohm^2 (funziona anche via ^)</code></pre>
+
+    <h3>11.3) Insiemi pratici di token supportati</h3>
+    <p>L’elenco include (tra le altre) queste famiglie:</p>
+    <ul>
+      <li><b>dimensionless</b>: <code>ratio</code>, <code>%</code>, <code>pct</code>, <code>ppm</code>, <code>ppb</code>, <code>ppt</code>, <code>rad</code>, <code>deg</code>, <code>dB</code>, <code>bit</code>, <code>byte</code></li>
+      <li><b>tempo &amp; frequenza</b>: <code>s</code>, <code>min</code>, <code>h</code>, <code>day</code>, <code>Hz</code></li>
+      <li><b>lunghezze &amp; distanze</b>: <code>m</code>, <code>in</code>, <code>ft</code>, <code>yd</code>, <code>mi</code>, <code>nmi</code> (+ varianti piccole/anglosassoni)</li>
+      <li><b>aree &amp; volumi</b>: <code>m2</code>, <code>in2</code>, <code>ft2</code>, <code>yd2</code>, <code>ac</code>, <code>ha</code>, <code>m3</code>, <code>L</code>, <code>gal</code>, <code>qt</code>, <code>pt</code></li>
+      <li><b>massa</b>: <code>g</code>, <code>kg</code>, <code>lb</code>, <code>oz</code>, <code>st</code>, <code>slug</code>, <code>ton(US)</code>, <code>ton(UK)</code></li>
+      <li><b>forza, pressione, coppia</b>: <code>N</code>, <code>lbf</code>, <code>Pa</code>, <code>bar</code>, <code>atm</code>, <code>psi</code>, <code>N*m</code>, <code>lbf*ft</code>, <code>lbf/in</code></li>
+      <li><b>energia &amp; potenza</b>: <code>J</code>, <code>eV</code>, <code>cal</code>, <code>BTU</code>, <code>Wh</code>, <code>W</code>, <code>hp</code>, <code>BTU/h</code></li>
+      <li><b>velocità / portata</b>: <code>m/s</code>, <code>km/h</code>, <code>mph</code>, <code>mps2</code> (e forme angolari), <code>L/min</code>, <code>mL/min</code>, <code>gal/min</code>, <code>m3/s</code></li>
+      <li><b>elettrico</b>: <code>V</code>, <code>A</code>, <code>Ohm</code>, <code>F</code>, <code>H</code>, <code>S</code>, <code>Wb</code>, <code>T</code>, più compositi come <code>V/m</code> e <code>A/m2</code></li>
+      <li><b>termico / misc</b>: <code>K</code>, <code>degC</code>, <code>degF</code>, <code>rankine</code>/<code>R</code>, viscosità (es. <code>cP</code>) e unità di scambio termico (es. <code>W/(m*K)</code>)</li>
+    </ul>
+
+    <p class="muted">Se usi un token non riconosciuto, CalcDocs segnala <b>unknown unit</b> e prova a suggerire alternative.</p>
+  </div>
 </body>
 </html>

@@ -182,21 +182,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
   const diagnosticsProvider = new DiagnosticsProvider(state, clangdService);
 
+  // Formula Outline - create first so it can be passed to inlineCalcResultsViewProvider
+  const formulaRegistry = new FormulaRegistry();
+
   // Crea il provider per i CodeLens (valori delle formule C/C++)
   const codeLensProvider = new CppValueCodeLensProvider(state);
   const inlineCalcCodeLensProvider = new InlineCalcCodeLensProvider(state);
-  const inlineCalcResultsViewProvider = new InlineCalcResultsViewProvider(state);
+  const inlineCalcResultsViewProvider = new InlineCalcResultsViewProvider(state, formulaRegistry);
 
   // Crea il provider per i ghost values
   const ghostProvider = new GhostValueProvider(state);
 
   // Formula Outline
-  const formulaRegistry = new FormulaRegistry();
   const formulaOutlineProvider = new FormulaOutlineProvider(
     formulaRegistry,
     () => state.symbolValues,   // ← lazy getter: always reflects latest analysis
     () => state.symbolUnits,
-    () => state.csvTables
+    () => state.csvTables,
+    () => state               // ← lazy getter for state (thousands separator config)
   );
 
   context.subscriptions.push(formulaOutlineProvider);
@@ -389,7 +392,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     clangdService,
     config.enableCppProviders
   );
-  registerFormulaOutlineHoverProvider(context, formulaRegistry);
+  registerFormulaOutlineHoverProvider(context, formulaRegistry, () => state);
   registerInlineCalcHoverProvider(context, state);
   registerYamlHoverProvider(context, state);
   registerCppCodeLensProvider(context, codeLensProvider);

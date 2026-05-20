@@ -1,177 +1,177 @@
-# 🧮 CalcDocs — Instantly See What Your Firmware REALLY Computes
+# 🧮 CalcDocs — Instantly See What Your Firmware REALLY Computes [0.2.8 *prerelease*]
+
+<p align="center">
+  <b>Reveal hidden firmware values directly inside VS Code.</b><br>
+  Inline calculations • Macro value expansion • Engineering formulas • Unit conversions<br><br>
+  <b>Live engineering knowledge embedded directly into firmware.</b>
+</p>
+
+---
 
 [![Version](https://vsmarketplacebadges.dev/version-short/convergo-dev.calcdocs-vscode-extension.svg)](https://visualstudio.com)
 [![Download](https://vsmarketplacebadges.dev/downloads-short/convergo-dev.calcdocs-vscode-extension.svg)](https://visualstudio.com)
 [![License](./resources/license-badge.png)](./LICENSE.md)
 
-Stop expanding macros.
-Stop guessing values.
-Stop losing calculations in: Excel sheets, random .txt notes or forgotten documentation.
+> [!IMPORTANT]
+> Firmware logic is often invisible.
+>
+> Values are buried behind:
+> - chained macros
+> - scaling constants
+> - unit conversions
+> - spreadsheet calculations
+> - scattered documentation
+>
+> 👉 **CalcDocs makes those values visible instantly.**
 
-👉 Hover any C/C++ constant → see the **final computed value instantly**
+---
 
-No build. No debug. No navigation.
+## ⚡ What CalcDocs does
+
+CalcDocs transforms VS Code into a **live firmware calculation explorer**.
+
+Instead of manually expanding macros, opening Excel files, or mentally resolving formulas:
+
+✅ Hover a value  
+✅ See the final computed result  
+✅ Understand firmware logic instantly
+
+No build.
+No flashing.
+No debugger.
 
 ---
 
 ## ⚡ 5-second demo
 
-### Usefull 1: Coding Evaluator
+## 1️⃣ Coding Evaluator
 
 Write this:
 
 ```c
 #define RPM 1000
 #define SPEED (RPM * 0.10472)
-
 ```
 
-You instantly see:
+CalcDocs instantly shows:
 
 ```c
 #define SPEED (RPM * 0.10472)   ← 104.72
 ```
 
-✅ No compile  
-✅ No debugger  
-✅ No manual calculation  
+✅ Real-time evaluation  
+✅ Inline resolved values  
+✅ No manual calculations  
 
-👉 What you see = what your firmware computes
+---
 
-### Usefull 2: Realtime note taker
+## 2️⃣ Realtime Engineering Notes
 
-Write this:
+Write this directly inside your firmware comments:
 
 ```c
 // @rpm = 3000 rpm
 // = @rpm -> rad/s
-// = 13 N * 1 m * @rpm -> rad/s
-
+// = 13 N * 1 m * @rpm -> W
 ```
 
-You instantly see:
+CalcDocs evaluates everything live:
 
 ```c
 // @rpm = 3000 rpm
 // = @rpm -> rad/s <- 314.1592653589793 rad/s
 // = 13 N * 1 m * @rpm -> W <- 4084.0704496667313 W
-
 ```
-
-CalcDocs evaluates comments in real time and keeps engineering calculations close to the firmware logic.
-
-✅ Unit conversions  
-✅ Realtime calculations  
-✅ Traceable engineering decisions  
-✅ Self-documented firmware  
-
-👉 Your code becomes the documentation
-
-### Usefull 3: Macro Chain Revelation
-
-| File | Screenshot |
-| :---: | :---: |
-| Inside ***C code*** | ![Macro Chain Revelation in code](./resources/macro_chain_revelation_code.gif) |
-| Inside ***formulas\*.yaml*** file | ![Macro Chain Revelation in formulas](./resources/macro_chain_revelation_formulas.gif) |
-
-## Firmware blindness before & after
-
-|  |  |
-| :---: | :---: |
-| **Before** | ![Before](./resources/firmware_blindness_before.png) |
-| **After** | ![After](./resources/firmware_blindness_after.png) |
-
-## Macro and constant generation header output by quick menu
-
-| Header file generation | 
-| :---: |
-![Macro and constant generation header output](./resources/generate_header.gif) |  
-
-| Quick menu |
-| :---: |
-| ![Macro and constant generation header output](./resources/quick_menu.png) |
-
----
-
-## 🔥 Why this matters
-
-Firmware is not hard because of logic —
-it's hard because **values are hidden**.
-
-* Macros span multiple files
-* Constants depend on chains
-* Formulas live in Excel or docs
-* Units and scaling are implicit
-
-👉 Understanding one value = navigating half the project
-
-**CalcDocs removes that friction completely.**
-
----
-
-## 👀 What you get
-
-### See real values instantly
-
-* Inline previews for macros and constants
-* Hover with resolved numeric values
-* CodeLens summaries directly in code
-* Decimal + hex representation
-
-### 🧮 Inline engineering calculator
 
 * Realtime calculations directly in comments
 * Unit conversion (`rpm -> rad/s`, `atm -> Pa`, etc.)
 * Keep formulas near the actual firmware logic
 * Eliminate scattered Excel and text notes
 
-👉 The calculations stay where the engineering decisions are made.
 
 ---
 
-### 🔗 YAML ↔ C synchronization
-
-* Define formulas in `formulas*.yaml`
-* See results directly in C/C++
-* No duplication, no drift
-
----
-
-### ⚖️ Built-in validation
-
-* Unit consistency checks
-* Overflow detection
-* Mismatch diagnostics (YAML vs C)
+> [!TIP]
+> Keep engineering calculations close to the firmware logic instead of:
+> - Excel sheets
+> - random `.txt` files
+> - disconnected documentation
+>
+> Your firmware becomes self-documented.
 
 ---
 
-### ⚡ Works on real projects
+## 3️⃣ Macro Chain Revelation
 
-* clangd integration (optional, high accuracy)
-* IntelliSense-compatible (no conflicts)
-* Internal parser fallback (always works)
-* Optimized for large codebases
-
----
-
-## 🧠 How it works (simple)
-
-CalcDocs combines 3 things:
-
-1. Reads your C/C++ code (macros, constants)
-2. Evaluates expressions safely
-3. Shows results inline in VS Code
-
-Optional:
-
-* Uses clangd for deeper analysis
-* Syncs with YAML formulas
-
-👉 No configuration required to start
+| File | Preview |
+| :---: | :---: |
+| Inside ***C code*** | ![Macro Chain Revelation in code](./resources/macro_chain_revelation_code.gif) |
+| Inside **formulas\*.yaml** | ![Macro Chain Revelation in formulas](./resources/macro_chain_revelation_formulas.gif) |
 
 ---
 
-## 📄 YAML Formula System
+# 👀 Firmware Blindness — Before vs After
+
+| Before | After |
+| :---: | :---: |
+| **Before** | ![Before](./resources/firmware_blindness_before.png) |
+| **After** | ![After](./resources/firmware_blindness_after.png) |
+
+---
+
+# ⚡ Quick Actions & Header Generation
+
+| Header generation |
+| :---: |
+![Macro and constant generation header output](./resources/generate_header.gif) |  
+
+| Quick menu |
+| :---: |
+| ![Quick menu](./resources/quick_menu.png) |
+
+---
+
+# 🔥 Why this matters
+
+Firmware development is rarely difficult because of syntax.
+
+It becomes difficult because:
+
+- values are hidden
+- formulas are fragmented
+- scaling is implicit
+- engineering decisions live outside the codebase
+
+Understanding a single value may require:
+
+- opening multiple headers
+- expanding macro chains
+- checking documentation
+- validating unit conversions
+- searching old spreadsheets
+
+---
+
+> [!WARNING]
+> Most firmware projects suffer from:
+> - duplicated formulas
+> - stale spreadsheets
+> - undocumented scaling
+> - hidden assumptions
+>
+> These issues create real bugs.
+
+---
+
+## CalcDocs removes that friction.
+
+Instead of navigating half the project:
+
+👉 you immediately see what the firmware computes.
+
+---
+
+## 🔗 YAML ↔ C Synchronization
 
 Define formulas once:
 
@@ -185,11 +185,26 @@ Use them everywhere.
 
 CalcDocs:
 
-* evaluates them
-* links them to C/C++
-* shows results inline
+✅ evaluates formulas  
+✅ syncs YAML with C/C++  
+✅ prevents formula drift  
+✅ shows results inline  
 
-👉 Your formulas become **live and synchronized**
+---
+
+## ⚖️ Built-In Validation
+
+Detect issues early:
+
+- Unit mismatches
+- Overflow risks
+- Invalid conversions
+- YAML/C inconsistencies
+
+---
+
+> [!IMPORTANT]
+> CalcDocs is designed for real embedded firmware workflows.
 
 ---
 
@@ -206,16 +221,6 @@ CalcDocs shows:
 ```c
 #define POWER (VIN * CURRENT)   ← 48W
 ```
-
----
-
-## 🚀 0 → Value in seconds
-
-1. Install the extension
-2. Open a C/C++ file
-3. Hover any value
-
-✅ Done
 
 ---
 
@@ -239,41 +244,51 @@ Know values before runtime
 
 ---
 
-## ❗ What CalcDocs is NOT
+## 📚 Create Self-Documenting Firmware
 
-* Not a compiler
-* Not a debugger
-* Not a full static analyzer
+Engineering decisions stay inside the source code.
 
-👉 It focuses on one thing:
+---
 
-**making numeric logic visible**
+# ❗ What CalcDocs Is NOT
+
+CalcDocs is intentionally focused.
+
+It is:
+
+❌ NOT a compiler  
+❌ NOT a debugger  
+❌ NOT a full static analyzer  
+
+---
+
+> [!NOTE]
+> CalcDocs focuses on one thing:
+>
+> **making firmware numeric logic visible.**
 
 ---
 
 ## ⚙️ Recommended setup (optional)
 
-Works best with:
+CalcDocs works standalone.
 
-* **clangd (recommended)** → better symbols & accuracy
-* C/C++ (ms-vscode.cpptools)
-* CMake Tools
+For best results, combine it with:
+
+- `clangd` *(recommended)*
+- `ms-vscode.cpptools`
+- `CMake Tools`
 
 CalcDocs integrates without conflicts.
 
 ---
 
-## ⭐ Key capabilities (advanced)
+> [!TIP]
+> CalcDocs supports engineering prefixes automatically:
+>
+> `mV`, `uV`, `nV`, `kV`, `MHz`, `mA`, etc.
 
-* Full macro expansion (including chained expressions)
-* Conditional macro awareness (`#if`, `#ifdef`, etc.)
-* CSV/table lookups inside YAML formulas
-* Header generation (`macro_generate.h`)
-* Inline calculations inside comments
-* LRU cache for large projects
-* Hybrid symbol resolution (clangd + fallback parser)
-
---- 
+---
 
 ## ❤️ Support
 
@@ -284,18 +299,6 @@ If CalcDocs saves you time:
 
 - 💖 Support development  
   [![PayPal](https://img.shields.io/badge/PayPal-Support-blue?logo=paypal&logoColor=white)](https://www.paypal.me/gianmichelepasinelli)
-
---- 
-
-## 🚀 Roadmap
-
-* Multi-workspace support
-* Better visualization (graphs, relationships)
-* Performance improvements for huge projects
-* Export values to CSV/JSON
-* Extended unit conversion
-* Cortex-Debug integration
-* AI-assisted validation
 
 ---
 
@@ -320,4 +323,5 @@ Full documentation available on GitHub:
 Spreadsheets hide logic.
 Code hides values.
 
-**CalcDocs reveals both.**
+# **CalcDocs reveals both.**
+

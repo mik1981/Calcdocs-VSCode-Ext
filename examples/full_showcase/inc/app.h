@@ -1,3 +1,3 @@
-#ifndef APP_H
-#define APP_H
-#endif
+#pragma once
+
+#define APP_NAME "CalcDocs Full Showcase"

@@ -28,8 +28,8 @@ P_atm: { value: 1.986923267 }
 # 4.74 L/min = 0.000079 m3/s
 Q_m3s: { value: 0.000079 }
 
-# Temperature units are currently modeled linearly, so degC -> K has no offset.
-T_K: { value: 25 }
+# 25 degC = 298.15 K
+T_K: { value: 298.15 }
 
 # 1.5 h = 5400 s
 T_s: { value: 5400 }

@@ -5,6 +5,7 @@ import {
   parseExpression,
   printExpression,
 } from "./ast";
+import { formatNumberToSigFigs } from "../utils/nformat";
 import {
   addQuantities,
   applyOutputUnit,
@@ -36,6 +37,7 @@ export type PrimitiveArgument = number | string;
 export type EvaluationContext = {
   resolveIdentifier: (name: string) => Quantity | undefined;
   resolveLookup?: (functionName: string, args: PrimitiveArgument[]) => number | Quantity;
+  ignoreUnitCompatibility?: boolean;
 };
 
 export type EvaluationResult =
@@ -45,15 +47,44 @@ export type EvaluationResult =
 const QUANTITY_LITERAL_RX =
   /(?<![A-Za-z0-9_.$])([+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?)\s+([A-Za-z%][A-Za-z0-9_%]*)/g;
 
+/**
+ * Tenta di decomporre un token unità sconosciuto come "A2" in "A^2".
+ * Cerca un prefisso di unità base seguito da un esponente numerico.
+ * Esempi: "A2" → "A^2", "mA2" → "mA^2", "V2" → "V^2"
+ * Non decompone unità già definite come "m2", "in2", ecc.
+ */
+function decomposeUnit(rawUnit: string): string | undefined {
+  // Cerca un pattern: base unit (lettere) + esponente (numeri), es. "A2", "V3"
+  // Deve finire con cifre, e la parte letterale deve essere un'unità valida
+  const match = rawUnit.match(/^([A-Za-z%][A-Za-z%]*?)(\d+)$/);
+  if (!match) return undefined;
+
+  const base = match[1];
+  const exponent = match[2];
+
+  // Verifica che la base sia un'unità valida
+  if (!getUnitSpec(base)) return undefined;
+
+  return `${base}^${exponent}`;
+}
+
 export function preprocessExpression(expression: string): string {
   // 1. Literal numerici: "5 mA" -> "__unit(5, 'mA')"
   let processed = expression.replace(
     QUANTITY_LITERAL_RX,
     (full: string, rawValue: string, rawUnit: string) => {
-      if (!getUnitSpec(rawUnit)) {
-        return full;
+      const spec = getUnitSpec(rawUnit);
+      if (spec) {
+        return `__unit(${rawValue}, ${JSON.stringify(rawUnit)})`;
       }
-      return `__unit(${rawValue}, ${JSON.stringify(rawUnit)})`;
+
+      // Unità non riconosciuta: prova a decomporre, es. "A2" → "A^2"
+      const decomposed = decomposeUnit(rawUnit);
+      if (decomposed) {
+        return `__unit(${rawValue}, ${JSON.stringify(decomposed)})`;
+      }
+
+      return full;
     }
   );
 
@@ -78,7 +109,17 @@ export function preprocessExpression(expression: string): string {
   
   while ((match = COMPLEX_UNIT_RX.exec(result)) !== null) {
     const unitToken = match[1];
-    if (!getUnitSpec(unitToken)) {
+    let effectiveUnit: string | undefined;
+
+    const spec = getUnitSpec(unitToken);
+    if (spec) {
+      effectiveUnit = unitToken;
+    } else {
+      // Prova a decomporre, es. ") A2" → ") A^2"
+      effectiveUnit = decomposeUnit(unitToken);
+    }
+
+    if (!effectiveUnit) {
       continue;
     }
 
@@ -108,7 +149,7 @@ export function preprocessExpression(expression: string): string {
       }
 
       const expressionToWrap = result.slice(startIndex, closeParenIndex + 1);
-      const replacement = `__unit(${expressionToWrap}, ${JSON.stringify(unitToken)})`;
+      const replacement = `__unit(${expressionToWrap}, ${JSON.stringify(effectiveUnit)})`;
       
       const before = result.slice(0, startIndex);
       const after = result.slice(unitEnd);
@@ -225,7 +266,7 @@ function evaluateCall(
     };
   }
 
-  if (normalized === "csv" || normalized === "lookup") {
+  if (normalized === "csv" || normalized === "lookup" || normalized === "table") {
     if (!context.resolveLookup) {
       return {
         ok: false,
@@ -321,7 +362,8 @@ function evaluateCall(
 function evaluateBinary(
   node: BinaryExpressionNode,
   leftValue: RuntimeValue,
-  rightValue: RuntimeValue
+  rightValue: RuntimeValue,
+  context: EvaluationContext
 ): UnitResult<RuntimeValue> {
   const left = toQuantity(leftValue, `operator '${node.operator}' left operand`);
   if (!left.ok) {
@@ -337,6 +379,15 @@ function evaluateBinary(
     case "+": {
       const result = addQuantities(left.value, right.value);
       if (!result.ok) {
+        if (context.ignoreUnitCompatibility) {
+          return {
+            ok: true,
+            value: {
+              kind: "quantity",
+              quantity: createDimensionlessQuantity(left.value.valueSi + right.value.valueSi),
+            },
+          };
+        }
         return result;
       }
 
@@ -351,6 +402,15 @@ function evaluateBinary(
     case "-": {
       const result = subtractQuantities(left.value, right.value);
       if (!result.ok) {
+        if (context.ignoreUnitCompatibility) {
+          return {
+            ok: true,
+            value: {
+              kind: "quantity",
+              quantity: createDimensionlessQuantity(left.value.valueSi - right.value.valueSi),
+            },
+          };
+        }
         return result;
       }
 
@@ -470,7 +530,7 @@ function evaluateNode(
         return right;
       }
 
-      return evaluateBinary(node, left.value, right.value);
+      return evaluateBinary(node, left.value, right.value, context);
     }
     case "call": {
       const args: RuntimeValue[] = [];
@@ -581,7 +641,7 @@ function evaluateLiteralCall(
     return Math.cos(args[0]);
   }
 
-  if ((normalized === "csv" || normalized === "lookup") && lookup) {
+  if ((normalized === "csv" || normalized === "lookup" || normalized === "table") && lookup) {
     try {
       const value = lookup(normalized, args);
       // return Number.isFinite(value) ? value : null;
@@ -774,11 +834,8 @@ function reduceNumericNodeOnce(
 }
 
 function formatStepValue(value: number): string {
-  if (Number.isInteger(value)) {
-    return String(value);
-  }
-
-  return value.toFixed(10).replace(/\.?0+$/, "");
+  if (!Number.isFinite(value)) return String(value);
+  return formatNumberToSigFigs(value, 6);
 }
 
 export function substituteIdentifiersForExplain(

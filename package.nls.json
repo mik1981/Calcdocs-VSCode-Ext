@@ -32,6 +32,7 @@
   "config.cpp.hover.showInheritedAmbiguity": "Show inherited ambiguity causes in hover.",
   "config.cpp.hover.showFormulaSection": "Show linked YAML formula section in hover.",
   "config.cpp.hover.showKnownValue": "Show known numeric value in hover when available.",
+  "config.cpp.hover.showLiveRegisterDecoder": "Show live register decoder output for register assignments in hover.",
   "config.inline.codeLens.enabled": "Enable inline calculation CodeLens hints.",
   "config.inline.codeLens.maxItemsPerFile": "Maximum number of inline CodeLens entries shown per file.",
   "config.inline.hover.enabled": "Enable inline calculation hover.",
@@ -73,5 +74,5 @@
   "config.formulaHeader.outputPath": "CalcDocs: Path for generated C header with formula macros",
   "config.formulaHeader.includeResolvedValues": "CalcDocs: Add resolved numeric value as comment next to each generated #define.",
   "command.generateFormulaHeader.title": "CalcDocs: Generate Formulas Header",
-  "view.inlineCalcResults.name": "CalcDocs: Inline Results"
+  "view.inlineCalcResults.name": "CalcDocs: Formulas"
 }

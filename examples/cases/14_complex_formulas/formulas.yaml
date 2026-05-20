@@ -1,0 +1,55 @@
+ADC_PHASE_U:
+  value: 2840
+  unit: count
+ADC_OFFSET:
+  value: 2048
+  unit: count
+ADC_REF_V:
+  value: 3.3
+  unit: V
+ADC_MAX:
+  value: 4095
+  unit: count
+SHUNT_RES:
+  value: 0.002
+  unit: ohm
+CURRENT_GAIN:
+  value: 20
+ALPHA:
+  value: 0.15
+PREV_CURRENT_A:
+  value: 4.8
+  unit: A
+ADC_DELTA:
+  formula: ADC_PHASE_U - ADC_OFFSET
+  unit: count
+AMP_OUT_V:
+  formula: (ADC_DELTA / ADC_MAX) * ADC_REF_V
+  unit: V
+SHUNT_V:
+  formula: AMP_OUT_V / CURRENT_GAIN
+  unit: V
+PHASE_CURRENT_A:
+  formula: SHUNT_V / SHUNT_RES
+  unit: A
+FILTERED_CURRENT_A:
+  formula: (ALPHA * PHASE_CURRENT_A) + ((1 - ALPHA) * PREV_CURRENT_A)
+  unit: A
+CURRENT_SQ:
+  formula: FILTERED_CURRENT_A * FILTERED_CURRENT_A
+  unit: A^2
+CURRENT_ENERGY:
+  formula: CURRENT_SQ * 0.02
+  unit: A^2
+RAW_STAGE:
+  formula: ADC_DELTA
+  unit: count
+VOLT_STAGE:
+  formula: SHUNT_V
+  unit: V
+CURRENT_STAGE:
+  formula: PHASE_CURRENT_A
+  unit: A
+FINAL_STAGE:
+  formula: FILTERED_CURRENT_A
+  unit: A

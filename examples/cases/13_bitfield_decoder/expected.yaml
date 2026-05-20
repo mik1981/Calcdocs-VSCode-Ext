@@ -1,0 +1,11 @@
+# Semantic Guess: Register family recognition
+SG1: { value: 97 }   # CR1: CEN|CMS[1:0]
+SG2: { value: 48 }   # CR2: MMS[2:0]
+SG3: { value: 9 }    # CR3: DIRC|DMAP
+
+# Register Awareness: Context-based decoder selection
+RA1: { value: 13 }   # CR1: CEN|OPM|URS
+RA2: { value: 5 }    # CR2: CCPC|CCUS
+
+# Conflict Detection: Overlap analysis
+CD1: { value: 96 }   # CMS[1:0] = multi-bit field (0x60)

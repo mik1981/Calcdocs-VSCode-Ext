@@ -75,10 +75,14 @@ CalcDocs natively supports **over 180 units of measurement** organized into 20 p
 | ✅ **Dynamic Viscosity** | `cp`, `pas` |
 | ✅ **Temperature** | `k`, `degc`, `degf`, `rankine` |
 
-### Additional Notes:
-- All units are also available with extended aliases (e.g., `meter`, `volt`, `pascal`, `newton`, `kilogram`, etc.)
-- Units can be combined using operators `*` and `/` to create compound quantities
-- The system automatically verifies dimensional compatibility during operations
-- Conversions between units of the same family are automatic and precise
-- All standard metric prefixes and common imperial units are supported
+### Additional Notes
+
+- All units are also available with extended aliases (e.g., `meter`, `volt`, `pascal`, `newton`, `kilogram`, etc.).
+- Units can be combined using operators `*` and `/` to create compound quantities.
+- The system automatically verifies dimensional compatibility during operations.
+- Conversions between units of the same family are automatic and precise.
+- **Extended metric prefixes (multiples & submultiples)** are supported automatically for many prefixable units (e.g. `mm`, `cm`, `km`, `mV`, `kOhm`, `uF`, …).
+- For units based on powers (square/cubic), prefixes are propagated with the correct exponent (e.g. `mm2`, `cm3`, …).
+
+
 

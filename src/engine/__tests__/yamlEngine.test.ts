@@ -143,4 +143,52 @@ describe("yamlEngine", () => {
     expect(typeof symbol.value).toBe("number");
     expect(symbol.value ?? 0).toBeCloseTo(6600, 9);
   });
+
+  it("treats csv lookup units as data units, including affine temperatures", () => {
+    const csvTables = new Map([
+      [
+        "table.csv",
+        {
+          fileName: "table.csv",
+          rows: [
+            ["temp", "value"],
+            ["25", "10000"],
+          ],
+          headerIndex: new Map([
+            ["temp", 0],
+            ["value", 1],
+          ]),
+        },
+      ],
+    ]);
+
+    const parsedRoot = {
+      DECLARED_UNIT: {
+        type: "expr",
+        expr: 'csv("table.csv", "25", "temp", "value")',
+        unit: "degc",
+      },
+      LOOKUP_UNIT_ARG: {
+        type: "expr",
+        expr: 'lookup("table.csv", "25", "temp", "value", "none", "degc")',
+      },
+      TABLE_UNIT_ARG: {
+        type: "expr",
+        expr: 'table("table.csv", "25", "temp", "value", "none", "degc")',
+      },
+    } as Record<string, unknown>;
+
+    const result = evaluateYamlDocument(parsedRoot, {
+      rawText: "",
+      csvTables,
+    });
+
+    for (const name of ["DECLARED_UNIT", "LOOKUP_UNIT_ARG", "TABLE_UNIT_ARG"]) {
+      const symbol = result.symbols.get(name);
+      expect(symbol).toBeTruthy();
+      expect(symbol?.errors).toEqual([]);
+      expect(symbol?.value).toBeCloseTo(10000, 9);
+      expect(symbol?.outputUnit).toBe("degC");
+    }
+  });
 });

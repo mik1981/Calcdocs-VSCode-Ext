@@ -115,6 +115,8 @@ export type CalcDocsState = {
   allDefines: Map<string, string>;
   /** Mappa delle condizioni del preprocessore per ogni define */
   defineConditions: Map<string, string>;
+  /** Mappa dei commenti associati ai define */
+  defineComments: Map<string, string>;
   /** Mappa delle macro funzione: nome -> {params, body} */
   functionDefines: Map<string, FunctionMacroDefinition>;
   /** Header generation config */
@@ -199,6 +201,7 @@ export function createCalcDocsState(
     symbolAmbiguityRoots: new Map<string, string[]>(),
     allDefines: new Map<string, string>(),
     defineConditions: new Map<string, string>(),
+    defineComments: new Map<string, string>(),
     functionDefines: new Map<string, FunctionMacroDefinition>(),
     headerGenConfig: { outputPath: (getConfig() as any).formulaHeader?.outputPath || 'macro_generate.h' },
     lastAnalysisStackUsage: createDefaultAnalysisStackUsage(),
@@ -232,6 +235,7 @@ export function createCalcDocsState(
       showInheritedAmbiguity: true,
       showFormulaSection: true,
       showKnownValue: true,
+      showLiveRegisterDecoder: true,
     },
     inlineCodeLens: {
       enabled: true,

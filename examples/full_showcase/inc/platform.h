@@ -1,3 +1,3 @@
-#ifndef PLATFORM_H
-#define PLATFORM_H
-#endif
+#pragma once
+
+#define MCU_CLOCK_HZ 170000000

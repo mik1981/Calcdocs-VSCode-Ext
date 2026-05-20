@@ -2,6 +2,8 @@ import * as vscode from "vscode";
 
 import { evaluateInlineCalcs, type InlineCalcResult } from "../core/inlineCalc";
 import { CalcDocsState } from "../core/state";
+import type { FormulaRegistry } from "../formulaOutline/formulaRegistry";
+import type { OutlineFormula } from "../formulaOutline/formulaParser";
 
 const ITEM_SOURCE_MAX_LEN = 72;
 
@@ -47,8 +49,25 @@ function toItemIcon(result: InlineCalcResult): vscode.ThemeIcon {
   );
 }
 
+function toFormulaItemIcon(formula: OutlineFormula): vscode.ThemeIcon {
+  // Use different icons based on formula type
+  if (formula.expr && formula.expr.length > 0) {
+    return new vscode.ThemeIcon("symbol-function");
+  }
+  return new vscode.ThemeIcon("symbol-constant");
+}
+
+function isYamlFormulaFile(document: vscode.TextDocument): boolean {
+  const fileName = document.fileName.toLowerCase();
+  return (
+    document.languageId === "yaml" &&
+    /.*formulas.*\.ya?ml$/i.test(fileName)
+  );
+}
+
 /**
  * Tree view provider used by the "CalcDocs Inline Results" mini panel.
+ * Displays inline calc results for C/C++ files and formulas for YAML files.
  */
 export class InlineCalcResultsViewProvider
   implements vscode.TreeDataProvider<vscode.TreeItem>
@@ -58,7 +77,10 @@ export class InlineCalcResultsViewProvider
 
   readonly onDidChangeTreeData = this.emitter.event;
 
-  constructor(private readonly state: CalcDocsState) {}
+  constructor(
+    private readonly state: CalcDocsState,
+    private readonly formulaRegistry?: FormulaRegistry
+  ) {}
 
   setActiveEditor(editor: vscode.TextEditor | undefined): void {
     this.activeDocument = editor?.document;
@@ -98,11 +120,23 @@ export class InlineCalcResultsViewProvider
     }
 
     if (!this.activeDocument) {
-      items.push(createInfoItem("Open a C/C++ file to see inline calc results"));
+      items.push(createInfoItem("Open a C/C++ or YAML file to see results"));
       return items;
     }
 
-    const results = evaluateInlineCalcs(this.activeDocument.getText(), this.state, {}, this.activeDocument.languageId);
+    // Check if this is a YAML formulas file
+    if (isYamlFormulaFile(this.activeDocument)) {
+      return this.getFormulaItems(this.activeDocument);
+    }
+
+    // Otherwise, treat as C/C++ inline calc file
+    const results = evaluateInlineCalcs(
+      this.activeDocument.getText(),
+      this.state,
+      {},
+      this.activeDocument.languageId
+    );
+
     if (results.length === 0) {
       items.push(createInfoItem("No inline calculations found (= ...)"));
       return items;
@@ -137,6 +171,76 @@ export class InlineCalcResultsViewProvider
         title: "Open inline calc result",
         arguments: [this.activeDocument.uri, result.line],
       };
+      items.push(item);
+    }
+
+    return items;
+  }
+
+  private getFormulaItems(document: vscode.TextDocument): vscode.TreeItem[] {
+    const items: vscode.TreeItem[] = [];
+
+    if (!this.formulaRegistry) {
+      items.push(createInfoItem("FormulaRegistry not initialized"));
+      return items;
+    }
+
+    // Get formulas from the registry synchronously
+    // Note: We use the internal formulas map directly via a workaround
+    const formulas = this.formulaRegistry['formulas'].get(document.uri.toString()) ?? [];
+
+    if (formulas.length === 0) {
+      items.push(createInfoItem("No formulas found in this file"));
+      return items;
+    }
+
+    for (const formula of formulas) {
+      const lineLabel = `L${formula.lineStart + 1}`;
+      const label = `${lineLabel} ${clampText(formula.id, ITEM_SOURCE_MAX_LEN)}`;
+      const item = new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.None);
+
+      // Show formula expression or value as description
+      const description =
+        formula.expr && formula.expr.length > 0
+          ? `= ${clampText(formula.expr, ITEM_SOURCE_MAX_LEN)}`
+          : formula.value !== undefined
+            ? `${formula.value}${formula.unit ? ` ${formula.unit}` : ""}`
+            : "—";
+
+      item.description = description;
+
+      // Build tooltip with full information
+      const tooltipLines = [
+        `ID: ${formula.id}`,
+        `Line: L${formula.lineStart + 1}`,
+      ];
+
+      if (formula.expr && formula.expr.length > 0) {
+        tooltipLines.push(`Expression: ${formula.expr}`);
+      }
+
+      if (formula.unit) {
+        tooltipLines.push(`Unit: ${formula.unit}`);
+      }
+
+      if (formula.value !== undefined) {
+        tooltipLines.push(`Value: ${formula.value}`);
+      }
+
+      if (formula.desc) {
+        tooltipLines.push(`Description: ${formula.desc}`);
+      }
+
+      item.tooltip = tooltipLines.join("\n");
+      item.iconPath = toFormulaItemIcon(formula);
+
+      // Command to navigate to the formula line
+      item.command = {
+        command: "calcdocs.inlineCalc.openResult",
+        title: "Open formula",
+        arguments: [document.uri, formula.lineStart],
+      };
+
       items.push(item);
     }
 

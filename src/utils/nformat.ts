@@ -2,6 +2,44 @@ import { CalcDocsState } from "../core/state";
 import { getConfig, getThousandsSeparatorChar } from "../core/config";
 
 /**
+ * Formats a number to a given number of significant figures.
+ *
+ * If all significant digits fit before the decimal point (i.e. the integer part
+ * already has sigFigs or more digits), the decimal part is stripped entirely.
+ * Otherwise trailing zeros after the decimal point are removed.
+ *
+ * Examples (sigFigs = 6):
+ *   1234.56789   → "1234.57"
+ *   123456.789   → "123457"      (6 digits before decimal → integer)
+ *   3.14159265   → "3.14159"
+ *   1000         → "1000"
+ *   100000       → "100000"      (exactly 6 digits → integer)
+ *   0.00123456789 → "0.00123457"
+ *   1.2345e-5    → "0.000012345" (from toPrecision, then cleaned)
+ */
+export function formatNumberToSigFigs(value: number, sigFigs: number = 6): string {
+  if (!Number.isFinite(value)) return "?";
+
+  if (value === 0) return "0";
+
+  // Use toPrecision for significant figures
+  let formatted = value.toPrecision(sigFigs);
+
+  // Exponential notation is already concise — return as-is
+  if (formatted.includes("e")) return formatted;
+
+  // If the integer part already has >= sigFigs digits, strip decimal entirely.
+  // That means abs(value) >= 10^(sigFigs-1).
+  if (Math.abs(value) >= Math.pow(10, sigFigs - 1)) {
+    // parseFloat removes trailing ".0" etc. while keeping the rounding from toPrecision
+    return parseFloat(formatted).toString();
+  }
+
+  // Strip trailing zeros after decimal point, and the dot itself if nothing remains
+  return formatted.replace(/\.?0+$/, "");
+}
+
+/**
  * Checks if a number is an integer (no fractional part).
  * @param n - The number to check
  * @returns true if the number is an integer
@@ -155,4 +193,3 @@ export function formatNumbersWithThousandsSeparator(state: CalcDocsState, text: 
   // state.output.detail(`${text} → ${ret}`)
   return ret
 }
-

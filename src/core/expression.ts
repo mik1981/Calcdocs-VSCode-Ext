@@ -3,6 +3,7 @@ import { stripComments } from "../utils/text";
 import { evaluateExpression } from "../engine/evaluator";
 import {
   createQuantity,
+  createQuantityFromData,
   normalizeUnit,
   toDisplayUnit,
   toDisplayValue,
@@ -936,7 +937,7 @@ function lookupCsvValue(
     }
 
     if (unitRef != null && typeof unitRef === "string" && unitRef.trim()) {
-        const q = createQuantity(numericCellValue, unitRef.trim());
+        const q = createQuantityFromData(numericCellValue, unitRef.trim());
         if (q.ok) return q.value;
     }
 
@@ -967,7 +968,7 @@ function lookupCsvValue(
   }
 
   if (unitRef != null && typeof unitRef === "string" && unitRef.trim()) {
-      const q = createQuantity(interpolatedValue, unitRef.trim());
+      const q = createQuantityFromData(interpolatedValue, unitRef.trim());
       if (q.ok) return q.value;
   }
 

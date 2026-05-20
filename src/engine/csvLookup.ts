@@ -1,6 +1,6 @@
 import type { CsvTable, CsvTableMap } from "../core/csvTables";
 import { normalizeCsvTableKey } from "../core/csvTables";
-import { createQuantity, type Quantity } from "./units";
+import { createQuantityFromData, type Quantity } from "./units";
 
 type CsvInterpolationMode = "none" | "linear" | "nearest";
 
@@ -428,7 +428,7 @@ export function createCsvLookupResolver(
     }
 
     if (unitRef != null && typeof unitRef === "string" && unitRef.trim()) {
-      const quantity = createQuantity(numeric, unitRef.trim());
+      const quantity = createQuantityFromData(numeric, unitRef.trim());
       if (quantity.ok) {
         return quantity.value;
       }

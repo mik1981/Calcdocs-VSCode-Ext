@@ -12,11 +12,13 @@ import {
   formatGhostNumber,
   MATH_SCOPE,
   UNIT_SYMBOLS,
-  isKnownUnit,
-  getUnitSpec, 
   suggestUnits,
 } from './formulaEvaluator';
-import { getUnitSpec as getEngineUnitSpec } from "../engine/units";
+import { getUnitSpec, parseUnitToQuantity } from "../engine/units";
+import { inferDimension, getUnitDim, type Dim } from './dimensionEvaluator';
+import { UNIT_SPECS } from '../engine/units';
+import { formatNumbersWithThousandsSeparator } from '../utils/nformat';
+import type { CalcDocsState } from '../core/state';
 
 export function normalizeGhostUnitLabel(rawUnit?: string): string | undefined {
   if (!rawUnit) {
@@ -28,8 +30,15 @@ export function normalizeGhostUnitLabel(rawUnit?: string): string | undefined {
     return undefined;
   }
 
-  const spec = getEngineUnitSpec(cleaned);
-  return spec?.canonical ?? cleaned;
+  // Prova prima come token atomico (es. "A", "V", "Ohm")
+  const spec = getUnitSpec(cleaned);
+  if (spec) return spec.canonical;
+
+  // Fallback: prova come espressione di unità composta (es. "A^2", "A*V", "N*m")
+  const parsed = parseUnitToQuantity(cleaned);
+  if (parsed.ok) return cleaned;
+
+  return cleaned;
 }
 
 export function formatGhostParamEntry(name: string, value: number, rawUnit?: string): string {
@@ -46,8 +55,36 @@ export function formatGhostParamEntry(name: string, value: number, rawUnit?: str
   return `${valueText} [${unitText}]`;
 }
 
+/**
+ * Suggerisci un'unità basata sulla dimensione calcolata della formula.
+ * Cerca il primo UNIT_SPEC che corrisponde alla dimensione.
+ */
+function suggestUnitFromDimension(dim: Dim): string | undefined {
+  if (!dim) return undefined;
+
+  // Cerca tra tutti gli UNIT_SPECS uno che corrisponda a questa dimensione
+  for (const [, spec] of UNIT_SPECS) {
+    if (
+      spec.dimension.M === dim.M &&
+      spec.dimension.L === dim.L &&
+      spec.dimension.T === dim.T &&
+      spec.dimension.I === dim.I &&
+      spec.dimension.K === dim.K
+    ) {
+      return spec.canonical;
+    }
+  }
+
+  return undefined;
+}
+
 export class FormulaOutlineProvider implements vscode.FoldingRangeProvider {
   private foldingRanges = new WeakMap<TextDocument, vscode.FoldingRange[]>();
+  /**
+   * Optional getter for CalcDocsState (needed for thousands separator config).
+   * Pass `() => state` from extension.ts.
+   */
+  private _getState: (() => CalcDocsState) | undefined;
   private decorations = vscode.window.createTextEditorDecorationType({
     after: {
       contentText: '',
@@ -133,12 +170,14 @@ export class FormulaOutlineProvider implements vscode.FoldingRangeProvider {
     registry: FormulaRegistry,
     getSymbolValues?: () => Map<string, number>,
     getSymbolUnits?: () => Map<string, string>,
-    getCsvTables?: () => CsvTableMap
+    getCsvTables?: () => CsvTableMap,
+    getState?: () => CalcDocsState
   ) {
     this._registry = registry;
     this._getSymbolValues = getSymbolValues ?? (() => new Map());
     this._getSymbolUnits = getSymbolUnits ?? (() => new Map());
     this._getCsvTables = getCsvTables ?? (() => new Map());
+    this._getState = getState;
 
     vscode.workspace.onDidChangeTextDocument(this.onDocumentChanged, this);
     vscode.workspace.onDidOpenTextDocument(this.onDocumentOpened, this);
@@ -363,14 +402,66 @@ export class FormulaOutlineProvider implements vscode.FoldingRangeProvider {
         }
       }
 
+      // ---------------- DERIVAZIONE AUTOMATICA ----------------
+      // Se non c'è formula espressa ma c'è value, deriva la formula dal value
+      let derivedExpr = formula.expr;
+      let derivedUnit = formula.unit;
+      let formulaWasDerived = false;
+
+      if (!formula.expr && formula.value !== null && formula.value !== undefined) {
+        // Deriva formula dal value (es: value: 24 → formula: "24")
+        derivedExpr = String(formula.value);
+        formulaWasDerived = true;
+
+        // Se non c'è unità espressa, prova a derivarla dalla dimensione
+        if (!formula.unit) {
+          const inferResult = inferDimension(derivedExpr, formulas, undefined);
+          if (inferResult.dim) {
+            const suggestedUnit = suggestUnitFromDimension(inferResult.dim);
+            if (suggestedUnit) {
+              derivedUnit = suggestedUnit;
+            }
+          }
+        }
+      }
+
+      // Valuta la formula derivata se necessario
+      let derivedEvalResult = evalResult;
+      if (formulaWasDerived) {
+        const tempFormula: OutlineFormula = {
+          ...formula,
+          expr: derivedExpr,
+        };
+        derivedEvalResult = resolveFormulaValue(tempFormula, symbolTable, cSymbols, lookupResolver);
+      }
+
+      // Ricalcola isResolved con la formula derivata
+      const isResolvedFinal = derivedEvalResult.resolved !== null;
+
+      // Ricalcola kindFinal considerando la formula derivata
+      let kindFinal: FormulaKind = kind;
+      if (formulaWasDerived && !hasExternal && isResolvedFinal) {
+        kindFinal = 'computed';
+      }
+
+      // Ricalcola normalizedUnitFinal con l'unità derivata
+      const normalizedUnitFinal = normalizeGhostUnitLabel(derivedUnit);
+      const unitKnownFinal = normalizedUnitFinal
+        ? (getUnitSpec(normalizedUnitFinal) !== undefined || parseUnitToQuantity(normalizedUnitFinal).ok)
+        : false;
+
       // ---------------- UNITA' SCONOSCIUTA + SUGGERIMENTI ----------------
-      const unitSpec = getUnitSpec(formula.unit);
-      const unitKnown = !!unitSpec;
+      const normalizedUnit = normalizeGhostUnitLabel(formula.unit);
+      // Verifica se l'unità è valida: supporta sia token atomici (es. "V")
+      // che espressioni composte (es. "A^2", "A*V", "N/m")
+      const unitKnown = normalizedUnit
+        ? (getUnitSpec(normalizedUnit) !== undefined || parseUnitToQuantity(normalizedUnit).ok)
+        : false;
 
       let unitWarning = '';
 
-      if (formula.unit && !unitKnown) {
-        const suggestions = suggestUnits(formula.unit);
+      if (normalizedUnit && !unitKnown) {
+        const suggestions = suggestUnits(normalizedUnit);
 
         unitWarning = suggestions.length
           ? ` ⚠ unknown (did you mean: ${suggestions.join(', ')})`
@@ -388,36 +479,44 @@ export class FormulaOutlineProvider implements vscode.FoldingRangeProvider {
       //   unit:'V', raw=3.3    → scaled=3.3,   display="3.3 [V]"
       let valueText: string;
 
-      // const unitKnown = isKnownUnit(formula.unit);
-
-      if (isResolved) {
-        if (unitKnown) {
-          const scaled = scaleValueToUnit(evalResult.resolved!, formula.unit);
+      if (isResolvedFinal) {
+        if (unitKnownFinal) {
+          const scaled = scaleValueToUnit(derivedEvalResult.resolved!, derivedUnit);
           valueText = formatGhostNumber(scaled);
         } else {
-          // ⚠ unit sconosciuta → mostra valore raw + warning
-          valueText = `${formatGhostNumber(evalResult.resolved!)} ?`;
+          // ⚠ unit sconosciuta → mostra valore raw senza "?"
+          valueText = formatGhostNumber(derivedEvalResult.resolved!);
         }
       } else {
-        valueText = hasExpr ? '?' : '—';
+        // Se la formula non è risolta e non è stata derivata dal value, mostra "?"
+        // Se è stata derivata dal value (costante), mostra il valore
+        if (formulaWasDerived) {
+          valueText = derivedEvalResult.resolved !== null 
+            ? formatGhostNumber(derivedEvalResult.resolved)
+            : '—';
+        } else {
+          valueText = hasExpr ? '?' : '—';
+        }
       }
 
-      if (formula.unit) {
-        if (unitKnown) {
-          valueText += ` [${formula.unit}]`;
+      if (normalizedUnitFinal) {
+        if (unitKnownFinal) {
+          valueText += ` [${normalizedUnitFinal}]`;
         }
         else {
-          valueText += ` [${formula.unit} ⛔]`;
+          valueText += ` [${normalizedUnitFinal} ⛔]`;
         }
       }
       
 
-      switch (kind) {
+      switch (kindFinal) {
         case 'external':
           valueText += ' 📥';
           break;
         case 'fallback':
-          valueText += ' ⚠ fallback';
+          if (!formulaWasDerived) {
+            valueText += ' ⚠ fallback';
+          }
           break;
       }
 
@@ -426,8 +525,9 @@ export class FormulaOutlineProvider implements vscode.FoldingRangeProvider {
       // since each variable may have a different unit.
       let variablesText = '';
 
-      if (formula.expr?.length > 0) {
-        let cleanExpr = formula.expr.replace(/(csv|table|lookup)\([^)]*\)/gi, '');
+      // Usa derivedExpr al posto di formula.expr per le variabili
+      if (derivedExpr?.length > 0) {
+        let cleanExpr = derivedExpr.replace(/(csv|table|lookup)\([^)]*\)/gi, '');
         cleanExpr = cleanExpr.replace(/\b\d+(\.\d+)?\s*[a-zA-Z]+\b/g, '');
         cleanExpr = cleanExpr.replace(/\b\d+(\.\d+)?[a-zA-Z]+\b/g, '');
 
@@ -466,11 +566,17 @@ export class FormulaOutlineProvider implements vscode.FoldingRangeProvider {
       }
 
       // ---------------- GHOST ----------------
+      // Apply thousands separator to the ghost value text (if state is available)
       let ghostText = `    = ${valueText}${variablesText}`;
-
-      if (formula.expr?.length > 0) {
-        ghostText += ` ⟵ ${formula.expr}`;
+      const state = this._getState?.();
+      if (state?.enabled) {
+        ghostText = `    = ${formatNumbersWithThousandsSeparator(state, valueText)}${variablesText}`;
       }
+
+      // Mostra la formula derivata se è stata derivata dal value
+      /*if (derivedExpr) {
+        ghostText += ` ⟵ ${derivedExpr}`;
+      }*/
 
       ghostDecos.push({
         range: new vscode.Range(

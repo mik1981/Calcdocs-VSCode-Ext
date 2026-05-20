@@ -22,45 +22,20 @@
 import type { OutlineFormula } from './formulaParser';
 import type { Quantity } from '../engine/units';
 import { preprocessExpression } from '../engine/evaluator';
-
-
+import { formatNumberToSigFigs } from '../utils/nformat';
 import {
-  UNIT_SPECS as ENGINE_UNIT_SPECS,
-  SCALABLE_UNIT_FAMILY as ENGINE_SCALABLE_UNIT_FAMILY,
-  UNIT_SCALE_FACTORS as ENGINE_UNIT_SCALE_FACTORS,
+  UNIT_ALIASES,
+  UNIT_SPECS,
+  SCALABLE_UNIT_FAMILY,
+  UNIT_SCALE_FACTORS,
+  convertSiToUnit,
   createQuantity,
+  createQuantityFromData,
+  getUnitSpec,
+  normalizeUnitToken,
+  parseUnitToQuantity,
 } from '../engine/units';
-
-type UnitSpec = {
-  factor: number;
-  dimension: 'voltage' | 'current' | 'resistance' | 'time' | 'frequency' | 'power' | 'capacitance' | 'inductance' | 'angle' | 'temperature' | 'dimensionless';
-};
-
-export const UNIT_SPECS = new Map<string, UnitSpec>(
-  Array.from(ENGINE_UNIT_SPECS.entries()).map(([token, spec]) => {
-    let dimension: UnitSpec['dimension'] = 'dimensionless';
-    
-    // Map from unified families to formulaEvaluator's simplified dimensions
-    const family = ENGINE_SCALABLE_UNIT_FAMILY.get(token);
-    if (family === 'voltage') dimension = 'voltage';
-    else if (family === 'current') dimension = 'current';
-    else if (family === 'resistance') dimension = 'resistance';
-    else if (family === 'time') dimension = 'time';
-    else if (family === 'frequency') dimension = 'frequency';
-    else if (family === 'power') dimension = 'power';
-    else if (family === 'capacitance') dimension = 'capacitance';
-    else if (family === 'inductance') dimension = 'inductance';
-    else if (family === 'angle') dimension = 'angle';
-    else if (family === 'temperature') dimension = 'temperature';
-
-    return [token, { factor: spec.factorToSi, dimension }];
-  })
-);
-
-export function getUnitSpec(unit?: string): UnitSpec | null {
-  if (!unit) return null;
-  return UNIT_SPECS.get(unit.trim().toLowerCase()) ?? null;
-}
+import { inferDimension, dimToString } from './dimensionEvaluator';
 
 function levenshtein(a: string, b: string): number {
   const dp = Array.from({ length: a.length + 1 }, () =>
@@ -86,7 +61,7 @@ function levenshtein(a: string, b: string): number {
 export function suggestUnits(unit: string): string[] {
   const u = unit.toLowerCase();
 
-  return [...UNIT_SPECS.keys()]
+  return [...UNIT_SCALE_FACTORS.keys()]
     .map(k => ({ k, d: levenshtein(u, k) }))
     .filter(x => x.d <= 2)
     .sort((a, b) => a.d - b.d)
@@ -94,34 +69,7 @@ export function suggestUnits(unit: string): string[] {
     .map(x => x.k);
 }
 
-export function inferExpressionDimension(
-  expr: string,
-  symbolTable: Map<string, number>,
-  formulas: OutlineFormula[]
-): string | null {
-
-  const symbols = expr.match(/[A-Z_][A-Z0-9_]*/gi) || [];
-
-  const dims = new Set<string>();
-
-  for (const sym of symbols) {
-    const f = formulas.find(f => f.id === sym);
-    const unit = f?.unit;
-
-    const spec = getUnitSpec(unit);
-    if (spec) dims.add(spec.dimension);
-  }
-
-  if (dims.size === 1) return [...dims][0];
-  if (dims.size > 1) return 'mixed';
-
-  return null;
-}
-
-// ---------------------------------------------------------------------------
-// Math scope — mirrors BASE_MATH_SCOPE in expression.ts but self-contained
-// ---------------------------------------------------------------------------
-
+// const DEG_TO_RAD = Math.PI / 180;
 const DEG_TO_RAD = Math.PI / 180;
 const RAD_TO_DEG = 180 / Math.PI;
 
@@ -191,15 +139,19 @@ export const MATH_SCOPE: Record<string, unknown> = {
 //   displayValue = rawValue_in_SI / factor
 // ---------------------------------------------------------------------------
 
-export const UNIT_SCALE_FACTORS = ENGINE_UNIT_SCALE_FACTORS;
-
 /**
  * Set of all recognised unit token strings (lowercase).
  * Used by formulaOutlineProvider to skip unit symbols when scanning for missing variables.
  *
  * Replaces the old hand-maintained UNIT_SYMBOLS constant.
  */
-export const UNIT_SYMBOLS: ReadonlySet<string> = new Set(UNIT_SCALE_FACTORS.keys());
+export const UNIT_SYMBOLS: ReadonlySet<string> = new Set([
+  ...Array.from(UNIT_SCALE_FACTORS.keys()).flatMap((unit) => [
+    unit,
+    unit.toLowerCase(),
+  ]),
+  ...UNIT_ALIASES.keys(),
+]);
 
 /**
  * Returns the SI scale factor for a unit token (case-insensitive).
@@ -213,7 +165,8 @@ export const UNIT_SYMBOLS: ReadonlySet<string> = new Set(UNIT_SCALE_FACTORS.keys
  */
 export function resolveUnitFactor(unit: string | undefined): number {
   if (!unit) return 1;
-  return UNIT_SCALE_FACTORS.get(unit.trim().toLowerCase()) ?? 1;
+  const spec = getUnitSpec(unit);
+  return spec?.factorToSi ?? UNIT_SCALE_FACTORS.get(normalizeUnitToken(unit)) ?? 1;
 }
 
 /**
@@ -234,10 +187,9 @@ export function resolveUnitFactor(unit: string | undefined): number {
  * @param unit      Formula `unit:` field, e.g. 'mV', 'kHz', 'ms'
  */
 export function scaleValueToUnit(rawValue: number, unit: string | undefined): number {
-  const factor = resolveUnitFactor(unit);
-  // factor === 1 → identity (V, A, Hz, s, …); factor === 0 → guard
-  if (factor === 1 || factor === 0) return rawValue;
-  return rawValue / factor;
+  if (!unit) return rawValue;
+  const converted = convertSiToUnit(rawValue, unit);
+  return converted.ok ? converted.value : rawValue;
 }
 
 /**
@@ -245,7 +197,191 @@ export function scaleValueToUnit(rawValue: number, unit: string | undefined): nu
 */
 export function isKnownUnit(unit: string | undefined): boolean {
   if (!unit) return true;
-  return UNIT_SCALE_FACTORS.has(unit.trim().toLowerCase());
+  return Boolean(getUnitSpec(unit));
+}
+
+function toDeclaredUnitInternalValue(value: number, unit: string | undefined): number {
+  if (!unit) return value;
+  const quantity = createQuantityFromData(value, unit);
+  return quantity.ok ? quantity.value.valueSi : value;
+}
+
+function trimOuterParentheses(expression: string): string {
+  let result = expression.trim();
+
+  while (result.startsWith('(') && result.endsWith(')')) {
+    let depth = 0;
+    let inString: string | null = null;
+    let wrapsWholeExpression = true;
+
+    for (let i = 0; i < result.length; i += 1) {
+      const char = result[i];
+
+      if (inString) {
+        if (char === '\\') {
+          i += 1;
+          continue;
+        }
+        if (char === inString) {
+          inString = null;
+        }
+        continue;
+      }
+
+      if (char === '"' || char === "'") {
+        inString = char;
+        continue;
+      }
+
+      if (char === '(') {
+        depth += 1;
+      } else if (char === ')') {
+        depth -= 1;
+        if (depth === 0 && i < result.length - 1) {
+          wrapsWholeExpression = false;
+          break;
+        }
+      }
+    }
+
+    if (!wrapsWholeExpression || depth !== 0) {
+      break;
+    }
+
+    result = result.slice(1, -1).trim();
+  }
+
+  return result;
+}
+
+function findMatchingParen(expression: string, openIndex: number): number {
+  let depth = 0;
+  let inString: string | null = null;
+
+  for (let i = openIndex; i < expression.length; i += 1) {
+    const char = expression[i];
+
+    if (inString) {
+      if (char === '\\') {
+        i += 1;
+        continue;
+      }
+      if (char === inString) {
+        inString = null;
+      }
+      continue;
+    }
+
+    if (char === '"' || char === "'") {
+      inString = char;
+      continue;
+    }
+
+    if (char === '(') {
+      depth += 1;
+    } else if (char === ')') {
+      depth -= 1;
+      if (depth === 0) {
+        return i;
+      }
+    }
+  }
+
+  return -1;
+}
+
+function splitTopLevelArguments(argsText: string): string[] {
+  const args: string[] = [];
+  let start = 0;
+  let depth = 0;
+  let inString: string | null = null;
+
+  for (let i = 0; i < argsText.length; i += 1) {
+    const char = argsText[i];
+
+    if (inString) {
+      if (char === '\\') {
+        i += 1;
+        continue;
+      }
+      if (char === inString) {
+        inString = null;
+      }
+      continue;
+    }
+
+    if (char === '"' || char === "'") {
+      inString = char;
+      continue;
+    }
+
+    if (char === '(') {
+      depth += 1;
+    } else if (char === ')') {
+      depth -= 1;
+    } else if (char === ',' && depth === 0) {
+      args.push(argsText.slice(start, i).trim());
+      start = i + 1;
+    }
+  }
+
+  const tail = argsText.slice(start).trim();
+  if (tail) {
+    args.push(tail);
+  }
+
+  return args;
+}
+
+function stringLiteralValue(raw: string): string | undefined {
+  const trimmed = raw.trim();
+  const quote = trimmed[0];
+  if ((quote !== '"' && quote !== "'") || trimmed[trimmed.length - 1] !== quote) {
+    return undefined;
+  }
+
+  return trimmed.slice(1, -1).trim();
+}
+
+function isKnownUnitLiteral(raw: string): boolean {
+  const value = stringLiteralValue(raw);
+  if (!value) {
+    return false;
+  }
+
+  return getUnitSpec(value) !== undefined || parseUnitToQuantity(value).ok;
+}
+
+function parsePureLookupCall(expression: string): { args: string[] } | undefined {
+  const trimmed = trimOuterParentheses(expression);
+  const match = trimmed.match(/^(csv|lookup|table)\s*\(/i);
+  if (!match) {
+    return undefined;
+  }
+
+  const openIndex = trimmed.indexOf('(', match[0].length - 1);
+  const closeIndex = findMatchingParen(trimmed, openIndex);
+  if (openIndex < 0 || closeIndex < 0 || trimmed.slice(closeIndex + 1).trim()) {
+    return undefined;
+  }
+
+  return {
+    args: splitTopLevelArguments(trimmed.slice(openIndex + 1, closeIndex)),
+  };
+}
+
+function shouldTagLookupResultWithDeclaredUnit(formula: OutlineFormula): boolean {
+  if (!formula.unit || !formula.expr) {
+    return false;
+  }
+
+  const call = parsePureLookupCall(formula.expr);
+  if (!call) {
+    return false;
+  }
+
+  const lastArg = call.args[call.args.length - 1];
+  return lastArg ? !isKnownUnitLiteral(lastArg) : true;
 }
 
 // ---------------------------------------------------------------------------
@@ -379,7 +515,7 @@ export function buildFormulaSymbolTable(
   // Seed with deprecated `value:` fields (lowest-priority static constants)
   for (const formula of formulas) {
     if (typeof formula.value === 'number') {
-      table.set(formula.id, formula.value);
+      table.set(formula.id, toDeclaredUnitInternalValue(formula.value, formula.unit));
     }
   }
 
@@ -402,11 +538,12 @@ export function buildFormulaSymbolTable(
       const result = evaluateFormulaExpression(formula.expr, vars, lookupResolver, formula._filePath);
       
       if (typeof result === 'number' && Number.isFinite(result)) {
-        table.set(formula.id, result);
-      }
-
-      if (result !== null) {
-        table.set(formula.id, result);
+        table.set(
+          formula.id,
+          shouldTagLookupResultWithDeclaredUnit(formula)
+            ? toDeclaredUnitInternalValue(result, formula.unit)
+            : result
+        );
       }
     }
   }
@@ -453,13 +590,21 @@ export function resolveFormulaValue(
     const result = evaluateFormulaExpression(formula.expr, vars, lookupResolver, formula._filePath);
 
     if (result !== null) {
-      return { resolved: result, source: 'expr' };
+      return {
+        resolved: shouldTagLookupResultWithDeclaredUnit(formula)
+          ? toDeclaredUnitInternalValue(result, formula.unit)
+          : result,
+        source: 'expr',
+      };
     }
   }
 
   // Fallback: deprecated `value:` field
   if (typeof formula.value === 'number') {
-    return { resolved: formula.value, source: 'value' };
+    return {
+      resolved: toDeclaredUnitInternalValue(formula.value, formula.unit),
+      source: 'value',
+    };
   }
 
   return { resolved: null, source: 'none' };
@@ -471,23 +616,16 @@ export function resolveFormulaValue(
 
 /**
  * Formats a number for ghost text display.
- * Strips trailing zeros; uses exponential notation for very large/small values.
+ * Uses 6 significant figures.
  *
  * Examples:
  *   1.44000     → "1.44"
- *   3.14159265  → "3.141593"
+ *   3.14159265  → "3.14159"
  *   1000        → "1000"
- *   0.000123456 → "1.235e-4"
+ *   0.000123456 → "0.000123457"
+ *   1234567     → "1234570"
  */
 export function formatGhostNumber(value: number): string {
   if (!Number.isFinite(value)) return '?';
-
-  const abs = Math.abs(value);
-
-  if ((abs !== 0 && abs < 1e-4) || abs >= 1e7) {
-    return value.toPrecision(4).replace(/\.?0+(e)/, '$1');
-  }
-
-  // Otherwise fixed with up to 6 decimal places, trailing zeros stripped
-  return parseFloat(value.toFixed(6)).toString();
+  return formatNumberToSigFigs(value, 6);
 }

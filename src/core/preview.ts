@@ -5,6 +5,7 @@ import {
 } from "./expression";
 import { CalcDocsState } from "./state";
 import {
+  formatNumberToSigFigs,
   formatNumbersWithThousandsSeparator,
   formatValueForDisplay,
   toHexString,
@@ -76,10 +77,12 @@ export function formatExpandedPreview(
 }
 
 /**
- * Formats numeric value for inline previews.
+ * Formats numeric value for inline previews (6 significant figures).
  */
 export function formatPreviewNumber(state: CalcDocsState, value: number): string {
-  return formatNumbersWithThousandsSeparator(state, String(value));
+  if (!Number.isFinite(value)) return String(value);
+  const sigFigStr = formatNumberToSigFigs(value, 6);
+  return formatNumbersWithThousandsSeparator(state, sigFigStr);
 }
 
 

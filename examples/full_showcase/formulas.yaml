@@ -1,15 +1,11 @@
-current:
-  value: 2
-  unit: A
-
-vin:
-  value: 24
-  unit: V
-
 power:
-  formula: current * vin
+  formula: FS_VIN * FS_CURRENT
   unit: W
 
-NTC_R_25:
-  formula: csv("data/ntc_10k.csv", "25", "temp_c", "res_ohm")
+efficiency:
+  formula: (power / 72W) * 100
+  unit: "%"
+
+ntc_temperature:
+  formula: csv("data/ntc_10k.csv", "25", "temperature", "resistance")
   unit: degc

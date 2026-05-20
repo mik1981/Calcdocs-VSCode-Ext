@@ -59,6 +59,7 @@ export type CppHoverConfig = {
   showInheritedAmbiguity: boolean;
   showFormulaSection: boolean;
   showKnownValue: boolean;
+  showLiveRegisterDecoder: boolean;
 };
 
 export type InlineCodeLensConfig = {
@@ -158,6 +159,7 @@ const UI_PROFILE_DEFAULTS: Record<UiInvasivenessLevel, UiProfileDefaults> = {
       showInheritedAmbiguity: true,
       showFormulaSection: false,
       showKnownValue: true,
+      showLiveRegisterDecoder: true,
     },
     inlineCodeLens: {
       maxItemsPerFile: 8,
@@ -187,6 +189,7 @@ const UI_PROFILE_DEFAULTS: Record<UiInvasivenessLevel, UiProfileDefaults> = {
       showInheritedAmbiguity: true,
       showFormulaSection: true,
       showKnownValue: true,
+      showLiveRegisterDecoder: true,
     },
     inlineCodeLens: {
       maxItemsPerFile: 30,
@@ -216,6 +219,7 @@ const UI_PROFILE_DEFAULTS: Record<UiInvasivenessLevel, UiProfileDefaults> = {
       showInheritedAmbiguity: true,
       showFormulaSection: true,
       showKnownValue: true,
+      showLiveRegisterDecoder: true,
     },
     inlineCodeLens: {
       maxItemsPerFile: 100,
@@ -381,6 +385,10 @@ export function getConfig(): CalcDocsConfig {
     showKnownValue: cfg.get<boolean>(
       "cpp.hover.showKnownValue",
       uiDefaults.cppHover.showKnownValue
+    ),
+    showLiveRegisterDecoder: cfg.get<boolean>(
+      "cpp.hover.showLiveRegisterDecoder",
+      uiDefaults.cppHover.showLiveRegisterDecoder
     ),
   };
 

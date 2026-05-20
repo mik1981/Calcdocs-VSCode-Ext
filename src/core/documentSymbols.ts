@@ -139,17 +139,22 @@ export function collectDocumentSymbolDefinitions(
           // Plain assignments like `screen_state = SCREEN_OFF;` are silently dropped.
           // We still want to resolve and display the RHS as a ghost value.
           const assignMatch = (trimmed + ";").match(
-            /^([A-Za-z_]\w*)\s*=(?!=)\s*(.+);$/
+            /^([A-Za-z_]\w*(?:\s*(?:->|\.)\s*[A-Za-z_]\w*|\s*\[\s*[^\]]+\s*\])*)\s*=(?!=)\s*(.+);$/
           );
           if (assignMatch) {
-            const assignName = assignMatch[1];
+            const assignName = assignMatch[1].replace(/\s+/g, "");
             const assignExpr = assignMatch[2].trim();
             const isCKeyword =
               /^(if|else|while|for|do|switch|case|break|continue|return|goto|sizeof|typeof|typedef|struct|union|enum|const|volatile|static|extern|inline|int|char|short|long|float|double|unsigned|signed|void|bool)$/.test(
                 assignName
               );
 
-            if (!isCKeyword && assignExpr) {
+            // Skip assignments whose expression crosses a '}' boundary.
+            // This typically happens when enum/struct/union body lines are
+            // merged (e.g. "SCREEN_OFF = 1, SCREEN_ON, } screen_t;"), producing
+            // incorrect ghost values. Enum members are already properly resolved
+            // by extractEnumMembers() in the parser.
+            if (!isCKeyword && assignExpr && !assignExpr.includes("}")) {
               definitions.push({
                 line: startLine,
                 lineText: segment + ";",

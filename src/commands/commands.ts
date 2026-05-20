@@ -10,7 +10,9 @@ import { AnalysisScheduler } from "../infra/watchers";
 import { pickWord } from "../utils/editor";
 import { localize } from "../utils/localize";
 import { generateFormulaHeader } from "../utils/headerGenerator";
-import type { FormulaRegistry } from "../formulaOutline/formulaRegistry";
+// import { openInlineCalcGuide } from "./guide";
+import { openInteractiveView } from "../ui/interactiveView";
+import { FormulaRegistry } from "../formulaOutline/formulaRegistry";
 
 type RegisterCommandsParams = {
   context: vscode.ExtensionContext;
@@ -158,23 +160,38 @@ export function registerCommands({
       await openInlineCalcGuide(context);
     }),
 
-     vscode.commands.registerCommand("calcdocs.openTestFolder", async () => {
-       // Open examples folder in a COMPLETELY NEW VS CODE WINDOW (fresh workspace)
-       // Independent of workspaceRoot - works at startup
-       const examplesFolderUri = vscode.Uri.joinPath(context.extensionUri, "examples");
-       
-       try {
-         await fsp.access(examplesFolderUri.fsPath);
-       } catch {
-         await vscode.window.showWarningMessage("CalcDocs examples folder not found.");
-        state.output.warn("openTestFolder: examples folder access failed");
-         return;
-       }
+    vscode.commands.registerCommand("calcdocs.openTestFolder", async () => {
+      // Open examples folder in a COMPLETELY NEW VS CODE WINDOW (fresh workspace)
+      // Independent of workspaceRoot - works at startup
+      const examplesFolderUri = vscode.Uri.joinPath(context.extensionUri, "examples");
+      
+      try {
+        await fsp.access(examplesFolderUri.fsPath);
+      } catch {
+        await vscode.window.showWarningMessage("CalcDocs examples folder not found.");
+      state.output.warn("openTestFolder: examples folder access failed");
+        return;
+      }
 
-       // This is equivalent to File -> Open Folder, opens in a new separate window
-       await vscode.commands.executeCommand('vscode.openFolder', examplesFolderUri, true);
-       state.output.info("openTestFolder: Opened examples/ in new window");
-     })
+      // This is equivalent to File -> Open Folder, opens in a new separate window
+      await vscode.commands.executeCommand('vscode.openFolder', examplesFolderUri, true);
+      state.output.info("openTestFolder: Opened examples/ in new window");
+    }),
+
+    vscode.commands.registerCommand(
+      "calcdocs.copyValue",
+      async (value: string) => {
+        await vscode.env.clipboard.writeText(value);
+        await vscode.window.showInformationMessage(
+          `CalcDocs: copied "${value}"`
+        );
+      }
+    ),  
+
+    vscode.commands.registerCommand("calcdocs.openInteractiveView", async () => {
+      // await runAnalysisAndRefreshUi();
+      openInteractiveView(context, state);
+    }),
   );
 
   async function openRuntimeQuickMenu(

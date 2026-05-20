@@ -34,4 +34,14 @@ describe("document symbol definitions", () => {
     expect(duplicateDefinitionCandidates).toHaveLength(1);
     expect(duplicateDefinitionCandidates[0]?.line).toBe(1);
   });
+
+  it("accepts member/dereference assignments like TIM1->CR2 = TIM_CR2_MMS_0 | TIM_CR2_MMS_1;", () => {
+    const text = "TIM1->CR2 = TIM_CR2_MMS_0 | TIM_CR2_MMS_1;\n";
+    const definitions = findDocumentSymbolDefinitions(text, "TIM1->CR2");
+
+    expect(definitions).toHaveLength(1);
+    expect(definitions[0]?.isAssignment).toBe(true);
+    expect(definitions[0]?.parsed.name).toBe("TIM1->CR2");
+    expect(definitions[0]?.parsed.expr).toBe("TIM_CR2_MMS_0 | TIM_CR2_MMS_1");
+  });
 });

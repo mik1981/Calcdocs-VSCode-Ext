@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 
 import { evaluateInlineCalcs } from "../core/inlineCalc";
 import { CalcDocsState } from "../core/state";
+import { buildCopyLink } from "../utils/hoverActions";
 
 function isCommentishLine(lineText: string, languageId: string): boolean {
   const trimmed = lineText.trim();
@@ -26,6 +27,9 @@ function buildHoverMarkdown(
     const kindLabel = result.kind === "assign" ? "@assign" : "=calc";
     lines.push(`- **${kindLabel}** \`${result.source}\``);
     lines.push(`  - Result: \`${result.displayValue}\``);
+    if (result.value !== null) {
+      lines.push(`  - ${buildCopyLink(String(result.value))}`);
+    }
     if (state.inlineHover.showDimension) {
       lines.push(`  - Dimension: \`${result.dimensionText}\``);
     }
@@ -42,8 +46,8 @@ function buildHoverMarkdown(
   }
 
   const markdown = new vscode.MarkdownString(lines.join("\n"));
-  markdown.isTrusted = false;
-  markdown.supportHtml = false;
+  markdown.isTrusted = true;
+  markdown.supportHtml = true;
   return markdown;
 }
 

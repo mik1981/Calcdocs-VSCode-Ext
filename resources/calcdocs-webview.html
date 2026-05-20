@@ -1,0 +1,1184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Content-Security-Policy"
+    content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-PLACEHOLDER_NONCE' https://cdn.jsdelivr.net; img-src data:;">
+<title>CalcDocs — Interactive View</title>
+
+<style>
+/* ── Reset & base ─────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+    font-family: var(--vscode-font-family, 'Segoe UI', sans-serif);
+    font-size: var(--vscode-font-size, 13px);
+    color: var(--vscode-editor-foreground);
+    background: var(--vscode-editor-background);
+    height: 100vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+/* ── Layout ──────────────────────────────────────────────────── */
+.layout {
+    display: grid;
+    grid-template-columns: 220px 300px 1fr;
+    grid-template-rows: 1fr;
+    gap: 0;
+    flex: 1;
+    overflow: hidden;
+}
+
+.col {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border-right: 1px solid var(--vscode-widget-border);
+}
+.col:last-child { border-right: none; }
+
+/* ── Column headers ──────────────────────────────────────────── */
+.col-header {
+    padding: 8px 10px 6px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--vscode-descriptionForeground, #9d9d9d);
+    border-bottom: 1px solid var(--vscode-widget-border);
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.col-header .badge {
+    font-size: 0.65rem;
+    background: var(--vscode-badge-background);
+    color: var(--vscode-badge-foreground);
+    border-radius: 8px;
+    padding: 1px 5px;
+    font-weight: 600;
+    letter-spacing: 0;
+}
+
+.col-body { flex: 1; overflow-y: auto; padding: 8px; }
+
+/* ── Formula list ────────────────────────────────────────────── */
+.formula-item {
+    padding: 6px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.88rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 6px;
+}
+.formula-item:hover { background: var(--vscode-list-hoverBackground); }
+.formula-item.selected { background: var(--vscode-list-activeSelectionBackground); color: var(--vscode-list-activeSelectionForeground); }
+.formula-item .f-unit { font-size: 0.72rem; opacity: 0.92; font-family: monospace; }
+.formula-item .f-main { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.formula-item .f-name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.formula-item .f-line { font-size: 0.68rem; color: var(--vscode-descriptionForeground); opacity: 0.7; }
+.formula-item .f-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; flex-shrink: 0; }
+.formula-item .f-type {
+    font-size: 0.6rem;
+    padding: 1px 4px;
+    border-radius: 3px;
+    text-transform: uppercase;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+}
+.formula-item .f-type.constant { background: rgba(128,128,128,0.12); color: var(--vscode-descriptionForeground); }
+.formula-item .f-type.formula  { background: rgba(77,182,255,0.12); color: #4db6ff; }
+
+.file-label {
+    font-size: 0.72rem;
+    color: var(--vscode-descriptionForeground, #9d9d9d);
+    padding: 4px 8px 8px;
+    word-break: break-all;
+}
+
+/* ── Tabs (Inputs / History) ─────────────────────────────────── */
+.tabs {
+    display: flex;
+    border-bottom: 1px solid var(--vscode-widget-border);
+    flex-shrink: 0;
+}
+.tab-btn {
+    flex: 1;
+    padding: 7px 0;
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+    border: none;
+    background: transparent;
+    color: var(--vscode-foreground);
+    opacity: 0.92;
+    border-bottom: 2px solid transparent;
+    transition: opacity 0.15s, border-color 0.15s;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+.tab-btn.active { opacity: 1; border-bottom-color: var(--vscode-focusBorder); }
+.tab-btn:hover { opacity: 0.9; background: var(--vscode-list-hoverBackground); }
+
+.tab-pane { display: none; flex: 1; overflow-y: auto; padding: 8px; }
+.tab-pane.active { display: block; }
+
+/* ── Scope blocks (inputs) ───────────────────────────────────── */
+.scope-block {
+    margin-bottom: 12px;
+    border-radius: 5px;
+    overflow: hidden;
+    border: 1px solid var(--vscode-widget-border);
+}
+.scope-title {
+    padding: 5px 8px;
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+    color: var(--vscode-descriptionForeground, #9d9d9d);
+    background: rgba(255,255,255,0.04);
+    border-bottom: 1px solid var(--vscode-widget-border);
+}
+.scope-l0 { border-left: 3px solid #4db6ff; }
+.scope-l1 { border-left: 3px solid #ff9800; }
+.scope-l2 { border-left: 3px solid #a78bfa; }
+.scope-l3 { border-left: 3px solid #4ade80; }
+
+.param-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 8px;
+    border-bottom: 1px solid rgba(255,255,255,0.10);
+}
+.param-row:last-child { border-bottom: none; }
+
+.param-label {
+    font-size: 0.82rem;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    flex-wrap: wrap;
+}
+.param-unit { font-size: 0.7rem; color: var(--vscode-descriptionForeground, #9d9d9d); font-family: monospace; }
+
+.param-input-wrap { display: flex; align-items: center; gap: 4px; }
+.param-input-wrap input[type="number"] {
+    width: 90px;
+    padding: 3px 6px;
+    font-size: 0.82rem;
+    background: var(--vscode-input-background);
+    color: var(--vscode-input-foreground);
+    border: 1px solid var(--vscode-input-border);
+    border-radius: 3px;
+    text-align: right;
+    font-family: monospace;
+}
+.param-input-wrap input[type="number"]:focus {
+    outline: 1px solid var(--vscode-focusBorder);
+    border-color: var(--vscode-focusBorder);
+}
+.param-input-wrap input[type="number"].modified { border-color: #4db6ff; }
+.param-input-wrap input[type="number"].solved  { border-color: #ff9800; }
+
+/* Solve-for toggle button */
+.solve-for-btn {
+    width: 18px; height: 18px;
+    border: none; cursor: pointer;
+    background: transparent;
+    color: var(--vscode-foreground);
+    opacity: 0.6;
+    font-size: 0.75rem;
+    border-radius: 3px;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    transition: opacity 0.15s, background 0.15s;
+}
+.solve-for-btn:hover { opacity: 0.8; background: rgba(255,255,255,0.1); }
+.solve-for-btn.active { opacity: 1; color: #ff9800; background: rgba(255,152,0,0.15); }
+
+/* ── Inverse solve panel ─────────────────────────────────────── */
+.inverse-panel {
+    display: none;
+    background: rgba(255,152,0,0.07);
+    border: 1px solid rgba(255,152,0,0.35);
+    border-radius: 5px;
+    padding: 8px 10px;
+    margin-bottom: 10px;
+    font-size: 0.82rem;
+}
+.inverse-panel.visible { display: block; }
+.inverse-panel label { font-size: 0.72rem; opacity: 0.65; display: block; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
+.inverse-row { display: flex; align-items: center; gap: 6px; }
+.inverse-row input {
+    flex: 1;
+    padding: 4px 7px;
+    font-size: 0.88rem;
+    background: var(--vscode-input-background);
+    color: var(--vscode-input-foreground);
+    border: 1px solid rgba(255,152,0,0.5);
+    border-radius: 3px;
+    font-family: monospace;
+}
+.inverse-row input:focus { outline: none; border-color: #ff9800; }
+.btn-solve {
+    padding: 4px 10px;
+    background: rgba(255,152,0,0.2);
+    color: #ff9800;
+    border: 1px solid rgba(255,152,0,0.4);
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 0.8rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+.btn-solve:hover { background: rgba(255,152,0,0.35); }
+.inverse-result-info {
+    font-size: 0.75rem;
+    margin-top: 6px;
+    opacity: 0.92;
+    font-family: monospace;
+}
+
+/* ── History timeline ────────────────────────────────────────── */
+.history-controls {
+    display: flex;
+    justify-content: flex-end;
+    padding: 0 0 6px;
+}
+.btn-ghost {
+    font-size: 0.72rem;
+    padding: 2px 8px;
+    border: 1px solid var(--vscode-widget-border);
+    border-radius: 3px;
+    background: transparent;
+    color: var(--vscode-foreground);
+    cursor: pointer;
+    opacity: 0.6;
+}
+.btn-ghost:hover { opacity: 1; background: var(--vscode-list-hoverBackground); }
+
+.history-entry {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: start;
+    gap: 8px;
+    padding: 7px 8px;
+    border-radius: 4px;
+    border: 1px solid var(--vscode-widget-border);
+    margin-bottom: 5px;
+    background: rgba(255,255,255,0.06);
+    cursor: pointer;
+    transition: background 0.12s;
+}
+.history-entry:hover { background: var(--vscode-list-hoverBackground); }
+
+.h-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    margin-top: 4px;
+    flex-shrink: 0;
+}
+.h-dot.forward { background: #4db6ff; }
+.h-dot.inverse { background: #ff9800; }
+
+.h-body { min-width: 0; }
+.h-param { font-size: 0.82rem; font-weight: 600; font-family: monospace; }
+.h-meta  { font-size: 0.72rem; opacity: 0.92; margin-top: 2px; }
+.h-result { font-size: 0.78rem; font-family: monospace; opacity: 0.85; text-align: right; }
+
+.h-direction {
+    font-size: 0.65rem;
+    padding: 1px 5px;
+    border-radius: 8px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+}
+.h-direction.forward { background: rgba(77,182,255,0.15); color: #4db6ff; }
+.h-direction.inverse { background: rgba(255,152,0,0.15); color: #ff9800; }
+
+.history-empty { font-size: 0.82rem; opacity: 0.7; padding: 12px 0; text-align: center; }
+
+/* ── Output column ───────────────────────────────────────────── */
+.output-col { display: flex; flex-direction: column; overflow: hidden; }
+
+/* Result hero */
+.result-hero {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 20px 16px 16px;
+    border-bottom: 1px solid var(--vscode-widget-border);
+    gap: 4px;
+}
+.result-formula-name {
+    font-size: 0.72rem;
+    opacity: 0.7;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+}
+.result-value {
+    font-size: 3.2rem;
+    font-weight: 700;
+    font-family: monospace;
+    line-height: 1.1;
+    letter-spacing: -1px;
+    color: var(--vscode-editor-foreground);
+    transition: color 0.2s;
+}
+.result-value.updating { color: var(--vscode-progressBar-background); }
+.result-value.error    { color: var(--vscode-errorForeground); font-size: 1.1rem; font-weight: 400; }
+.result-unit {
+    font-size: 0.9rem;
+    opacity: 0.8;
+    font-family: monospace;
+}
+
+/* Output sub-sections */
+.output-body { flex: 1; overflow-y: auto; }
+
+.section {
+    border-bottom: 1px solid var(--vscode-widget-border);
+    overflow: hidden;
+}
+.section-header {
+    padding: 7px 12px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--vscode-descriptionForeground, #9d9d9d);
+    cursor: pointer;
+    user-select: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: rgba(255,255,255,0.06);
+}
+.section-header:hover { background: var(--vscode-list-hoverBackground); opacity: 0.9; }
+.section-toggle { font-size: 0.8rem; opacity: 0.8; transition: transform 0.2s; }
+.section-toggle.open { transform: rotate(90deg); }
+.section-body {
+    padding: 0 12px;
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.25s ease-out, padding 0.25s ease-out;
+}
+
+.section-body.open {
+    padding: 10px 12px;
+    max-height: 2000px;
+}
+
+/* Graph */
+#graph-view { height: 220px; width: 100%; }
+
+/* Dependency tree */
+.dtree-node {
+    position: relative;
+    margin-bottom: 2px;
+}
+.dtree-node-header {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 4px;
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 0.83rem;
+}
+.dtree-node-header:hover { background: var(--vscode-list-hoverBackground); }
+.dtree-name { font-weight: 600; color: var(--vscode-symbolIcon-functionForeground, #dcdcaa); font-family: monospace; }
+.dtree-expr { font-size: 0.78rem; color: var(--vscode-descriptionForeground, #9d9d9d); font-family: monospace; margin-left: 18px; margin-bottom: 2px; word-break: break-word; }
+.dtree-value { font-size: 0.78rem; font-family: monospace; color: var(--vscode-editor-foreground); margin-left: auto; padding-left: 8px; flex-shrink: 0; }
+.dtree-unit { font-size: 0.7rem; color: var(--vscode-descriptionForeground, #9d9d9d); font-family: monospace; }
+.dtree-children { margin-left: 16px; border-left: 1px solid rgba(255,255,255,0.07); padding-left: 8px; margin-top: 2px; }
+.dtree-inputs { margin-left: 22px; }
+.dtree-input-item { font-size: 0.78rem; color: var(--vscode-descriptionForeground, #9d9d9d); font-family: monospace; padding: 1px 0; }
+.dtree-arrow { width: 14px; flex-shrink: 0; color: var(--vscode-descriptionForeground, #9d9d9d); font-size: 0.7rem; transition: transform 0.15s; }
+.dtree-arrow.open { transform: rotate(90deg); }
+
+/* Eval steps */
+.step-row {
+    border-left: 3px solid rgba(255,255,255,0.1);
+    padding: 5px 8px;
+    margin-bottom: 6px;
+    font-size: 0.8rem;
+}
+.step-name { font-weight: 700; font-family: monospace; color: var(--vscode-symbolIcon-functionForeground, #dcdcaa); }
+.step-expr { color: var(--vscode-descriptionForeground, #9d9d9d); font-family: monospace; margin: 2px 0; word-break: break-word; }
+.step-resolved { color: var(--vscode-descriptionForeground, #9d9d9d); font-family: monospace; margin: 1px 0; font-size: 0.76rem; word-break: break-word; }
+.step-result { font-weight: 700; font-family: monospace; margin-top: 2px; }
+.step-unit { color: var(--vscode-descriptionForeground, #9d9d9d); }
+
+/* Step highlight colours by depth */
+.step-row:nth-child(1) { border-left-color: #4db6ff; }
+.step-row:nth-child(2) { border-left-color: #ff9800; }
+.step-row:nth-child(3) { border-left-color: #a78bfa; }
+.step-row:nth-child(4) { border-left-color: #4ade80; }
+.step-row:nth-child(5) { border-left-color: #f472b6; }
+.step-row:nth-child(n+6) { border-left-color: rgba(255,255,255,0.15); }
+
+/* Empty states */
+.empty { color: var(--vscode-descriptionForeground, #9d9d9d); font-size: 0.82rem; padding: 12px 0; text-align: center; }
+
+/* ── Scrollbar ───────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.3); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.4); }
+</style>
+</head>
+<body>
+
+<div class="layout">
+
+    <!-- ═══ COLUMN 1: Formula list ══════════════════════════════════ -->
+    <div class="col">
+        <div class="col-header">
+            ⚡ Formulas
+            <span class="badge" id="formula-count">0</span>
+        </div>
+        <div class="col-body">
+            <div class="file-label" id="active-file-name"></div>
+            <div id="formula-list"></div>
+        </div>
+    </div>
+
+    <!-- ═══ COLUMN 2: Inputs + History ══════════════════════════════ -->
+    <div class="col">
+        <div class="tabs">
+            <button class="tab-btn active" data-tab="inputs">📥 Inputs</button>
+            <button class="tab-btn" data-tab="history">🕐 History</button>
+        </div>
+
+        <!-- Tab: Inputs -->
+        <div class="tab-pane active" id="tab-inputs">
+
+            <!-- Inverse-solve panel (shown when a param is marked) -->
+            <div class="inverse-panel" id="inverse-panel">
+                <label>Set output target — solve for <span id="solve-for-label" style="color:#ff9800;font-weight:700;"></span></label>
+                <div class="inverse-row">
+                    <input type="number" id="inverse-target" placeholder="target value" step="any">
+                    <button class="btn-solve" id="btn-run-inverse">↩ Solve</button>
+                </div>
+                <div class="inverse-result-info" id="inverse-info"></div>
+            </div>
+
+            <div id="params-container"></div>
+        </div>
+
+        <!-- Tab: History -->
+        <div class="tab-pane" id="tab-history">
+            <div class="history-controls">
+                <button class="btn-ghost" id="btn-clear-history">Clear</button>
+            </div>
+            <div id="history-list">
+                <div class="history-empty">No changes recorded yet.</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══ COLUMN 3: Output ═════════════════════════════════════════ -->
+    <div class="col output-col">
+
+        <!-- Result hero -->
+        <div class="result-hero">
+            <div class="result-formula-name" id="result-formula-name">—</div>
+            <div class="result-value" id="result">—</div>
+            <div class="result-unit"  id="result-unit"></div>
+        </div>
+
+        <!-- Sections -->
+        <div class="output-body">
+
+            <!-- Dependency tree -->
+            <div class="section">
+                <div class="section-header" data-section="tree">
+                    <span>🌿 Formula Expansion</span>
+                    <span class="section-toggle open">▶</span>
+                </div>
+                <div class="section-body open" id="sb-tree">
+                    <div id="formula-tree-view" class="empty">Select a formula.</div>
+                </div>
+            </div>
+
+            <!-- Eval steps -->
+            <div class="section">
+                <div class="section-header" data-section="steps">
+                    <span>🧮 Evaluation Steps</span>
+                    <span class="section-toggle">▶</span>
+                </div>
+                <div class="section-body" id="sb-steps">
+                    <div id="steps-view" class="empty">Run an evaluation first.</div>
+                </div>
+            </div>
+
+            <!-- Dependency graph -->
+            <div class="section">
+                <div class="section-header" data-section="graph">
+                    <span>📊 Dependency Graph</span>
+                    <span class="section-toggle">▶</span>
+                </div>
+                <div class="section-body" id="sb-graph">
+                    <div id="graph-view"></div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+</div>
+
+<!-- vis-network (graph rendering) -->
+<script src="https://cdn.jsdelivr.net/npm/vis-network@9.1.2/dist/vis-network.min.js" nonce="PLACEHOLDER_NONCE"></script>
+
+<!-- INJECT_INITIAL_JSON -->
+
+<script nonce="PLACEHOLDER_NONCE">
+'use strict';
+
+// ─── VS Code API ───────────────────────────────────────────────────────────────
+
+const vscode = acquireVsCodeApi();
+
+// ─── App state ────────────────────────────────────────────────────────────────
+
+let formulas    = [];
+let allValues   = {};   // latest intermediate values from the engine
+let history     = [];   // HistoryEntry[]
+let selectedId  = null;
+
+// Params: merged object (user changes + defaults from state)
+// We track which ones are user-modified
+let params       = {};   // Record<string, number>
+let solveForParam = null; // currently active back-solve target
+
+// Retrieve persisted webview state
+const persisted = vscode.getState() || { selectedId: null, params: {} };
+params      = persisted.params  || {};
+selectedId  = persisted.selectedId || null;
+
+// Debounce handle
+let evalTimer = null;
+function scheduleEval() {
+    if (evalTimer) clearTimeout(evalTimer);
+    evalTimer = setTimeout(runEval, 280);
+}
+
+// ─── Utility ──────────────────────────────────────────────────────────────────
+
+function fmt(n) {
+    if (n === null || n === undefined || !Number.isFinite(n)) return '—';
+    const abs = Math.abs(n);
+    if (abs === 0) return '0';
+    if (abs >= 1e6  || abs < 1e-4 && abs !== 0) return n.toExponential(5);
+    if (abs >= 100) return n.toPrecision(7).replace(/\.?0+$/, '');
+    return parseFloat(n.toPrecision(7)).toString();
+}
+
+function timeAgo(ts) {
+    const diff = (Date.now() - ts) / 1000;
+    if (diff < 5)   return 'just now';
+    if (diff < 60)  return `${Math.round(diff)}s ago`;
+    if (diff < 3600) return `${Math.round(diff/60)}m ago`;
+    return `${Math.round(diff/3600)}h ago`;
+}
+
+// ─── Init ─────────────────────────────────────────────────────────────────────
+
+(function init() {
+    const initial = window.__CALCDOCS_INITIAL;
+    if (!initial) return;
+
+    // Wire tabs (BEFORE selectFormula so it doesn't block on error)
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+    });
+
+    // Wire sections (collapsible)
+    document.querySelectorAll('.section-header').forEach(h => {
+        h.addEventListener('click', () => toggleSection(h.dataset.section));
+    });
+
+    // Wire inverse panel
+    document.getElementById('btn-run-inverse')
+        .addEventListener('click', runInverseSolve);
+    document.getElementById('inverse-target')
+        .addEventListener('keydown', e => { if (e.key === 'Enter') runInverseSolve(); });
+
+    // Wire clear history
+    document.getElementById('btn-clear-history')
+        .addEventListener('click', () => {
+            vscode.postMessage({ action: 'clearHistory' });
+        });
+
+    formulas = initial.formulas || [];
+    setFileLabel(initial.activeFileName || '');
+    renderFormulaList();
+
+    const target = initial.selectedFormulaId ||
+                   (formulas.length ? formulas[0].id : null);
+    // selectFormula with skipEval=false → eval fires inside selectFormula
+    if (target) {
+        try {
+            selectFormula(target, false);
+        } catch (err) {
+            console.error('Error during initial selection:', err);
+        }
+    }
+})();
+
+// ─── UI helpers ───────────────────────────────────────────────────────────────
+
+function setFileLabel(label) {
+    const el = document.getElementById('active-file-name');
+    el.textContent = label ? label.split(/[/\\]/).pop() : '';
+    el.title = label;
+}
+
+function switchTab(tab) {
+    document.querySelectorAll('.tab-btn').forEach(b =>
+        b.classList.toggle('active', b.dataset.tab === tab));
+    document.querySelectorAll('.tab-pane').forEach(p =>
+        p.classList.toggle('active', p.id === 'tab-' + tab));
+
+    if (tab === 'history') {
+        vscode.postMessage({ action: 'requestHistory' });
+    }
+}
+
+function toggleSection(name) {
+    const body   = document.getElementById(`sb-${name}`);
+    const toggle = document.querySelector(`[data-section="${name}"] .section-toggle`);
+
+    if (!body) return;
+
+    // Drive visibility purely via CSS class — no inline style interference
+    body.classList.toggle('open');
+
+    const opening = body.classList.contains('open');
+
+    if (toggle) {
+        toggle.classList.toggle('open', opening);
+    }
+    
+    if (name === 'graph' && opening && graphInstance) {
+        setTimeout(() => graphInstance.fit(), 50);
+    }
+}
+
+// ─── Formula list ─────────────────────────────────────────────────────────────
+
+function renderFormulaList() {
+    const list = document.getElementById('formula-list');
+    const count = document.getElementById('formula-count');
+    count.textContent = formulas.length;
+
+    if (!formulas.length) {
+        list.innerHTML = '<div class="empty">No formulas found.</div>';
+        return;
+    }
+
+    list.innerHTML = formulas.map(f => `
+        <div class="formula-item${f.id === selectedId ? ' selected' : ''}"
+             data-id="${f.id}">
+            <span>${f.name}</span>
+            ${f.unit ? `<span class="f-unit">[${f.unit}]</span>` : ''}
+        </div>
+    `).join('');
+
+    list.querySelectorAll('.formula-item').forEach(el => {
+        el.addEventListener('click', () => selectFormula(el.dataset.id));
+    });
+}
+
+// ─── Select formula ───────────────────────────────────────────────────────────
+
+function selectFormula(id, skipEval = false) {
+    selectedId = id;
+
+    // Update list highlight
+    document.querySelectorAll('.formula-item').forEach(el =>
+        el.classList.toggle('selected', el.dataset.id === id));
+
+    const f = formulas.find(x => x.id === id);
+    if (!f) return;
+
+    document.getElementById('result-formula-name').textContent = f.name;
+    document.getElementById('result').textContent = '…';
+    document.getElementById('result').className = 'result-value';
+    document.getElementById('result-unit').textContent = f.unit ? `[${f.unit}]` : '';
+
+    // Reset solve-for when switching formulas
+    solveForParam = null;
+    updateInversePanel();
+
+    // Render tree & inputs
+    renderTree(f.tree, allValues);
+    renderInputs(f);
+    renderGraph(f);
+
+    persist();
+    if (!skipEval) scheduleEval();
+}
+
+// ─── Inputs ───────────────────────────────────────────────────────────────────
+
+/** Collect all scoped inputs from the dependency tree. */
+function collectScopes(node, list = []) {
+    if (node.localInputs?.length) {
+        list.push({
+            name: node.name,
+            depth: node.depth,
+            inputs: node.localInputs,
+        });
+    }
+
+    for (const c of node.children || []) {
+        collectScopes(c, list);
+    }
+
+    return list;
+}
+
+function renderInputs(formula) {
+    const container = document.getElementById('params-container');
+    const scopes = collectScopes(formula.tree);
+
+    console.log("TREE:", formula.tree);
+    console.log("SCOPES:", scopes);
+
+    // This ensures scheduleEval() and runInverseSolve() both
+    // send a complete params dict instead of an empty one, so the extension
+    // engine never falls back to hard-coded guesses or mis-converges.
+    for (const scope of scopes) {
+        for (const p of scope.inputs) {
+            if (params[p.name] === undefined && p.defaultValue !== undefined) {
+                params[p.name] = p.defaultValue;
+            }
+        }
+    }
+
+    if (!scopes.length) {
+        container.innerHTML = '<div class="empty">No inputs required.</div>';
+        return;
+    }
+
+    const colorClasses = ['scope-l0', 'scope-l1', 'scope-l2', 'scope-l3'];
+    let html = '';
+
+    for (const scope of scopes) {
+        const name = scope.name;
+        const isRoot = name === formula.id;
+        const cls = colorClasses[scope.depth % colorClasses.length];
+
+        html += `<div class="scope-block ${cls}">
+            <div class="scope-title">${isRoot ? '⬡ root' : '↳ ' + name}</div>`;
+
+        for (const p of scope.inputs) {
+            const val = params[p.name] ?? p.defaultValue ?? '';
+            const isModified = params[p.name] !== undefined;
+            const isSolvedFor = solveForParam === p.name;
+
+            html += `
+            <div class="param-row">
+                <div class="param-label">
+                    <span>${p.name}</span>
+                    ${p.unit ? `<span class="param-unit">[${p.unit}]</span>` : ''}
+                </div>
+                <div class="param-input-wrap">
+                    <input type="number"
+                           data-name="${p.name}"
+                           value="${val}"
+                           step="any"
+                           class="${isSolvedFor ? 'solved' : isModified ? 'modified' : ''}"
+                           ${isSolvedFor ? 'readonly tabindex="-1"' : ''}
+                           placeholder="${p.hasDefault && p.defaultValue !== undefined ? p.defaultValue : ''}">
+                    <button class="solve-for-btn${isSolvedFor ? ' active' : ''}"
+                            data-name="${p.name}"
+                            title="Back-solve this parameter from a target output">↩</button>
+                </div>
+            </div>`;
+        }
+        html += '</div>';
+    }
+
+    container.innerHTML = html;
+
+    // Wire inputs
+    container.querySelectorAll('input[data-name]').forEach(input => {
+        input.addEventListener('input', () => {
+            const name = input.dataset.name;
+            const v = parseFloat(input.value);
+            if (Number.isFinite(v)) {
+                params[name] = v;
+                input.classList.add('modified');
+            } else {
+                delete params[name];
+                input.classList.remove('modified');
+            }
+            persist();
+            scheduleEval();
+        });
+    });
+
+    // Wire solve-for buttons
+    container.querySelectorAll('.solve-for-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const name = btn.dataset.name;
+            solveForParam = (solveForParam === name) ? null : name;
+            renderInputs(formula); // re-render to update styles
+            updateInversePanel();
+        });
+    });
+}
+
+function updateInversePanel() {
+    const panel = document.getElementById('inverse-panel');
+    const label = document.getElementById('solve-for-label');
+    const info  = document.getElementById('inverse-info');
+
+    if (solveForParam) {
+        label.textContent = solveForParam;
+        info.textContent = '';
+        panel.classList.add('visible');
+    } else {
+        panel.classList.remove('visible');
+    }
+}
+
+// ─── Evaluation ───────────────────────────────────────────────────────────────
+
+function runEval() {
+    if (!selectedId) return;
+
+    const resultEl = document.getElementById('result');
+    resultEl.className = 'result-value updating';
+
+    vscode.postMessage({
+        action: 'evaluate',
+        formulaId: selectedId,
+        params,
+    });
+}
+
+function runInverseSolve() {
+    if (!selectedId || !solveForParam) return;
+
+    const targetVal = parseFloat(document.getElementById('inverse-target').value);
+    if (!Number.isFinite(targetVal)) {
+        document.getElementById('inverse-info').textContent = '⚠ Enter a valid target value.';
+        return;
+    }
+
+    document.getElementById('inverse-info').textContent = '⟳ Solving…';
+
+    // Send ALL params — solver needs baseline values even for the
+    // solve-for variable, and knows which one to vary from solveFor.
+    vscode.postMessage({
+        action: 'inverseSolve',
+        formulaId: selectedId,
+        params,
+        targetOutput: targetVal,
+        solveFor: solveForParam,
+    });
+}
+
+// ─── Dependency tree rendering ────────────────────────────────────────────────
+
+function renderTree(node, vals, container = null) {
+    const root = container || document.getElementById('formula-tree-view');
+    root.innerHTML = buildTreeHtml(node, vals, true);
+    // All children start visible (CSS has no display:none on .dtree-children)
+    root.querySelectorAll('.dtree-children').forEach(el => {
+        el.style.display = '';
+    });
+    // Assign onclick (property, not addEventListener) so it is replaced on each
+    // renderTree call instead of accumulating multiple listeners that cancel out
+    root.onclick = function(e) {
+        const header = e.target.closest('.dtree-node-header');
+        if (!header) return;
+        const children = header.parentElement.querySelector('.dtree-children');
+        if (!children) return;
+        const arrow = header.querySelector('.dtree-arrow');
+        const hidden = children.style.display === 'none';
+        children.style.display = hidden ? '' : 'none';
+        if (arrow) arrow.classList.toggle('open', hidden);
+    };
+}
+
+function buildTreeHtml(node, vals, isRoot = false) {
+    const hasChildren = node.children && node.children.length;
+    const hasInputs   = node.localInputs && node.localInputs.length;
+    const val = vals[node.name];
+    const valStr = val !== undefined ? fmt(val) : '?';
+
+    let html = `<div class="dtree-node">
+        <div class="dtree-node-header">
+            <span class="dtree-arrow${hasChildren ? ' open' : ''}">${hasChildren ? '▶' : '•'}</span>
+            <span class="dtree-name">${node.name}</span>
+            ${node.unit ? `<span class="dtree-unit"> [${node.unit}]</span>` : ''}
+            <span class="dtree-value">${valStr}</span>
+        </div>
+        ${node.expression ? `<div class="dtree-expr">= ${node.expression}</div>` : ''}`;
+
+    if (hasInputs) {
+        html += '<div class="dtree-inputs">';
+        for (const inp of node.localInputs) {
+            const v = vals[inp.name];
+            html += `<div class="dtree-input-item">
+                <span class="dtree-unit">↳</span>
+                ${inp.name}${inp.unit ? ` <span class="dtree-unit">[${inp.unit}]</span>` : ''}
+                ${v !== undefined ? ` = ${fmt(v)}` : ''}
+            </div>`;
+        }
+        html += '</div>';
+    }
+
+    if (hasChildren) {
+        html += '<div class="dtree-children">';
+        for (const child of node.children) {
+            html += buildTreeHtml(child, vals);
+        }
+        html += '</div>';
+    }
+
+    html += '</div>';
+    return html;
+}
+
+// ─── Eval steps rendering ─────────────────────────────────────────────────────
+
+function renderSteps(steps) {
+    const el = document.getElementById('steps-view');
+    if (!steps || !steps.length) {
+        el.innerHTML = '<div class="empty">No steps yet.</div>';
+        return;
+    }
+    el.innerHTML = steps.map(s => `
+        <div class="step-row">
+            <div class="step-name">${s.name} <span class="step-unit">${s.unit ? '[' + s.unit + ']' : ''}</span></div>
+            <div class="step-expr">${s.expression}</div>
+            <div class="step-resolved">= ${s.resolved}</div>
+            <div class="step-result">→ ${fmt(s.result)} <span class="step-unit">${s.unit || ''}</span></div>
+        </div>
+    `).join('');
+}
+
+// ─── Graph rendering ──────────────────────────────────────────────────────────
+
+let graphInstance = null;
+
+function renderGraph(formula) {
+    const container = document.getElementById('graph-view');
+    if (!container) return;
+
+    if (typeof vis === 'undefined') {
+        container.innerHTML = '<div class="empty">Graph library not loaded.</div>';
+        return;
+    }
+
+    try {
+        const nodes = new Set();
+        const edges = [];
+
+        function visit(name, parent) {
+            nodes.add(name);
+            if (parent) edges.push({ from: parent, to: name });
+            const f = formulas.find(x => x.id === name);
+            if (f?.tree?.children) {
+                f.tree.children.forEach(c => visit(c.name, name));
+            }
+        }
+        visit(formula.id);
+
+        const data = {
+            nodes: new vis.DataSet([...nodes].map(id => ({ id, label: id }))),
+            edges: new vis.DataSet(edges.map((e, i) => ({ id: i, from: e.from, to: e.to }))),
+        };
+
+        const options = {
+            layout: { hierarchical: { direction: 'UD', sortMethod: 'directed', nodeSpacing: 80, levelSeparation: 60 } },
+            physics: false,
+            edges: { arrows: 'to', color: { color: 'rgba(255,255,255,0.2)' }, width: 1 },
+            nodes: {
+                shape: 'box',
+                font: { color: 'var(--vscode-editor-foreground)', size: 11, face: 'monospace' },
+                color: { background: 'rgba(77,182,255,0.15)', border: 'rgba(77,182,255,0.45)', highlight: { background: 'rgba(77,182,255,0.35)', border: '#4db6ff' } },
+            },
+        };
+
+        if (graphInstance) { graphInstance.destroy(); graphInstance = null; }
+        graphInstance = new vis.Network(container, data, options);
+    } catch (err) {
+        console.error('Error rendering graph:', err);
+        container.innerHTML = `<div class="empty">Error rendering graph: ${err.message}</div>`;
+    }
+}
+
+// ─── History ──────────────────────────────────────────────────────────────────
+
+function renderHistory(entries) {
+    history = entries;
+    const list = document.getElementById('history-list');
+
+    if (!entries.length) {
+        list.innerHTML = '<div class="history-empty">No changes recorded yet.</div>';
+        return;
+    }
+
+    list.innerHTML = entries.map(e => `
+        <div class="history-entry" data-id="${e.id}">
+            <div class="h-dot ${e.direction}"></div>
+            <div class="h-body">
+                <div class="h-param">${e.changedParam} = ${fmt(e.changedValue)}</div>
+                <div class="h-meta">
+                    <span class="h-direction ${e.direction}">${e.direction}</span>
+                    &nbsp;${timeAgo(e.ts)}
+                </div>
+            </div>
+            <div class="h-result">${e.result !== null && e.result !== undefined ? fmt(e.result) : '—'}</div>
+        </div>
+    `).join('');
+
+    list.querySelectorAll('.history-entry').forEach(el => {
+        el.addEventListener('click', () => {
+            vscode.postMessage({ action: 'loadHistoryEntry', id: el.dataset.id });
+        });
+    });
+}
+
+// ─── Extension messages ───────────────────────────────────────────────────────
+
+window.addEventListener('message', ({ data: msg }) => {
+
+    // ── Forward evaluation result ──────────────────────────────────────────────
+    if (msg.action === 'result') {
+        const resultEl  = document.getElementById('result');
+        const unitEl    = document.getElementById('result-unit');
+
+        if (msg.error) {
+            resultEl.textContent = msg.error;
+            resultEl.className   = 'result-value error';
+        } else if (msg.value !== null && msg.value !== undefined) {
+            resultEl.textContent = fmt(msg.value);
+            resultEl.className   = 'result-value';
+
+            const f = formulas.find(x => x.id === selectedId);
+            unitEl.textContent = f?.unit ? `[${f.unit}]` : '';
+
+            // Push to auto-history via backend (already done there).
+            // We just need to update allValues & re-render tree.
+        }
+
+        allValues = msg.allValues || {};
+
+        const f = formulas.find(x => x.id === selectedId);
+        if (f) renderTree(f.tree, allValues);
+        renderSteps(msg.steps);
+        return;
+    }
+
+    // ── Inverse solve result ───────────────────────────────────────────────────
+    if (msg.action === 'inverseResult') {
+        const info = document.getElementById('inverse-info');
+
+        if (msg.error) {
+            info.textContent = '⚠ ' + msg.error;
+            return;
+        }
+
+        if (Number.isFinite(msg.newValue)) {
+            info.textContent = `✓ ${msg.targetParam} = ${fmt(msg.newValue)}`;
+
+            // Update the input field and params
+            params[msg.targetParam] = msg.newValue;
+            const inp = document.querySelector(`input[data-name="${msg.targetParam}"]`);
+            if (inp) {
+                inp.value = msg.newValue;
+                inp.classList.add('solved');
+            }
+
+            // Reflect in the result hero
+            const resultEl = document.getElementById('result');
+            const targetVal = parseFloat(document.getElementById('inverse-target').value);
+            resultEl.textContent = fmt(targetVal);
+            resultEl.className   = 'result-value';
+
+            allValues = msg.allValues || {};
+
+            const f = formulas.find(x => x.id === selectedId);
+            if (f) renderTree(f.tree, allValues);
+            renderSteps(msg.steps);
+            persist();
+        }
+        return;
+    }
+
+    // ── Formula list update ────────────────────────────────────────────────────
+    if (msg.action === 'updateFormulas') {
+        formulas = msg.formulas || [];
+        setFileLabel(msg.activeFileName || '');
+        renderFormulaList();
+
+        const target = msg.selectedFormulaId ||
+                       (formulas.find(f => f.id === selectedId)?.id) ||
+                       (formulas[0]?.id);
+        // skipEval=false: re-evaluate after a formula list update so the result
+        // stays current without requiring a manual input change
+        if (target) selectFormula(target, false);
+        return;
+    }
+
+    // ── Load snapshot / history entry ─────────────────────────────────────────
+    if (msg.action === 'loadSnapshot' && msg.snapshot) {
+        params     = { ...msg.snapshot.params };
+        selectedId = msg.snapshot.formulaId || selectedId;
+        persist();
+
+        const f = formulas.find(x => x.id === selectedId);
+        if (f) {
+            renderFormulaList();
+            renderInputs(f);
+        }
+        scheduleEval();
+
+        // Switch to Inputs tab for visibility
+        switchTab('inputs');
+        return;
+    }
+
+    // ── History updates ───────────────────────────────────────────────────────
+    if (msg.action === 'history' || msg.action === 'historyUpdated') {
+        renderHistory(msg.entries || []);
+        return;
+    }
+
+    // ── Force select (re-wire inputs with listeners) ───────────────────────────
+    if (msg.action === 'forceSelect' && msg.formulaId) {
+        selectFormula(msg.formulaId, false);
+        return;
+    }
+});
+
+// ─── Persist ──────────────────────────────────────────────────────────────────
+
+function persist() {
+    vscode.setState({ selectedId, params });
+}
+
+</script>
+</body>
+</html>

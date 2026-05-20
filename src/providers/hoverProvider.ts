@@ -16,6 +16,15 @@ import { pickWord } from "../utils/editor";
 import { formatNumbersWithThousandsSeparator } from "../utils/nformat";
 import { DEFINE_NAME_RX, FUNCTION_DEFINE_RX, OBJECT_DEFINE_RX } from "../utils/regex";
 import { stripComments } from "../utils/text";
+import {
+  type BitfieldDecodeTheme,
+  decodeBitfieldValue,
+  formatBitfieldDecodeMarkdown,
+  parseRegisterAssignment,
+} from "../core/bitfieldDecoder";
+import { buildCopyLink
+
+ } from "../utils/hoverActions";
 
 type InDocumentSymbolDefinition = {
   expr: string;
@@ -24,6 +33,14 @@ type InDocumentSymbolDefinition = {
 
 function debugLog(state: CalcDocsState, message: string): void {
   state.output.detail(message);
+}
+
+function getBitfieldDecodeTheme(): BitfieldDecodeTheme {
+  const themeKind = vscode.window.activeColorTheme.kind;
+  return themeKind === vscode.ColorThemeKind.Dark ||
+    themeKind === vscode.ColorThemeKind.HighContrast
+    ? "dark"
+    : "light";
 }
 
 function toCCodeBlock(code: string): string {
@@ -429,6 +446,7 @@ function appendFormulaSection(
 
     if (typeof formula.valueCalc === "number") {
       sections.push(`-> \`${formatPreviewNumberWithHex(state, formula.valueCalc)}\``);
+      sections.push(buildCopyLink(String(formula.valueCalc)));
     }
   }
 
@@ -492,6 +510,7 @@ function appendKnownValueSection(
   }
 
   sections.push(`${symbol} = **${formatPreviewNumberWithHex(state, knownValue)}**`);
+  sections.push(buildCopyLink(String(knownValue)));    
 }
 
 function formatCastOverflowSummary(
@@ -556,18 +575,26 @@ function evaluateMacroForHover(macroCall: string, state: CalcDocsState): string 
   const displayBlock = toCCodeBlock(displayCall);
   sections.push(displayBlock || displayCall);
 
+  // In evaluateMacroForHover — dopo aver calcolato preview.value
   if (typeof preview.value === "number") {
-    if (
-      typeof preview.displayValue === "number" &&
+    const displayStr =
+      typeof preview.displayValue === "number" && 
       typeof preview.displayUnit === "string" &&
       preview.displayUnit.trim().length > 0
-    ) {
-      sections.push(
-        `-> **${formatPreviewNumber(state, preview.displayValue)} [${preview.displayUnit}]**`
-      );
-    } else {
-      sections.push(`-> **${formatPreviewNumberWithHex(state, preview.value)}**`);
+        ? `${formatPreviewNumber(state, preview.displayValue)} [${preview.displayUnit}]`
+        : formatPreviewNumberWithHex(state, preview.value);
+
+    sections.push(`-> **${displayStr}**`);
+    sections.push(buildCopyLink(String(preview.value)));
+
+    const decode = decodeBitfieldValue(preview.value, state.allDefines, state);
+    const decodeText = decode
+      ? formatBitfieldDecodeMarkdown(decode, { theme: getBitfieldDecodeTheme() })
+      : null;
+    if (decodeText) {
+      sections.push(decodeText);
     }
+
     return sections.join("\n\n");
   }
 
@@ -696,6 +723,33 @@ export function registerCppHoverProvider(
         }
 
         const fullLine = document.lineAt(position.line).text;
+      const assignment = parseRegisterAssignment(fullLine);
+        if (
+          assignment &&
+          state.cppHover.showLiveRegisterDecoder
+        ) {
+          const preview = evaluateExpressionPreview(state, assignment.rhs);
+          if (typeof preview.value === "number") {
+            // Pass the FULL lhs (e.g., "TIM1->CR1") so matchesContext can validate
+            // all tokens (TIM1, CR1) and check for _Pos/_Msk defines for TIM_CR1.
+            const decode = decodeBitfieldValue(
+              preview.value,
+              state.allDefines,
+              state,
+              assignment.lhs
+            );
+            const decodeText = decode
+              ? formatBitfieldDecodeMarkdown(decode, { theme: getBitfieldDecodeTheme() })
+              : null;
+            if (decodeText) {
+              const markdown = new vscode.MarkdownString(decodeText);
+              markdown.supportHtml = true;
+              markdown.isTrusted = true;
+              return new vscode.Hover(markdown, range);
+            }
+          }
+        }
+
         const macroToEvaluate = resolveMacroCallForHover(
           document,
           position,

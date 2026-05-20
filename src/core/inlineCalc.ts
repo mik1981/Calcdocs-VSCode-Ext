@@ -1,8 +1,11 @@
 import { evaluateExpressionPreview, formatPreviewNumber } from "./preview";
 import type { CalcDocsState } from "./state";
 import {
+  convertSiToUnit,
+  convertUnitValueToSi,
   getUnitSpec as getEngineUnitSpec,
   normalizeUnitToken as normalizeEngineUnitToken,
+  parseUnitToQuantity,
   UNIT_SPECS as ENGINE_UNIT_SPECS,
   UNIT_ALIASES as ENGINE_UNIT_ALIASES,
 } from "../engine/units";
@@ -174,18 +177,18 @@ export function buildVariableDimensions(state: CalcDocsState): Map<string, Dimen
 
   // Dimensioni dai simboli C/C++ estratti (commenti @unit=)
   for (const [name, unitToken] of state.symbolUnits) {
-    const spec = resolveUnitSpec(unitToken);
-    if (spec) {
-      variableDimensions.set(name, cloneDimension(spec.dimension));
+    const dimension = resolveUnitDimension(unitToken);
+    if (dimension) {
+      variableDimensions.set(name, cloneDimension(dimension));
     }
   }
 
   // Dimensioni dalle formule YAML
   for (const entry of state.formulaIndex.values()) {
     if (entry.unit) {
-      const spec = resolveUnitSpec(entry.unit);
-      if (spec) {
-        variableDimensions.set(entry.key, cloneDimension(spec.dimension));
+      const dimension = resolveUnitDimension(entry.unit);
+      if (dimension) {
+        variableDimensions.set(entry.key, cloneDimension(dimension));
       }
     }
   }
@@ -193,8 +196,15 @@ export function buildVariableDimensions(state: CalcDocsState): Map<string, Dimen
   return variableDimensions;
 }
 
-function isDimensionless(value: DimensionVector): boolean {
-  return dimensionsEqual(value, DIMENSIONLESS);
+function resolveUnitDimension(rawUnit: string): DimensionVector | undefined {
+  const normalizedUnit = normalizeUnitToken(rawUnit);
+  const spec = resolveUnitSpec(normalizedUnit);
+  if (spec) {
+    return spec.dimension;
+  }
+
+  const parsed = parseUnitToQuantity(rawUnit);
+  return parsed.ok ? parsed.value.dimension : undefined;
 }
 
 function formatDimensionExponent(value: number): string {
@@ -508,13 +518,12 @@ function replaceInlineQuantityLiterals(expression: string): string {
         return full;
       }
 
-      const normalizedUnit = normalizeUnitToken(rawUnit);
-      const spec = resolveUnitSpec(normalizedUnit);
-      if (!spec) {
+      const converted = convertUnitValueToSi(numeric, rawUnit);
+      if (!converted.ok) {
         return full;
       }
 
-      return String(numeric * spec.factorToSi);
+      return String(converted.value);
     }
   );
 }
@@ -537,14 +546,13 @@ function replaceQuantityLiteralsForDimension(expression: string): {
   const replaced = expression.replace(
     QUANTITY_LITERAL_RX,
     (full: string, _rawNumeric: string, rawUnit: string) => {
-      const normalizedUnit = normalizeUnitToken(rawUnit);
-      const spec = resolveUnitSpec(normalizedUnit);
-      if (!spec) {
+      const parsed = parseUnitToQuantity(rawUnit);
+      if (!parsed.ok) {
         return full;
       }
 
       const token = `__Q${counter++}`;
-      quantityDimensions.set(token, cloneDimension(spec.dimension));
+      quantityDimensions.set(token, cloneDimension(parsed.value.dimension));
       return token;
     }
   );
@@ -890,8 +898,12 @@ function formatWithOutputUnit(
     return `${formatPreviewNumber(state, value)} ${outputUnit}`;
   }
 
-  const converted = value / spec.factorToSi;
-  return `${formatPreviewNumber(state, converted)} ${spec.canonical}`;
+  const converted = convertSiToUnit(value, normalizedUnit);
+  if (!converted.ok) {
+    return `${formatPreviewNumber(state, value)} ${outputUnit}`;
+  }
+
+  return `${formatPreviewNumber(state, converted.value)} ${spec.canonical}`;
 }
 
 function normalizeCommentLine(rawComment: string): string {
@@ -1062,7 +1074,12 @@ function hasQuantityLiteralSignal(expression: string): boolean {
 }
 
 function isKnownUnitWord(token: string): boolean {
-  return Boolean(resolveUnitSpec(token));
+  if (resolveUnitSpec(token)) {
+    return true;
+  }
+
+  const parsed = parseUnitToQuantity(token);
+  return parsed.ok;
 }
 
 function isLikelyInlineCalculationExpression(

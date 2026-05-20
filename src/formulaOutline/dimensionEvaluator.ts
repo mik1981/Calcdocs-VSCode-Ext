@@ -6,7 +6,10 @@ import {
   dimensionsEqual as sameDim,
   addDimensions as addDim,
   subtractDimensions as subDim,
+  multiplyDimensions,
+  divideDimensions,
   getUnitSpec,
+  parseUnitToQuantity,
 } from '../engine/units';
 
 // -------------------- DIM TYPE --------------------
@@ -19,8 +22,15 @@ export const ZERO_DIM: Dim = { M:0, L:0, T:0, I:0, K:0 };
 
 export function getUnitDim(unit?: string): Dim | null {
   if (!unit) return null;
+  // Prova prima come token atomico (es. "A", "V", "Ohm")
   const spec = getUnitSpec(unit);
-  return spec ? spec.dimension : null;
+  if (spec) return spec.dimension;
+
+  // Fallback: prova come espressione di unità composta (es. "A^2", "A*V", "N/m")
+  const parsed = parseUnitToQuantity(unit);
+  if (parsed.ok) return parsed.value.dimension;
+
+  return null;
 }
 
 // -------------------- C SYMBOL DIM PROPAGATION --------------------
@@ -119,8 +129,8 @@ export function inferDimension(
       stack.push(a);
     }
 
-    if (op === '*') stack.push(addDim(a, b));
-    if (op === '/') stack.push(subDim(a, b));
+    if (op === '*') stack.push(multiplyDimensions(a, b));
+    if (op === '/') stack.push(divideDimensions(a, b));
   }
 
   try {

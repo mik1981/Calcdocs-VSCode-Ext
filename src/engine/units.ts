@@ -6,11 +6,71 @@ export type DimensionVector = {
   K: number;
 };
 
+
+export function isDimensionless(dim: DimensionVector): boolean {
+  return (
+    dim.M === 0 &&
+    dim.L === 0 &&
+    dim.T === 0 &&
+    dim.I === 0 &&
+    dim.K === 0
+  );
+}
+
+export function formatDimension(dim: DimensionVector): string {
+  if (isDimensionless(dim)) {
+    return '1';
+  }
+
+  return Object.entries(dim)
+    .filter(([, value]) => value !== 0)
+    .map(([key, value]) => `${key}^${value}`)
+    .join(' ');
+}
+
+export function multiplyDimensions(
+  a: DimensionVector,
+  b: DimensionVector
+): DimensionVector {
+  return {
+    M: a.M + b.M,
+    L: a.L + b.L,
+    T: a.T + b.T,
+    I: a.I + b.I,
+    K: a.K + b.K,
+  };
+}
+
+export function divideDimensions(
+  a: DimensionVector,
+  b: DimensionVector
+): DimensionVector {
+  return {
+    M: a.M - b.M,
+    L: a.L - b.L,
+    T: a.T - b.T,
+    I: a.I - b.I,
+    K: a.K - b.K,
+  };
+}
+
 export type UnitSpec = {
   token: string;
   canonical: string;
   factorToSi: number;
   dimension: DimensionVector;
+  family?: string;
+  aliases?: string[];
+  toSi?: (value: number) => number;
+  fromSi?: (valueSi: number) => number;
+};
+
+export type ParsedUnit = {
+  token: string;
+  factor: number;
+  factorToSi: number;
+  unit: UnitSpec;
+  displayUnit: string;
 };
 
 export type Quantity = {
@@ -24,8 +84,77 @@ export type UnitResult<T> =
   | { ok: true; value: T }
   | { ok: false; error: string };
 
+export type UnitDefinition = Omit<UnitSpec, "dimension"> & {
+  dimension: DimensionVector;
+  prefixable?: boolean;
+  prefixBase?: string;
+  prefixCanonicalBase?: string;
+  prefixes?: readonly string[];
+};
+
+type SiPrefix = {
+  symbol: string;
+  factor: number;
+};
+
 const EPSILON = 1e-12;
-const DIMENSIONLESS: DimensionVector = { M: 0, L: 0, T: 0, I: 0, K: 0 };
+
+export const DIMENSIONLESS: DimensionVector = dim(0, 0, 0, 0);
+
+const SI_PREFIXES: readonly SiPrefix[] = [
+  { symbol: "q", factor: 1e-30 },
+  { symbol: "r", factor: 1e-27 },
+  { symbol: "y", factor: 1e-24 },
+  { symbol: "z", factor: 1e-21 },
+  { symbol: "a", factor: 1e-18 },
+  { symbol: "f", factor: 1e-15 },
+  { symbol: "p", factor: 1e-12 },
+  { symbol: "n", factor: 1e-9 },
+  { symbol: "u", factor: 1e-6 },
+  { symbol: "m", factor: 1e-3 },
+  { symbol: "c", factor: 1e-2 },
+  { symbol: "d", factor: 1e-1 },
+  { symbol: "da", factor: 1e1 },
+  { symbol: "h", factor: 1e2 },
+  { symbol: "k", factor: 1e3 },
+  { symbol: "M", factor: 1e6 },
+  { symbol: "G", factor: 1e9 },
+  { symbol: "T", factor: 1e12 },
+  { symbol: "P", factor: 1e15 },
+  { symbol: "E", factor: 1e18 },
+  { symbol: "Z", factor: 1e21 },
+  { symbol: "Y", factor: 1e24 },
+  { symbol: "R", factor: 1e27 },
+  { symbol: "Q", factor: 1e30 },
+];
+
+const COMMON_ENGINEERING_PREFIXES = [
+  "p",
+  "n",
+  "u",
+  "m",
+  "c",
+  "d",
+  "k",
+  "M",
+  "G",
+  "T",
+] as const;
+
+const ELECTRICAL_PREFIXES = [
+  "p",
+  "n",
+  "u",
+  "m",
+  "k",
+  "M",
+  "G",
+  "T",
+] as const;
+
+function dim(M: number, L: number, T: number, I: number, K: number = 0): DimensionVector {
+  return { M, L, T, I, K };
+}
 
 function cloneDimension(source: DimensionVector): DimensionVector {
   return {
@@ -76,10 +205,6 @@ export function dimensionsEqual(
   );
 }
 
-export function isDimensionless(dimension: DimensionVector): boolean {
-  return dimensionsEqual(dimension, DIMENSIONLESS);
-}
-
 function formatExponent(value: number): string {
   if (Number.isInteger(value)) {
     return String(value);
@@ -88,907 +213,637 @@ function formatExponent(value: number): string {
   return value.toFixed(6).replace(/\.?0+$/, "");
 }
 
-export function formatDimension(dimension: DimensionVector): string {
-  if (isDimensionless(dimension)) {
-    return "1";
-  }
 
-  const parts: string[] = [];
-  if (Math.abs(dimension.M) > EPSILON) {
-    parts.push(`M^${formatExponent(dimension.M)}`);
-  }
-  if (Math.abs(dimension.L) > EPSILON) {
-    parts.push(`L^${formatExponent(dimension.L)}`);
-  }
-  if (Math.abs(dimension.T) > EPSILON) {
-    parts.push(`T^${formatExponent(dimension.T)}`);
-  }
-  if (Math.abs(dimension.I) > EPSILON) {
-    parts.push(`I^${formatExponent(dimension.I)}`);
-  }
-  if (Math.abs(dimension.K) > EPSILON) {
-    parts.push(`K^${formatExponent(dimension.K)}`);
-  }
+export const BASE_UNITS: UnitDefinition[] = [
+  { token: "count", canonical: "count", factorToSi: 1, dimension: dim(0, 0, 0, 0), family: "dimensionless" },
+  { token: "ratio", canonical: "ratio", factorToSi: 1, dimension: dim(0, 0, 0, 0), family: "dimensionless" },
+  { token: "%", canonical: "%", factorToSi: 0.01, dimension: dim(0, 0, 0, 0), family: "ratio" },
+  { token: "pct", canonical: "pct", factorToSi: 0.01, dimension: dim(0, 0, 0, 0), family: "ratio" },
+  { token: "ppm", canonical: "ppm", factorToSi: 1e-6, dimension: dim(0, 0, 0, 0), family: "ratio" },
+  { token: "ppb", canonical: "ppb", factorToSi: 1e-9, dimension: dim(0, 0, 0, 0), family: "ratio" },
+  { token: "ppt", canonical: "ppt", factorToSi: 1e-12, dimension: dim(0, 0, 0, 0), family: "ratio" },
+  { token: "rad", canonical: "rad", factorToSi: 1, dimension: dim(0, 0, 0, 0), family: "angle" },
+  { token: "deg", canonical: "deg", factorToSi: Math.PI / 180, dimension: dim(0, 0, 0, 0), family: "angle" },
+  { token: "dB", canonical: "dB", factorToSi: 1, dimension: dim(0, 0, 0, 0), family: "logarithmic" },
+  { token: "dBm", canonical: "dBm", factorToSi: 1, dimension: dim(0, 0, 0, 0), family: "logarithmic" },
+  { token: "dBV", canonical: "dBV", factorToSi: 1, dimension: dim(0, 0, 0, 0), family: "logarithmic" },
+  { token: "bit", canonical: "bit", factorToSi: 1, dimension: dim(0, 0, 0, 0), family: "data" },
+  { token: "byte", canonical: "byte", factorToSi: 8, dimension: dim(0, 0, 0, 0), family: "data" },
+  { token: "baud", canonical: "baud", factorToSi: 1, dimension: dim(0, 0, -1, 0), family: "frequency" },
 
-  return parts.join(" * ");
-}
+  { token: "s", canonical: "s", factorToSi: 1, dimension: dim(0, 0, 1, 0), family: "time", prefixable: true, prefixes: COMMON_ENGINEERING_PREFIXES },
+  { token: "min", canonical: "min", factorToSi: 60, dimension: dim(0, 0, 1, 0), family: "time" },
+  { token: "h", canonical: "h", factorToSi: 3600, dimension: dim(0, 0, 1, 0), family: "time" },
+  { token: "day", canonical: "day", factorToSi: 86400, dimension: dim(0, 0, 1, 0), family: "time" },
 
-function dim(M: number, L: number, T: number, I: number, K: number = 0): DimensionVector {
-  return { M, L, T, I, K };
-}
+  { token: "m", canonical: "m", factorToSi: 1, dimension: dim(0, 1, 0, 0), family: "length", prefixable: true },
+  { token: "in", canonical: "in", factorToSi: 0.0254, dimension: dim(0, 1, 0, 0), family: "length" },
+  { token: "uin", canonical: "uin", factorToSi: 0.0254e-6, dimension: dim(0, 1, 0, 0), family: "length" },
+  { token: "mil", canonical: "mil", factorToSi: 0.0254e-3, dimension: dim(0, 1, 0, 0), family: "length" },
+  { token: "thou", canonical: "thou", factorToSi: 0.0254e-3, dimension: dim(0, 1, 0, 0), family: "length" },
+  { token: "ft", canonical: "ft", factorToSi: 0.3048, dimension: dim(0, 1, 0, 0), family: "length" },
+  { token: "yd", canonical: "yd", factorToSi: 0.9144, dimension: dim(0, 1, 0, 0), family: "length" },
+  { token: "mi", canonical: "mi", factorToSi: 1609.344, dimension: dim(0, 1, 0, 0), family: "length" },
+  { token: "nmi", canonical: "nmi", factorToSi: 1852, dimension: dim(0, 1, 0, 0), family: "length" },
 
-export const UNIT_SPEC_LIST: UnitSpec[] = [
-  // Dimensionless / ratios / angles
-  { token: "count", canonical: "count", factorToSi: 1, dimension: dim(0, 0, 0, 0) },
-  { token: "ratio", canonical: "ratio", factorToSi: 1, dimension: dim(0, 0, 0, 0) },
-  { token: "%", canonical: "%", factorToSi: 0.01, dimension: dim(0, 0, 0, 0) },
-  { token: "pct", canonical: "pct", factorToSi: 0.01, dimension: dim(0, 0, 0, 0) },
-  { token: "ppm", canonical: "ppm", factorToSi: 1e-6, dimension: dim(0, 0, 0, 0) },
-  { token: "ppb", canonical: "ppb", factorToSi: 1e-9, dimension: dim(0, 0, 0, 0) },
-  { token: "ppt", canonical: "ppt", factorToSi: 1e-12, dimension: dim(0, 0, 0, 0) },
-  { token: "rad", canonical: "rad", factorToSi: 1, dimension: dim(0, 0, 0, 0) },
-  { token: "deg", canonical: "deg", factorToSi: Math.PI / 180, dimension: dim(0, 0, 0, 0) },
+  { token: "m2", canonical: "m2", factorToSi: 1, dimension: dim(0, 2, 0, 0), family: "area", prefixable: true, prefixBase: "m2", prefixCanonicalBase: "m2" },
+  { token: "in2", canonical: "in2", factorToSi: 0.0254 ** 2, dimension: dim(0, 2, 0, 0), family: "area" },
+  { token: "ft2", canonical: "ft2", factorToSi: 0.3048 ** 2, dimension: dim(0, 2, 0, 0), family: "area" },
+  { token: "yd2", canonical: "yd2", factorToSi: 0.9144 ** 2, dimension: dim(0, 2, 0, 0), family: "area" },
+  { token: "ac", canonical: "ac", factorToSi: 4046.8564224, dimension: dim(0, 2, 0, 0), family: "area" },
+  { token: "ha", canonical: "ha", factorToSi: 10000, dimension: dim(0, 2, 0, 0), family: "area" },
 
-  // Time
-  { token: "s", canonical: "s", factorToSi: 1, dimension: dim(0, 0, 1, 0) },
-  { token: "ms", canonical: "ms", factorToSi: 1e-3, dimension: dim(0, 0, 1, 0) },
-  { token: "us", canonical: "us", factorToSi: 1e-6, dimension: dim(0, 0, 1, 0) },
-  { token: "ns", canonical: "ns", factorToSi: 1e-9, dimension: dim(0, 0, 1, 0) },
-  { token: "min", canonical: "min", factorToSi: 60, dimension: dim(0, 0, 1, 0) },
-  { token: "h", canonical: "h", factorToSi: 3600, dimension: dim(0, 0, 1, 0) },
-  { token: "day", canonical: "day", factorToSi: 86400, dimension: dim(0, 0, 1, 0) },
+  { token: "m3", canonical: "m3", factorToSi: 1, dimension: dim(0, 3, 0, 0), family: "volume", prefixable: true, prefixBase: "m3", prefixCanonicalBase: "m3" },
+  { token: "L", canonical: "L", factorToSi: 1e-3, dimension: dim(0, 3, 0, 0), family: "volume", prefixable: true, prefixes: COMMON_ENGINEERING_PREFIXES },
+  { token: "in3", canonical: "in3", factorToSi: 0.0254 ** 3, dimension: dim(0, 3, 0, 0), family: "volume" },
+  { token: "ft3", canonical: "ft3", factorToSi: 0.3048 ** 3, dimension: dim(0, 3, 0, 0), family: "volume" },
+  { token: "gal", canonical: "gal", factorToSi: 0.003785411784, dimension: dim(0, 3, 0, 0), family: "volume" },
+  { token: "qt", canonical: "qt", factorToSi: 0.000946352946, dimension: dim(0, 3, 0, 0), family: "volume" },
+  { token: "pt", canonical: "pt", factorToSi: 0.000473176473, dimension: dim(0, 3, 0, 0), family: "volume" },
+  { token: "cup", canonical: "cup", factorToSi: 0.0002365882365, dimension: dim(0, 3, 0, 0), family: "volume" },
+  { token: "floz", canonical: "fl oz", factorToSi: 2.95735295625e-5, dimension: dim(0, 3, 0, 0), family: "volume" },
+  { token: "bbl", canonical: "bbl", factorToSi: 0.158987, dimension: dim(0, 3, 0, 0), family: "volume" },
 
-  // Length
-  { token: "m", canonical: "m", factorToSi: 1, dimension: dim(0, 1, 0, 0) },
-  { token: "dm", canonical: "dm", factorToSi: 0.1, dimension: dim(0, 1, 0, 0) },
-  { token: "cm", canonical: "cm", factorToSi: 0.01, dimension: dim(0, 1, 0, 0) },
-  { token: "mm", canonical: "mm", factorToSi: 1e-3, dimension: dim(0, 1, 0, 0) },
-  { token: "um", canonical: "um", factorToSi: 1e-6, dimension: dim(0, 1, 0, 0) },
-  { token: "nm", canonical: "nm", factorToSi: 1e-9, dimension: dim(0, 1, 0, 0) },
-  { token: "pm", canonical: "pm", factorToSi: 1e-12, dimension: dim(0, 1, 0, 0) },
-  { token: "km", canonical: "km", factorToSi: 1e3, dimension: dim(0, 1, 0, 0) },
-  { token: "in", canonical: "in", factorToSi: 0.0254, dimension: dim(0, 1, 0, 0) },
-  { token: "uin", canonical: "uin", factorToSi: 0.0254e-6, dimension: dim(0, 1, 0, 0) },
-  { token: "mil", canonical: "mil", factorToSi: 0.0254e-3, dimension: dim(0, 1, 0, 0) },
-  { token: "thou", canonical: "thou", factorToSi: 0.0254e-3, dimension: dim(0, 1, 0, 0) },
-  { token: "ft", canonical: "ft", factorToSi: 0.3048, dimension: dim(0, 1, 0, 0) },
-  { token: "yd", canonical: "yd", factorToSi: 0.9144, dimension: dim(0, 1, 0, 0) },
-  { token: "mi", canonical: "mi", factorToSi: 1609.344, dimension: dim(0, 1, 0, 0) },
-  { token: "nmi", canonical: "nmi", factorToSi: 1852, dimension: dim(0, 1, 0, 0) },
+  { token: "g", canonical: "g", factorToSi: 1e-3, dimension: dim(1, 0, 0, 0), family: "mass", prefixable: true },
+  { token: "t", canonical: "t", factorToSi: 1000, dimension: dim(1, 0, 0, 0), family: "mass" },
+  { token: "tonne", canonical: "tonne", factorToSi: 1000, dimension: dim(1, 0, 0, 0), family: "mass" },
+  { token: "lb", canonical: "lb", factorToSi: 0.45359237, dimension: dim(1, 0, 0, 0), family: "mass" },
+  { token: "oz", canonical: "oz", factorToSi: 0.028349523125, dimension: dim(1, 0, 0, 0), family: "mass" },
+  { token: "st", canonical: "st", factorToSi: 6.35029318, dimension: dim(1, 0, 0, 0), family: "mass" },
+  { token: "slug", canonical: "slug", factorToSi: 14.5939029, dimension: dim(1, 0, 0, 0), family: "mass" },
+  { token: "gr", canonical: "gr", factorToSi: 64.79891e-6, dimension: dim(1, 0, 0, 0), family: "mass" },
+  { token: "tonus", canonical: "ton(US)", factorToSi: 907.18474, dimension: dim(1, 0, 0, 0), family: "mass" },
+  { token: "tonuk", canonical: "ton(UK)", factorToSi: 1016.0469088, dimension: dim(1, 0, 0, 0), family: "mass" },
 
-  // Area
-  { token: "m2", canonical: "m2", factorToSi: 1, dimension: dim(0, 2, 0, 0) },
-  { token: "cm2", canonical: "cm2", factorToSi: 1e-4, dimension: dim(0, 2, 0, 0) },
-  { token: "mm2", canonical: "mm2", factorToSi: 1e-6, dimension: dim(0, 2, 0, 0) },
-  { token: "in2", canonical: "in2", factorToSi: 0.0254 ** 2, dimension: dim(0, 2, 0, 0) },
-  { token: "ft2", canonical: "ft2", factorToSi: 0.3048 ** 2, dimension: dim(0, 2, 0, 0) },
-  { token: "yd2", canonical: "yd2", factorToSi: 0.9144 ** 2, dimension: dim(0, 2, 0, 0) },
-  { token: "ac", canonical: "ac", factorToSi: 4046.8564224, dimension: dim(0, 2, 0, 0) },
-  { token: "ha", canonical: "ha", factorToSi: 10000, dimension: dim(0, 2, 0, 0) },
+  { token: "N", canonical: "N", factorToSi: 1, dimension: dim(1, 1, -2, 0), family: "force", prefixable: true, prefixes: COMMON_ENGINEERING_PREFIXES },
+  { token: "lbf", canonical: "lbf", factorToSi: 4.4482216152605, dimension: dim(1, 1, -2, 0), family: "force" },
+  { token: "ozf", canonical: "ozf", factorToSi: 0.27801385, dimension: dim(1, 1, -2, 0), family: "force" },
+  { token: "Pa", canonical: "Pa", factorToSi: 1, dimension: dim(1, -1, -2, 0), family: "pressure", prefixable: true, prefixes: COMMON_ENGINEERING_PREFIXES },
+  { token: "bar", canonical: "bar", factorToSi: 1e5, dimension: dim(1, -1, -2, 0), family: "pressure", prefixable: true, prefixes: ["m"] },
+  { token: "atm", canonical: "atm", factorToSi: 101325, dimension: dim(1, -1, -2, 0), family: "pressure" },
+  { token: "torr", canonical: "torr", factorToSi: 133.322368421, dimension: dim(1, -1, -2, 0), family: "pressure" },
+  { token: "mmHg", canonical: "mmHg", factorToSi: 133.322, dimension: dim(1, -1, -2, 0), family: "pressure" },
+  { token: "inHg", canonical: "inHg", factorToSi: 3386.389, dimension: dim(1, -1, -2, 0), family: "pressure" },
+  { token: "psi", canonical: "psi", factorToSi: 6894.757293168, dimension: dim(1, -1, -2, 0), family: "pressure" },
+  { token: "ksi", canonical: "ksi", factorToSi: 6_894_757.293168, dimension: dim(1, -1, -2, 0), family: "pressure" },
+  { token: "Nmt", canonical: "N*m", factorToSi: 1, dimension: dim(1, 2, -2, 0), family: "torque" },
+  { token: "lbfft", canonical: "lbf*ft", factorToSi: 1.3558179483314004, dimension: dim(1, 2, -2, 0), family: "torque" },
+  { token: "lbfin", canonical: "lbf*in", factorToSi: 0.112984829, dimension: dim(1, 2, -2, 0), family: "torque" },
+  { token: "ozfin", canonical: "ozf*in", factorToSi: 0.0070615518, dimension: dim(1, 2, -2, 0), family: "torque" },
 
-  // Volume
-  { token: "m3", canonical: "m3", factorToSi: 1, dimension: dim(0, 3, 0, 0) },
-  { token: "l", canonical: "L", factorToSi: 1e-3, dimension: dim(0, 3, 0, 0) },
-  { token: "ml", canonical: "mL", factorToSi: 1e-6, dimension: dim(0, 3, 0, 0) },
-  { token: "ul", canonical: "uL", factorToSi: 1e-9, dimension: dim(0, 3, 0, 0) },
-  { token: "cm3", canonical: "cm3", factorToSi: 1e-6, dimension: dim(0, 3, 0, 0) },
-  { token: "in3", canonical: "in3", factorToSi: 0.0254 ** 3, dimension: dim(0, 3, 0, 0) },
-  { token: "ft3", canonical: "ft3", factorToSi: 0.3048 ** 3, dimension: dim(0, 3, 0, 0) },
-  { token: "gal", canonical: "gal", factorToSi: 0.003785411784, dimension: dim(0, 3, 0, 0) },
-  { token: "qt", canonical: "qt", factorToSi: 0.000946352946, dimension: dim(0, 3, 0, 0) },
-  { token: "pt", canonical: "pt", factorToSi: 0.000473176473, dimension: dim(0, 3, 0, 0) },
-  { token: "cup", canonical: "cup", factorToSi: 0.0002365882365, dimension: dim(0, 3, 0, 0) },
-  { token: "floz", canonical: "fl oz", factorToSi: 2.95735295625e-5, dimension: dim(0, 3, 0, 0) },
-  { token: "bbl", canonical: "bbl", factorToSi: 0.158987, dimension: dim(0, 3, 0, 0) },
+  { token: "J", canonical: "J", factorToSi: 1, dimension: dim(1, 2, -2, 0), family: "energy", prefixable: true, prefixes: COMMON_ENGINEERING_PREFIXES },
+  { token: "eV", canonical: "eV", factorToSi: 1.602176634e-19, dimension: dim(1, 2, -2, 0), family: "energy", prefixable: true, prefixes: ELECTRICAL_PREFIXES },
+  { token: "cal", canonical: "cal", factorToSi: 4.184, dimension: dim(1, 2, -2, 0), family: "energy", prefixable: true, prefixes: ["k"] },
+  { token: "BTU", canonical: "BTU", factorToSi: 1055.05585262, dimension: dim(1, 2, -2, 0), family: "energy" },
+  { token: "Wh", canonical: "Wh", factorToSi: 3600, dimension: dim(1, 2, -2, 0), family: "energy", prefixable: true, prefixes: ELECTRICAL_PREFIXES },
+  { token: "W", canonical: "W", factorToSi: 1, dimension: dim(1, 2, -3, 0), family: "power", prefixable: true, prefixes: ELECTRICAL_PREFIXES },
+  { token: "hp", canonical: "hp", factorToSi: 745.6998715822702, dimension: dim(1, 2, -3, 0), family: "power" },
+  { token: "btuh", canonical: "BTU/h", factorToSi: 1055.05585262 / 3600, dimension: dim(1, 2, -3, 0), family: "power" },
+  { token: "Hz", canonical: "Hz", factorToSi: 1, dimension: dim(0, 0, -1, 0), family: "frequency", prefixable: true, prefixes: COMMON_ENGINEERING_PREFIXES },
 
-  // Speed / acceleration / angular
-  { token: "mps", canonical: "m/s", factorToSi: 1, dimension: dim(0, 1, -1, 0) },
-  { token: "kmh", canonical: "km/h", factorToSi: 1000 / 3600, dimension: dim(0, 1, -1, 0) },
-  { token: "mph", canonical: "mph", factorToSi: 1609.344 / 3600, dimension: dim(0, 1, -1, 0) },
-  { token: "fps", canonical: "ft/s", factorToSi: 0.3048, dimension: dim(0, 1, -1, 0) },
-  { token: "ips", canonical: "in/s", factorToSi: 0.0254, dimension: dim(0, 1, -1, 0) },
-  { token: "knot", canonical: "knot", factorToSi: 1852 / 3600, dimension: dim(0, 1, -1, 0) },
-  { token: "mps2", canonical: "m/s2", factorToSi: 1, dimension: dim(0, 1, -2, 0) },
-  { token: "g0", canonical: "g", factorToSi: 9.80665, dimension: dim(0, 1, -2, 0) },
-  // Angular speed (radianti al secondo)
-  { token: "rpm", canonical: "rpm", factorToSi: (2 * Math.PI) / 60, dimension: dim(0, 0, -1, 0) },
-  { token: "radps", canonical: "rad/s", factorToSi: 1, dimension: dim(0, 0, -1, 0) },
+  { token: "mps", canonical: "m/s", factorToSi: 1, dimension: dim(0, 1, -1, 0), family: "speed" },
+  { token: "kmh", canonical: "km/h", factorToSi: 1000 / 3600, dimension: dim(0, 1, -1, 0), family: "speed" },
+  { token: "mph", canonical: "mph", factorToSi: 1609.344 / 3600, dimension: dim(0, 1, -1, 0), family: "speed" },
+  { token: "fps", canonical: "ft/s", factorToSi: 0.3048, dimension: dim(0, 1, -1, 0), family: "speed" },
+  { token: "ips", canonical: "in/s", factorToSi: 0.0254, dimension: dim(0, 1, -1, 0), family: "speed" },
+  { token: "knot", canonical: "knot", factorToSi: 1852 / 3600, dimension: dim(0, 1, -1, 0), family: "speed" },
+  { token: "mps2", canonical: "m/s2", factorToSi: 1, dimension: dim(0, 1, -2, 0), family: "acceleration" },
+  { token: "g0", canonical: "g0", factorToSi: 9.80665, dimension: dim(0, 1, -2, 0), family: "acceleration" },
+  { token: "rpm", canonical: "rpm", factorToSi: (2 * Math.PI) / 60, dimension: dim(0, 0, -1, 0), family: "angular_velocity" },
+  { token: "radps", canonical: "rad/s", factorToSi: 1, dimension: dim(0, 0, -1, 0), family: "angular_velocity" },
+  { token: "radps2", canonical: "rad/s2", factorToSi: 1, dimension: dim(0, 0, -2, 0), family: "angular_acceleration" },
+  { token: "degps2", canonical: "deg/s2", factorToSi: Math.PI / 180, dimension: dim(0, 0, -2, 0), family: "angular_acceleration" },
+  { token: "rpmps", canonical: "rpm/s", factorToSi: (2 * Math.PI) / 60, dimension: dim(0, 0, -2, 0), family: "angular_acceleration" },
 
-  // Mass
-  { token: "kg", canonical: "kg", factorToSi: 1, dimension: dim(1, 0, 0, 0) },
-  { token: "g", canonical: "g", factorToSi: 1e-3, dimension: dim(1, 0, 0, 0) },
-  { token: "mg", canonical: "mg", factorToSi: 1e-6, dimension: dim(1, 0, 0, 0) },
-  { token: "ug", canonical: "ug", factorToSi: 1e-9, dimension: dim(1, 0, 0, 0) },
-  { token: "tonne", canonical: "tonne", factorToSi: 1000, dimension: dim(1, 0, 0, 0) },
-  { token: "lb", canonical: "lb", factorToSi: 0.45359237, dimension: dim(1, 0, 0, 0) },
-  { token: "oz", canonical: "oz", factorToSi: 0.028349523125, dimension: dim(1, 0, 0, 0) },
-  { token: "st", canonical: "st", factorToSi: 6.35029318, dimension: dim(1, 0, 0, 0) },
-  { token: "slug", canonical: "slug", factorToSi: 14.5939029, dimension: dim(1, 0, 0, 0) },
-  { token: "gr", canonical: "gr", factorToSi: 64.79891e-6, dimension: dim(1, 0, 0, 0) },
-  { token: "tonus", canonical: "ton(US)", factorToSi: 907.18474, dimension: dim(1, 0, 0, 0) },
-  { token: "tonuk", canonical: "ton(UK)", factorToSi: 1016.0469088, dimension: dim(1, 0, 0, 0) },
+  { token: "Lpm", canonical: "L/min", factorToSi: 1e-3 / 60, dimension: dim(0, 3, -1, 0), family: "flow" },
+  { token: "mLpm", canonical: "mL/min", factorToSi: 1e-6 / 60, dimension: dim(0, 3, -1, 0), family: "flow" },
+  { token: "gpm", canonical: "gal/min", factorToSi: 0.003785411784 / 60, dimension: dim(0, 3, -1, 0), family: "flow" },
+  { token: "m3s", canonical: "m3/s", factorToSi: 1, dimension: dim(0, 3, -1, 0), family: "flow" },
+  { token: "cfm", canonical: "ft3/min", factorToSi: (0.3048 ** 3) / 60, dimension: dim(0, 3, -1, 0), family: "flow" },
 
-  // Force / pressure / torque
-  { token: "n", canonical: "N", factorToSi: 1, dimension: dim(1, 1, -2, 0) },
-  { token: "kn", canonical: "kN", factorToSi: 1e3, dimension: dim(1, 1, -2, 0) },
-  { token: "lbf", canonical: "lbf", factorToSi: 4.4482216152605, dimension: dim(1, 1, -2, 0) },
-  { token: "ozf", canonical: "ozf", factorToSi: 0.27801385, dimension: dim(1, 1, -2, 0) },
-  { token: "pa", canonical: "Pa", factorToSi: 1, dimension: dim(1, -1, -2, 0) },
-  { token: "hpa", canonical: "hPa", factorToSi: 100, dimension: dim(1, -1, -2, 0) },
-  { token: "kpa", canonical: "kPa", factorToSi: 1e3, dimension: dim(1, -1, -2, 0) },
-  { token: "mpa", canonical: "MPa", factorToSi: 1e6, dimension: dim(1, -1, -2, 0) },
-  { token: "bar", canonical: "bar", factorToSi: 1e5, dimension: dim(1, -1, -2, 0) },
-  { token: "mbar", canonical: "mbar", factorToSi: 100, dimension: dim(1, -1, -2, 0) },
-  { token: "atm", canonical: "atm", factorToSi: 101325, dimension: dim(1, -1, -2, 0) },
-  { token: "torr", canonical: "torr", factorToSi: 133.322368421, dimension: dim(1, -1, -2, 0) },
-  { token: "mmhg", canonical: "mmHg", factorToSi: 133.322, dimension: dim(1, -1, -2, 0) },
-  { token: "inhg", canonical: "inHg", factorToSi: 3386.389, dimension: dim(1, -1, -2, 0) },
-  { token: "psi", canonical: "psi", factorToSi: 6894.757293168, dimension: dim(1, -1, -2, 0) },
-  { token: "ksi", canonical: "ksi", factorToSi: 6_894_757.293168, dimension: dim(1, -1, -2, 0) },
-  { token: "nmt", canonical: "N*m", factorToSi: 1, dimension: dim(1, 2, -2, 0) },
-  { token: "lbfft", canonical: "lbf*ft", factorToSi: 1.3558179483314004, dimension: dim(1, 2, -2, 0) },
-  { token: "lbfin", canonical: "lbf*in", factorToSi: 0.112984829, dimension: dim(1, 2, -2, 0) },
-  { token: "ozfin", canonical: "ozf*in", factorToSi: 0.0070615518, dimension: dim(1, 2, -2, 0) },
+  { token: "A", canonical: "A", factorToSi: 1, dimension: dim(0, 0, 0, 1), family: "current", prefixable: true, prefixes: ELECTRICAL_PREFIXES },
+  { token: "C", canonical: "C", factorToSi: 1, dimension: dim(0, 0, 1, 1), family: "charge", prefixable: true, prefixes: ELECTRICAL_PREFIXES },
+  { token: "Ah", canonical: "Ah", factorToSi: 3600, dimension: dim(0, 0, 1, 1), family: "charge", prefixable: true, prefixes: ELECTRICAL_PREFIXES },
+  { token: "V", canonical: "V", factorToSi: 1, dimension: dim(1, 2, -3, -1), family: "voltage", prefixable: true, prefixes: ELECTRICAL_PREFIXES },
+  { token: "Ohm", canonical: "Ohm", factorToSi: 1, dimension: dim(1, 2, -3, -2), family: "resistance", prefixable: true, prefixBase: "Ohm", prefixCanonicalBase: "Ohm", prefixes: ELECTRICAL_PREFIXES },
+  { token: "S", canonical: "S", factorToSi: 1, dimension: dim(-1, -2, 3, 2), family: "conductance", prefixable: true, prefixes: ELECTRICAL_PREFIXES },
+  { token: "F", canonical: "F", factorToSi: 1, dimension: dim(-1, -2, 4, 2), family: "capacitance", prefixable: true, prefixes: ELECTRICAL_PREFIXES },
+  { token: "H", canonical: "H", factorToSi: 1, dimension: dim(1, 2, -2, -2), family: "inductance", prefixable: true, prefixes: ELECTRICAL_PREFIXES },
+  { token: "Wb", canonical: "Wb", factorToSi: 1, dimension: dim(1, 2, -2, -1), family: "magnetic_flux", prefixable: true, prefixes: ELECTRICAL_PREFIXES },
+  { token: "T", canonical: "T", factorToSi: 1, dimension: dim(1, 0, -2, -1), family: "magnetic_flux_density", prefixable: true, prefixes: ELECTRICAL_PREFIXES },
+  { token: "gauss", canonical: "G", factorToSi: 1e-4, dimension: dim(1, 0, -2, -1), family: "magnetic_flux_density" },
 
-  // Energy / power
-  { token: "j", canonical: "J", factorToSi: 1, dimension: dim(1, 2, -2, 0) },
-  { token: "kj", canonical: "kJ", factorToSi: 1e3, dimension: dim(1, 2, -2, 0) },
-  { token: "mj", canonical: "MJ", factorToSi: 1e6, dimension: dim(1, 2, -2, 0) },
-  { token: "ev", canonical: "eV", factorToSi: 1.602176634e-19, dimension: dim(1, 2, -2, 0) },
-  { token: "cal", canonical: "cal", factorToSi: 4.184, dimension: dim(1, 2, -2, 0) },
-  { token: "kcal", canonical: "kcal", factorToSi: 4184, dimension: dim(1, 2, -2, 0) },
-  { token: "btu", canonical: "BTU", factorToSi: 1055.05585262, dimension: dim(1, 2, -2, 0) },
-  { token: "wh", canonical: "Wh", factorToSi: 3600, dimension: dim(1, 2, -2, 0) },
-  { token: "kwh", canonical: "kWh", factorToSi: 3_600_000, dimension: dim(1, 2, -2, 0) },
-  { token: "w", canonical: "W", factorToSi: 1, dimension: dim(1, 2, -3, 0) },
-  { token: "mw", canonical: "mW", factorToSi: 1e-3, dimension: dim(1, 2, -3, 0) },
-  { token: "kw", canonical: "kW", factorToSi: 1e3, dimension: dim(1, 2, -3, 0) },
-  { token: "mwatt", canonical: "MW", factorToSi: 1e6, dimension: dim(1, 2, -3, 0) },
-  { token: "hp", canonical: "hp", factorToSi: 745.6998715822702, dimension: dim(1, 2, -3, 0) },
-  { token: "btuh", canonical: "BTU/h", factorToSi: 1055.05585262 / 3600, dimension: dim(1, 2, -3, 0) },
+  { token: "kgm3", canonical: "kg/m3", factorToSi: 1, dimension: dim(1, -3, 0, 0), family: "density" },
+  { token: "gcm3", canonical: "g/cm3", factorToSi: 1000, dimension: dim(1, -3, 0, 0), family: "density" },
+  { token: "lbft3", canonical: "lb/ft3", factorToSi: 16.01846337396014, dimension: dim(1, -3, 0, 0), family: "density" },
+  { token: "Pas", canonical: "Pa*s", factorToSi: 1, dimension: dim(1, -1, -1, 0), family: "viscosity" },
+  { token: "cP", canonical: "cP", factorToSi: 1e-3, dimension: dim(1, -1, -1, 0), family: "viscosity" },
 
-  // Frequency
-  { token: "hz", canonical: "Hz", factorToSi: 1, dimension: dim(0, 0, -1, 0) },
-  { token: "khz", canonical: "kHz", factorToSi: 1e3, dimension: dim(0, 0, -1, 0) },
-  { token: "mhz", canonical: "MHz", factorToSi: 1e6, dimension: dim(0, 0, -1, 0) },
-  { token: "ghz", canonical: "GHz", factorToSi: 1e9, dimension: dim(0, 0, -1, 0) },
+  { token: "K", canonical: "K", factorToSi: 1, dimension: dim(0, 0, 0, 0, 1), family: "temperature", prefixable: true, prefixes: ELECTRICAL_PREFIXES },
+  {
+    token: "degC",
+    canonical: "degC",
+    factorToSi: 1,
+    dimension: dim(0, 0, 0, 0, 1),
+    family: "temperature",
+    toSi: (value) => value + 273.15,
+    fromSi: (valueSi) => valueSi - 273.15,
+  },
+  {
+    token: "degF",
+    canonical: "degF",
+    factorToSi: 5 / 9,
+    dimension: dim(0, 0, 0, 0, 1),
+    family: "temperature",
+    toSi: (value) => (value + 459.67) * 5 / 9,
+    fromSi: (valueSi) => valueSi * 9 / 5 - 459.67,
+  },
+  { token: "rankine", canonical: "R", factorToSi: 5 / 9, dimension: dim(0, 0, 0, 0, 1), family: "temperature" },
 
-  // Flow rates
-  { token: "lpm", canonical: "L/min", factorToSi: 1e-3 / 60, dimension: dim(0, 3, -1, 0) },
-  { token: "mlpm", canonical: "mL/min", factorToSi: 1e-6 / 60, dimension: dim(0, 3, -1, 0) },
-  { token: "gpm", canonical: "gal/min", factorToSi: 0.003785411784 / 60, dimension: dim(0, 3, -1, 0) },
-  { token: "m3s", canonical: "m3/s", factorToSi: 1, dimension: dim(0, 3, -1, 0) },
-  { token: "cfm", canonical: "ft3/min", factorToSi: (0.3048 ** 3) / 60, dimension: dim(0, 3, -1, 0) },
-
-  // Electrical quantities
-  { token: "a", canonical: "A", factorToSi: 1, dimension: dim(0, 0, 0, 1) },
-  { token: "ma", canonical: "mA", factorToSi: 1e-3, dimension: dim(0, 0, 0, 1) },
-  { token: "ua", canonical: "uA", factorToSi: 1e-6, dimension: dim(0, 0, 0, 1) },
-  { token: "c", canonical: "C", factorToSi: 1, dimension: dim(0, 0, 1, 1) },
-  { token: "ah", canonical: "Ah", factorToSi: 3600, dimension: dim(0, 0, 1, 1) },
-  { token: "mah", canonical: "mAh", factorToSi: 3.6, dimension: dim(0, 0, 1, 1) },
-  { token: "v", canonical: "V", factorToSi: 1, dimension: dim(1, 2, -3, -1) },
-  { token: "mv", canonical: "mV", factorToSi: 1e-3, dimension: dim(1, 2, -3, -1) },
-  { token: "kv", canonical: "kV", factorToSi: 1e3, dimension: dim(1, 2, -3, -1) },
-  { token: "ohm", canonical: "ohm", factorToSi: 1, dimension: dim(1, 2, -3, -2) },
-  { token: "kohm", canonical: "kohm", factorToSi: 1e3, dimension: dim(1, 2, -3, -2) },
-  { token: "mohm", canonical: "Mohm", factorToSi: 1e6, dimension: dim(1, 2, -3, -2) },
-  { token: "siemens", canonical: "S", factorToSi: 1, dimension: dim(-1, -2, 3, 2) },
-  { token: "msiemens", canonical: "mS", factorToSi: 1e-3, dimension: dim(-1, -2, 3, 2) },
-  { token: "usiemens", canonical: "uS", factorToSi: 1e-6, dimension: dim(-1, -2, 3, 2) },
-  { token: "f", canonical: "F", factorToSi: 1, dimension: dim(-1, -2, 4, 2) },
-  { token: "mf", canonical: "mF", factorToSi: 1e-3, dimension: dim(-1, -2, 4, 2) },
-  { token: "uf", canonical: "uF", factorToSi: 1e-6, dimension: dim(-1, -2, 4, 2) },
-  { token: "nf", canonical: "nF", factorToSi: 1e-9, dimension: dim(-1, -2, 4, 2) },
-  { token: "pf", canonical: "pF", factorToSi: 1e-12, dimension: dim(-1, -2, 4, 2) },
-  { token: "hry", canonical: "H", factorToSi: 1, dimension: dim(1, 2, -2, -2) },
-  { token: "mhry", canonical: "mH", factorToSi: 1e-3, dimension: dim(1, 2, -2, -2) },
-  { token: "uhry", canonical: "uH", factorToSi: 1e-6, dimension: dim(1, 2, -2, -2) },
-  { token: "nhry", canonical: "nH", factorToSi: 1e-9, dimension: dim(1, 2, -2, -2) },
-  { token: "wb", canonical: "Wb", factorToSi: 1, dimension: dim(1, 2, -2, -1) },
-  { token: "t", canonical: "T", factorToSi: 1, dimension: dim(1, 0, -2, -1) },
-  { token: "mt", canonical: "mT", factorToSi: 1e-3, dimension: dim(1, 0, -2, -1) },
-  { token: "gauss", canonical: "G", factorToSi: 1e-4, dimension: dim(1, 0, -2, -1) },
-
-  // Density / viscosity
-  { token: "kgm3", canonical: "kg/m3", factorToSi: 1, dimension: dim(1, -3, 0, 0) },
-  { token: "gcm3", canonical: "g/cm3", factorToSi: 1000, dimension: dim(1, -3, 0, 0) },
-  { token: "lbft3", canonical: "lb/ft3", factorToSi: 16.01846337396014, dimension: dim(1, -3, 0, 0) },
-  { token: "pas", canonical: "Pa*s", factorToSi: 1, dimension: dim(1, -1, -1, 0) },
-  { token: "cp", canonical: "cP", factorToSi: 1e-3, dimension: dim(1, -1, -1, 0) },
-
-  // Temperature (using K dimension for deltas/absolute values)
-  { token: "k", canonical: "K", factorToSi: 1, dimension: dim(0, 0, 0, 0, 1) },
-  { token: "degc", canonical: "degC", factorToSi: 1, dimension: dim(0, 0, 0, 0, 1) },
-  { token: "degf", canonical: "degF", factorToSi: 5 / 9, dimension: dim(0, 0, 0, 0, 1) },
-  { token: "rankine", canonical: "R", factorToSi: 5 / 9, dimension: dim(0, 0, 0, 0, 1) },
-
-// ── Angular acceleration — T⁻² ────────────────────────────────────────
-  { token: "radps2", canonical: "rad/s²",  factorToSi: 1,                      dimension: dim(0, 0, -2, 0) },
-  { token: "degps2", canonical: "°/s²",    factorToSi: Math.PI / 180,          dimension: dim(0, 0, -2, 0) },
-  { token: "rpmps",  canonical: "rpm/s",   factorToSi: (2 * Math.PI) / 60,     dimension: dim(0, 0, -2, 0) },
-
-  // ── Stiffness / surface tension — N·m⁻¹ = M·T⁻² ──────────────────────
-  { token: "npm",    canonical: "N/m",    factorToSi: 1,                        dimension: dim(1, 0, -2, 0) },
-  { token: "knpm",   canonical: "kN/m",   factorToSi: 1e3,                      dimension: dim(1, 0, -2, 0) },
-  { token: "mnpm",   canonical: "mN/m",   factorToSi: 1e-3,                     dimension: dim(1, 0, -2, 0) },
-  { token: "lbfpin", canonical: "lbf/in", factorToSi: 4.4482216152605 / 0.0254, dimension: dim(1, 0, -2, 0) },
-
-  // ── Mass flow rate — M·T⁻¹ ────────────────────────────────────────────
-  { token: "kgps", canonical: "kg/s",   factorToSi: 1,          dimension: dim(1, 0, -1, 0) },
-  { token: "gps",  canonical: "g/s",    factorToSi: 1e-3,        dimension: dim(1, 0, -1, 0) },
-  { token: "kgpm", canonical: "kg/min", factorToSi: 1 / 60,      dimension: dim(1, 0, -1, 0) },
-  { token: "kgph", canonical: "kg/h",   factorToSi: 1 / 3600,    dimension: dim(1, 0, -1, 0) },
-
-  // ── Moment of inertia — M·L² ──────────────────────────────────────────
-  { token: "kgm2",  canonical: "kg·m²",  factorToSi: 1,    dimension: dim(1, 2, 0, 0) },
-  { token: "kgcm2", canonical: "kg·cm²", factorToSi: 1e-4, dimension: dim(1, 2, 0, 0) },
-  { token: "gcm2",  canonical: "g·cm²",  factorToSi: 1e-7, dimension: dim(1, 2, 0, 0) },
-
-  // ── Kinematic viscosity — L²·T⁻¹ ─────────────────────────────────────
-  { token: "m2ps",  canonical: "m²/s",  factorToSi: 1,    dimension: dim(0, 2, -1, 0) },
-  { token: "mm2ps", canonical: "mm²/s", factorToSi: 1e-6, dimension: dim(0, 2, -1, 0) },
-  { token: "stk",   canonical: "St",    factorToSi: 1e-4, dimension: dim(0, 2, -1, 0) },
-  { token: "cstk",  canonical: "cSt",   factorToSi: 1e-6, dimension: dim(0, 2, -1, 0) },
-
-  // ── Specific energy — L²·T⁻² ─────────────────────────────────────────
-  { token: "jpkg",   canonical: "J/kg",    factorToSi: 1,           dimension: dim(0, 2, -2, 0) },
-  { token: "kjpkg",  canonical: "kJ/kg",   factorToSi: 1e3,          dimension: dim(0, 2, -2, 0) },
-  { token: "mjpkg",  canonical: "MJ/kg",   factorToSi: 1e6,          dimension: dim(0, 2, -2, 0) },
-  { token: "whpkg",  canonical: "Wh/kg",   factorToSi: 3600,         dimension: dim(0, 2, -2, 0) },
-  { token: "kwhpkg", canonical: "kWh/kg",  factorToSi: 3_600_000,    dimension: dim(0, 2, -2, 0) },
-
-  // ── Thermal resistance — K·M⁻¹·L⁻²·T³ ───────────────────────────────
-  { token: "kpw",    canonical: "K/W",   factorToSi: 1, dimension: dim(-1, -2, 3, 0, 1) },
-  { token: "degcpw", canonical: "°C/W",  factorToSi: 1, dimension: dim(-1, -2, 3, 0, 1) },
-
-  // ── Thermal conductivity — M·L·T⁻³·K⁻¹ ──────────────────────────────
-  { token: "wpmk",  canonical: "W/(m·K)",  factorToSi: 1,    dimension: dim(1, 1, -3, 0, -1) },
-  { token: "mwpmk", canonical: "mW/(m·K)", factorToSi: 1e-3, dimension: dim(1, 1, -3, 0, -1) },
-  { token: "wpcmk", canonical: "W/(cm·K)", factorToSi: 100,  dimension: dim(1, 1, -3, 0, -1) },
-
-  // ── Specific heat capacity — L²·T⁻²·K⁻¹ ─────────────────────────────
-  { token: "jpkgk",  canonical: "J/(kg·K)",  factorToSi: 1,    dimension: dim(0, 2, -2, 0, -1) },
-  { token: "kjpkgk", canonical: "kJ/(kg·K)", factorToSi: 1e3,  dimension: dim(0, 2, -2, 0, -1) },
-
-  // ── Heat flux density — M·T⁻³ ────────────────────────────────────────
-  { token: "wpm2",  canonical: "W/m²",  factorToSi: 1,    dimension: dim(1, 0, -3, 0) },
-  { token: "kwpm2", canonical: "kW/m²", factorToSi: 1e3,  dimension: dim(1, 0, -3, 0) },
-  { token: "mwpm2", canonical: "mW/m²", factorToSi: 1e-3, dimension: dim(1, 0, -3, 0) },
-  { token: "wpcm2", canonical: "W/cm²", factorToSi: 1e4,  dimension: dim(1, 0, -3, 0) },
-
-  // ── Current density — I·L⁻² ──────────────────────────────────────────
-  { token: "apm2",   canonical: "A/m²",   factorToSi: 1,    dimension: dim(0, -2, 0, 1) },
-  { token: "kapm2",  canonical: "kA/m²",  factorToSi: 1e3,  dimension: dim(0, -2, 0, 1) },
-  { token: "apmm2",  canonical: "A/mm²",  factorToSi: 1e6,  dimension: dim(0, -2, 0, 1) },
-  { token: "mapmm2", canonical: "mA/mm²", factorToSi: 1e3,  dimension: dim(0, -2, 0, 1) },
-
-  // ── Electric field strength — M·L·T⁻³·I⁻¹ ───────────────────────────
-  { token: "vpm",  canonical: "V/m",  factorToSi: 1,    dimension: dim(1, 1, -3, -1) },
-  { token: "kvpm", canonical: "kV/m", factorToSi: 1e3,  dimension: dim(1, 1, -3, -1) },
-  { token: "mvpm", canonical: "mV/m", factorToSi: 1e-3, dimension: dim(1, 1, -3, -1) },
+  { token: "Npm", canonical: "N/m", factorToSi: 1, dimension: dim(1, 0, -2, 0), family: "stiffness" },
+  { token: "kNpm", canonical: "kN/m", factorToSi: 1e3, dimension: dim(1, 0, -2, 0), family: "stiffness" },
+  { token: "mNpm", canonical: "mN/m", factorToSi: 1e-3, dimension: dim(1, 0, -2, 0), family: "stiffness" },
+  { token: "lbfpin", canonical: "lbf/in", factorToSi: 4.4482216152605 / 0.0254, dimension: dim(1, 0, -2, 0), family: "stiffness" },
+  { token: "kgps", canonical: "kg/s", factorToSi: 1, dimension: dim(1, 0, -1, 0), family: "mass_flow" },
+  { token: "gps", canonical: "g/s", factorToSi: 1e-3, dimension: dim(1, 0, -1, 0), family: "mass_flow" },
+  { token: "kgpm", canonical: "kg/min", factorToSi: 1 / 60, dimension: dim(1, 0, -1, 0), family: "mass_flow" },
+  { token: "kgph", canonical: "kg/h", factorToSi: 1 / 3600, dimension: dim(1, 0, -1, 0), family: "mass_flow" },
+  { token: "kgm2", canonical: "kg*m2", factorToSi: 1, dimension: dim(1, 2, 0, 0), family: "moment_of_inertia" },
+  { token: "kgcm2", canonical: "kg*cm2", factorToSi: 1e-4, dimension: dim(1, 2, 0, 0), family: "moment_of_inertia" },
+  { token: "gcm2", canonical: "g*cm2", factorToSi: 1e-7, dimension: dim(1, 2, 0, 0), family: "moment_of_inertia" },
+  { token: "m2ps", canonical: "m2/s", factorToSi: 1, dimension: dim(0, 2, -1, 0), family: "kinematic_viscosity" },
+  { token: "mm2ps", canonical: "mm2/s", factorToSi: 1e-6, dimension: dim(0, 2, -1, 0), family: "kinematic_viscosity" },
+  { token: "stk", canonical: "St", factorToSi: 1e-4, dimension: dim(0, 2, -1, 0), family: "kinematic_viscosity" },
+  { token: "cstk", canonical: "cSt", factorToSi: 1e-6, dimension: dim(0, 2, -1, 0), family: "kinematic_viscosity" },
+  { token: "Jpkg", canonical: "J/kg", factorToSi: 1, dimension: dim(0, 2, -2, 0), family: "specific_energy" },
+  { token: "kJpkg", canonical: "kJ/kg", factorToSi: 1e3, dimension: dim(0, 2, -2, 0), family: "specific_energy" },
+  { token: "MJpkg", canonical: "MJ/kg", factorToSi: 1e6, dimension: dim(0, 2, -2, 0), family: "specific_energy" },
+  { token: "Whpkg", canonical: "Wh/kg", factorToSi: 3600, dimension: dim(0, 2, -2, 0), family: "specific_energy" },
+  { token: "kWhpkg", canonical: "kWh/kg", factorToSi: 3_600_000, dimension: dim(0, 2, -2, 0), family: "specific_energy" },
+  { token: "KpW", canonical: "K/W", factorToSi: 1, dimension: dim(-1, -2, 3, 0, 1), family: "thermal_resistance" },
+  { token: "degCpW", canonical: "degC/W", factorToSi: 1, dimension: dim(-1, -2, 3, 0, 1), family: "thermal_resistance" },
+  { token: "WpmK", canonical: "W/(m*K)", factorToSi: 1, dimension: dim(1, 1, -3, 0, -1), family: "thermal_conductivity" },
+  { token: "mWpmK", canonical: "mW/(m*K)", factorToSi: 1e-3, dimension: dim(1, 1, -3, 0, -1), family: "thermal_conductivity" },
+  { token: "WpcmK", canonical: "W/(cm*K)", factorToSi: 100, dimension: dim(1, 1, -3, 0, -1), family: "thermal_conductivity" },
+  { token: "JpkgK", canonical: "J/(kg*K)", factorToSi: 1, dimension: dim(0, 2, -2, 0, -1), family: "specific_heat" },
+  { token: "kJpkgK", canonical: "kJ/(kg*K)", factorToSi: 1e3, dimension: dim(0, 2, -2, 0, -1), family: "specific_heat" },
+  { token: "Wpm2", canonical: "W/m2", factorToSi: 1, dimension: dim(1, 0, -3, 0), family: "heat_flux" },
+  { token: "kWpm2", canonical: "kW/m2", factorToSi: 1e3, dimension: dim(1, 0, -3, 0), family: "heat_flux" },
+  { token: "mWpm2", canonical: "mW/m2", factorToSi: 1e-3, dimension: dim(1, 0, -3, 0), family: "heat_flux" },
+  { token: "Wpcm2", canonical: "W/cm2", factorToSi: 1e4, dimension: dim(1, 0, -3, 0), family: "heat_flux" },
+  { token: "Apm2", canonical: "A/m2", factorToSi: 1, dimension: dim(0, -2, 0, 1), family: "current_density" },
+  { token: "kApm2", canonical: "kA/m2", factorToSi: 1e3, dimension: dim(0, -2, 0, 1), family: "current_density" },
+  { token: "Apmm2", canonical: "A/mm2", factorToSi: 1e6, dimension: dim(0, -2, 0, 1), family: "current_density" },
+  { token: "mApmm2", canonical: "mA/mm2", factorToSi: 1e3, dimension: dim(0, -2, 0, 1), family: "current_density" },
+  { token: "Vpm", canonical: "V/m", factorToSi: 1, dimension: dim(1, 1, -3, -1), family: "electric_field" },
+  { token: "kVpm", canonical: "kV/m", factorToSi: 1e3, dimension: dim(1, 1, -3, -1), family: "electric_field" },
+  { token: "mVpm", canonical: "mV/m", factorToSi: 1e-3, dimension: dim(1, 1, -3, -1), family: "electric_field" },
 ];
+
+function expandUnitDefinitions(definitions: readonly UnitDefinition[]): UnitSpec[] {
+  const specs: UnitSpec[] = [];
+  const seenTokens = new Set<string>();
+
+  const add = (definition: UnitDefinition): void => {
+    if (seenTokens.has(definition.token)) {
+      return;
+    }
+
+    seenTokens.add(definition.token);
+    specs.push({
+      token: definition.token,
+      canonical: definition.canonical,
+      factorToSi: definition.factorToSi,
+      dimension: cloneDimension(definition.dimension),
+      family: definition.family,
+      aliases: definition.aliases,
+      toSi: definition.toSi,
+      fromSi: definition.fromSi,
+    });
+  };
+
+  for (const definition of definitions) {
+    add(definition);
+
+    if (!definition.prefixable) {
+      continue;
+    }
+
+    const prefixes = new Set(definition.prefixes ?? SI_PREFIXES.map((prefix) => prefix.symbol));
+    const baseToken = definition.prefixBase ?? definition.token;
+    const baseCanonical = definition.prefixCanonicalBase ?? definition.canonical;
+
+    for (const prefix of SI_PREFIXES) {
+      if (!prefixes.has(prefix.symbol)) {
+        continue;
+      }
+
+      const power =
+        definition.token === "m2" ? 2 :
+        definition.token === "m3" ? 3 :
+        1;
+
+      add({
+        token: `${prefix.symbol}${baseToken}`,
+        canonical: `${prefix.symbol}${baseCanonical}`,
+        factorToSi: definition.factorToSi * prefix.factor ** power,
+        dimension: definition.dimension,
+        family: definition.family,
+      });
+    }
+  }
+
+  return specs;
+}
+
+export const UNIT_SPEC_LIST: UnitSpec[] = expandUnitDefinitions(BASE_UNITS);
 
 export const UNIT_SPECS = new Map<string, UnitSpec>(
   UNIT_SPEC_LIST.map((spec) => [spec.token, spec])
 );
 
-export const SCALABLE_UNIT_FAMILY = new Map<string, string>([
-  // Time
-  ["s", "time"],
-  ["ms", "time"],
-  ["us", "time"],
-  ["ns", "time"],
-  // Length
-  ["m", "length"],
-  ["km", "length"],
-  ["dm", "length"],
-  ["cm", "length"],
-  ["mm", "length"],
-  ["um", "length"],
-  ["nm", "length"],
-  ["pm", "length"],
-  ["uin", "length"],
-  ["mil", "length"],
-  ["thou", "length"],
-  // Area / volume
-  ["m2", "area"],
-  ["cm2", "area"],
-  ["mm2", "area"],
-  ["ac", "area"],
-  ["ha", "area"],
-  ["m3", "volume"],
-  ["l", "volume"],
-  ["ml", "volume"],
-  ["ul", "volume"],
-  ["gal", "volume"],
-  ["qt", "volume"],
-  ["pt", "volume"],
-  ["cup", "volume"],
-  ["floz", "volume"],
-  ["bbl", "volume"],
-  // Mass
-  ["kg", "mass"],
-  ["g", "mass"],
-  ["mg", "mass"],
-  ["ug", "mass"],
-  ["tonne", "mass"],
-  ["lb", "mass"],
-  ["oz", "mass"],
-  ["st", "mass"],
-  ["slug", "mass"],
-  ["gr", "mass"],
-  // Pressure / force
-  ["pa", "pressure"],
-  ["hpa", "pressure"],
-  ["kpa", "pressure"],
-  ["mpa", "pressure"],
-  ["bar", "pressure"],
-  ["mbar", "pressure"],
-  ["atm", "pressure"],
-  ["torr", "pressure"],
-  ["psi", "pressure"],
-  ["ksi", "pressure"],
-  ["mmhg", "pressure"],
-  ["inhg", "pressure"],
-  ["n", "force"],
-  ["kn", "force"],
-  ["lbf", "force"],
-  ["ozf", "force"],
-  // Electrical
-  ["a", "current"],
-  ["ma", "current"],
-  ["ua", "current"],
-  ["v", "voltage"],
-  ["mv", "voltage"],
-  ["kv", "voltage"],
-  ["ohm", "resistance"],
-  ["kohm", "resistance"],
-  ["mohm", "resistance"],
-  ["siemens", "conductance"],
-  ["msiemens", "conductance"],
-  ["usiemens", "conductance"],
-  ["f", "capacitance"],
-  ["mf", "capacitance"],
-  ["uf", "capacitance"],
-  ["nf", "capacitance"],
-  ["pf", "capacitance"],
-  ["hry", "inductance"],
-  ["mhry", "inductance"],
-  ["uhry", "inductance"],
-  ["nhry", "inductance"],
-  // Frequency / power / energy
-  ["hz", "frequency"],
-  ["radps", "frequency"],
+export const SCALABLE_UNIT_FAMILY = new Map<string, string>(
+  UNIT_SPEC_LIST
+    .filter((spec) => spec.family)
+    .map((spec) => [spec.token, spec.family as string])
+);
 
-  ["khz", "frequency"],
-  ["mhz", "frequency"],
-  ["ghz", "frequency"],
-  ["w", "power"],
-  ["mw", "power"],
-  ["kw", "power"],
-  ["mwatt", "power"],
-  ["j", "energy"],
-  ["kj", "energy"],
-  ["mj", "energy"],
-  ["t", "magnetic_flux_density"],
-  ["mt", "magnetic_flux_density"],
-  // Temperature
-  ["k", "temperature"],
-  ["degc", "temperature"],
-  ["degf", "temperature"],
-  ["rankine", "temperature"],
+export const UNIT_ALIASES = new Map<string, string>();
 
-  // angular velocity
-  ["rpm",    "angular_velocity"],
-  ["radps",  "angular_velocity"],
-  // angular acceleration
-  ["radps2", "angular_acceleration"],
-  ["degps2", "angular_acceleration"],
-  ["rpmps",  "angular_acceleration"],
-  // stiffness
-  ["npm",    "stiffness"],
-  ["knpm",   "stiffness"],
-  ["mnpm",   "stiffness"],
-  // mass flow
-  ["kgps",   "mass_flow"],
-  ["gps",    "mass_flow"],
-  ["kgpm",   "mass_flow"],
-  ["kgph",   "mass_flow"],
-  // moment of inertia
-  ["kgm2",   "moment_of_inertia"],
-  ["kgcm2",  "moment_of_inertia"],
-  ["gcm2",   "moment_of_inertia"],
-  // kinematic viscosity
-  ["m2ps",   "kinematic_viscosity"],
-  ["mm2ps",  "kinematic_viscosity"],
-  ["stk",    "kinematic_viscosity"],
-  ["cstk",   "kinematic_viscosity"],
-  // specific energy
-  ["jpkg",   "specific_energy"],
-  ["kjpkg",  "specific_energy"],
-  ["mjpkg",  "specific_energy"],
-  ["whpkg",  "specific_energy"],
-  ["kwhpkg", "specific_energy"],
-  // thermal resistance
-  ["kpw",    "thermal_resistance"],
-  ["degcpw", "thermal_resistance"],
-  // thermal conductivity
-  ["wpmk",   "thermal_conductivity"],
-  ["mwpmk",  "thermal_conductivity"],
-  ["wpcmk",  "thermal_conductivity"],
-  // specific heat
-  ["jpkgk",  "specific_heat"],
-  ["kjpkgk", "specific_heat"],
-  // heat flux
-  ["wpm2",   "heat_flux"],
-  ["kwpm2",  "heat_flux"],
-  ["mwpm2",  "heat_flux"],
-  ["wpcm2",  "heat_flux"],
-  // current density
-  ["apm2",   "current_density"],
-  ["kapm2",  "current_density"],
-  ["apmm2",  "current_density"],
-  ["mapmm2", "current_density"],
-  // electric field
-  ["vpm",    "electric_field"],
-  ["kvpm",   "electric_field"],
-  ["mvpm",   "electric_field"],  
-]);
+function trimUnitBrackets(rawUnit: string): string {
+  return rawUnit.trim().replace(/^\[+/, "").replace(/\]+$/, "").trim();
+}
 
-export const UNIT_ALIASES = new Map<string, string>([
-  // Dimensionless and ratios
-  ["count", "count"],
+function normalizeUnitGlyphs(rawUnit: string): string {
+  return trimUnitBrackets(rawUnit)
+    .replace(/[\u00B5\u03BC]/g, "u")
+    .replace(/[\u03A9\u03C9]/g, "Ohm")
+    .replace(/\u00B2/g, "2")
+    .replace(/\u00B3/g, "3")
+    .replace(/\u00B7/g, "*")
+    .replace(/\s+/g, "");
+}
+
+function addAlias(alias: string, token: string): void {
+  if (!UNIT_SPECS.has(token)) {
+    return;
+  }
+
+  const normalizedAlias = normalizeUnitGlyphs(alias);
+  if (!normalizedAlias || UNIT_ALIASES.has(normalizedAlias)) {
+    return;
+  }
+
+  UNIT_ALIASES.set(normalizedAlias, token);
+}
+
+for (const spec of UNIT_SPEC_LIST) {
+  addAlias(spec.token, spec.token);
+  if (spec.canonical !== spec.token) {
+    addAlias(spec.canonical, spec.token);
+  }
+}
+
+const LEGACY_ALIASES: Array<[string, string]> = [
   ["counts", "count"],
-  ["ratio", "ratio"],
   ["percent", "%"],
   ["percentage", "%"],
-  ["ppm", "ppm"],
-  ["ppb", "ppb"],
-  ["ppt", "ppt"],
-  ["%", "pct"],
-  ["deg", "deg"],
   ["degree", "deg"],
   ["degrees", "deg"],
-  ["rad", "rad"],
   ["radian", "rad"],
   ["radians", "rad"],
+  ["db", "dB"],
+  ["dbm", "dBm"],
+  ["dbv", "dBV"],
+  ["bits", "bit"],
+  ["bytes", "byte"],
+  ["bps", "baud"],
+  ["Bd", "baud"],
 
-  // Time
-  ["s", "s"],
   ["sec", "s"],
   ["secs", "s"],
   ["second", "s"],
   ["seconds", "s"],
-  ["ms", "ms"],
   ["us", "us"],
-  ["ns", "ns"],
-  ["min", "min"],
   ["mins", "min"],
   ["minute", "min"],
   ["minutes", "min"],
-  ["h", "h"],
   ["hr", "h"],
   ["hrs", "h"],
   ["hour", "h"],
   ["hours", "h"],
-  ["day", "day"],
   ["days", "day"],
 
-  // Length
-  ["m", "m"],
   ["meter", "m"],
   ["meters", "m"],
   ["metre", "m"],
   ["metres", "m"],
-  ["dm", "dm"],
-  ["cm", "cm"],
-  ["mm", "mm"],
-  ["um", "um"],
   ["micron", "um"],
   ["microns", "um"],
-  ["nm", "nm"],
   ["nanometer", "nm"],
-  ["pm", "pm"],
   ["picometer", "pm"],
-  ["km", "km"],
-  ["in", "in"],
   ["inch", "in"],
   ["inches", "in"],
-  ["uin", "uin"],
   ["microinch", "uin"],
   ["microinches", "uin"],
-  ["mil", "mil"],
   ["mils", "mil"],
-  ["thou", "thou"],
-  ["ft", "ft"],
   ["foot", "ft"],
   ["feet", "ft"],
-  ["yd", "yd"],
   ["yard", "yd"],
   ["yards", "yd"],
-  ["mi", "mi"],
   ["mile", "mi"],
   ["miles", "mi"],
-  ["nmi", "nmi"],
   ["nauticalmile", "nmi"],
   ["nauticalmiles", "nmi"],
 
-  // Area / volume
-  ["m2", "m2"],
   ["m^2", "m2"],
-  ["cm2", "cm2"],
   ["cm^2", "cm2"],
-  ["mm2", "mm2"],
   ["mm^2", "mm2"],
-  ["in2", "in2"],
   ["in^2", "in2"],
-  ["ft2", "ft2"],
   ["ft^2", "ft2"],
-  ["yd2", "yd2"],
   ["yd^2", "yd2"],
-  ["ac", "ac"],
   ["acre", "ac"],
   ["acres", "ac"],
-  ["ha", "ha"],
   ["hectare", "ha"],
   ["hectares", "ha"],
-  ["m3", "m3"],
   ["m^3", "m3"],
-  ["cm3", "cm3"],
   ["cm^3", "cm3"],
-  ["in3", "in3"],
+  ["mm^3", "mm3"],
   ["in^3", "in3"],
-  ["ft3", "ft3"],
   ["ft^3", "ft3"],
-  ["l", "l"],
-  ["liter", "l"],
-  ["liters", "l"],
-  ["litre", "l"],
-  ["litres", "l"],
-  ["ml", "ml"],
-  ["milliliter", "ml"],
-  ["milliliters", "ml"],
-  ["millilitre", "ml"],
-  ["millilitres", "ml"],
-  ["ul", "ul"],
-  ["microliter", "ul"],
-  ["microliters", "ul"],
-  ["microlitre", "ul"],
-  ["microlitres", "ul"],
-  ["gal", "gal"],
+  ["l", "L"],
+  ["liter", "L"],
+  ["liters", "L"],
+  ["litre", "L"],
+  ["litres", "L"],
+  ["ml", "mL"],
+  ["milliliter", "mL"],
+  ["milliliters", "mL"],
+  ["millilitre", "mL"],
+  ["millilitres", "mL"],
+  ["ul", "uL"],
+  ["microliter", "uL"],
+  ["microliters", "uL"],
+  ["microlitre", "uL"],
+  ["microlitres", "uL"],
   ["gallon", "gal"],
   ["gallons", "gal"],
-  ["qt", "qt"],
   ["quart", "qt"],
   ["quarts", "qt"],
-  ["pt", "pt"],
   ["pint", "pt"],
   ["pints", "pt"],
-  ["cup", "cup"],
   ["cups", "cup"],
-  ["floz", "floz"],
   ["fl_oz", "floz"],
   ["fl-oz", "floz"],
   ["fluidounce", "floz"],
   ["fluidounces", "floz"],
-  ["bbl", "bbl"],
   ["barrel", "bbl"],
   ["barrels", "bbl"],
 
-  // Speed / acceleration / frequency
-  ["mps", "mps"],
-  ["m/s", "mps"],
-  ["kmh", "kmh"],
-  ["km/h", "kmh"],
-  ["kph", "kmh"],
-  ["mph", "mph"],
-  ["mi/h", "mph"],
-  ["fps", "fps"],
-  ["ft/s", "fps"],
-  ["ips", "ips"],
-  ["in/s", "ips"],
-  ["knot", "knot"],
-  ["knots", "knot"],
-  ["volt", "v"],
-  ["volts", "v"],
-  ["amp", "a"],
-  ["amps", "a"],
-  ["ampere", "a"],
-  ["amperes", "a"],
-  ["ohm", "ohm"],
-  ["ohms", "ohm"],
-  ["henry", "hry"],
-  ["mhenry", "mhry"],
-  ["uhenry", "uhry"],
-  ["nhenry", "nhry"],
-  ["mh", "mhry"],
-  ["uh", "uhry"],
-  ["nh", "nhry"],
-  ["farad", "f"],
-  ["farads", "f"],
-  ["watt", "w"],
-  ["watts", "w"],
-  ["mps2", "mps2"],
-  ["m/s2", "mps2"],
-  ["m/s^2", "mps2"],
-  ["g0", "g0"],
-  ["rpm", "rpm"],
-  ["radps", "radps"],
-  ["rad/s", "radps"],
-  ["rad per s", "radps"],
-  ["rad*s", "radps"],
-  ["hz", "hz"],
-
-
-  ["khz", "khz"],
-  ["mhz", "mhz"],
-  ["ghz", "ghz"],
-
-  // Mass
   ["kg", "kg"],
   ["kilogram", "kg"],
   ["kilograms", "kg"],
-  ["g", "g"],
   ["gram", "g"],
   ["grams", "g"],
-  ["mg", "mg"],
-  ["ug", "ug"],
-  ["tonne", "tonne"],
   ["metric-ton", "tonne"],
   ["mt", "tonne"],
-  ["lb", "lb"],
   ["lbs", "lb"],
   ["pound", "lb"],
   ["pounds", "lb"],
-  ["oz", "oz"],
   ["ounce", "oz"],
   ["ounces", "oz"],
-  ["st", "st"],
   ["stone", "st"],
   ["stones", "st"],
-  ["slug", "slug"],
   ["slugs", "slug"],
-  ["gr", "gr"],
   ["grain", "gr"],
   ["grains", "gr"],
-  ["tonus", "tonus"],
   ["ton_us", "tonus"],
-  ["tonuk", "tonuk"],
   ["ton_uk", "tonuk"],
 
-  // Force / pressure / torque
-  ["n", "n"],
-  ["newton", "n"],
-  ["newtons", "n"],
-  ["kn", "kn"],
-  ["lbf", "lbf"],
-  ["ozf", "ozf"],
-  ["pa", "pa"],
-  ["pascal", "pa"],
-  ["pascals", "pa"],
-  ["hpa", "hpa"],
-  ["hectopascal", "hpa"],
-  ["hectopascals", "hpa"],
-  ["kpa", "kpa"],
-  ["kilopascal", "kpa"],
-  ["kilopascals", "kpa"],
-  ["mpa", "mpa"],
-  ["megapascal", "mpa"],
-  ["megapascals", "mpa"],
-  ["bar", "bar"],
+  ["n", "N"],
+  ["newton", "N"],
+  ["newtons", "N"],
+  ["kn", "kN"],
+  ["pa", "Pa"],
+  ["pascal", "Pa"],
+  ["pascals", "Pa"],
+  ["hpa", "hPa"],
+  ["hectopascal", "hPa"],
+  ["hectopascals", "hPa"],
+  ["kpa", "kPa"],
+  ["kilopascal", "kPa"],
+  ["kilopascals", "kPa"],
+  ["mpa", "MPa"],
+  ["megapascal", "MPa"],
+  ["megapascals", "MPa"],
   ["bars", "bar"],
   ["mbar", "mbar"],
   ["millibar", "mbar"],
   ["millibars", "mbar"],
-  ["atm", "atm"],
   ["atmosphere", "atm"],
   ["atmospheres", "atm"],
-  ["torr", "torr"],
-  ["mmhg", "mmhg"],
-  ["inhg", "inhg"],
-  ["psi", "psi"],
-  ["ksi", "ksi"],
-  ["nmt", "nmt"],
-  ["n*m", "nmt"],
-  ["newtonmeter", "nmt"],
-  ["newtonmeters", "nmt"],
-  ["lbfft", "lbfft"],
+  ["mmhg", "mmHg"],
+  ["inhg", "inHg"],
+  ["nmt", "Nmt"],
+  ["n*m", "Nmt"],
+  ["newtonmeter", "Nmt"],
+  ["newtonmeters", "Nmt"],
   ["lbf*ft", "lbfft"],
-  ["lbfin", "lbfin"],
   ["lbf*in", "lbfin"],
-  ["ozfin", "ozfin"],
   ["ozf*in", "ozfin"],
 
-  // Energy / power
-  ["j", "j"],
-  ["joule", "j"],
-  ["joules", "j"],
-  ["kj", "kj"],
-  ["mj", "mj"],
-  ["ev", "ev"],
-  ["electronvolt", "ev"],
-  ["electronvolts", "ev"],
-  ["cal", "cal"],
+  ["j", "J"],
+  ["joule", "J"],
+  ["joules", "J"],
+  ["kj", "kJ"],
+  ["mj", "MJ"],
+  ["ev", "eV"],
+  ["electronvolt", "eV"],
+  ["electronvolts", "eV"],
   ["kcal", "kcal"],
-  ["btu", "btu"],
-  ["wh", "wh"],
-  ["kwh", "kwh"],
-  ["w", "w"],
-  ["watt", "w"],
-  ["watts", "w"],
-  ["mw", "mw"],
-  ["kw", "kw"],
-  ["mwatt", "mwatt"],
-  ["hp", "hp"],
+  ["btu", "BTU"],
+  ["wh", "Wh"],
+  ["kwh", "kWh"],
+  ["w", "W"],
+  ["watt", "W"],
+  ["watts", "W"],
+  ["mw", "mW"],
+  ["kw", "kW"],
+  ["mwatt", "MW"],
   ["horsepower", "hp"],
-  ["btuh", "btuh"],
   ["btu/h", "btuh"],
+  ["hz", "Hz"],
+  ["khz", "kHz"],
+  ["mhz", "MHz"],
+  ["ghz", "GHz"],
 
-  // Flow
-  ["lpm", "lpm"],
-  ["l/min", "lpm"],
-  ["gpm", "gpm"],
+  ["m/s", "mps"],
+  ["km/h", "kmh"],
+  ["kph", "kmh"],
+  ["mi/h", "mph"],
+  ["ft/s", "fps"],
+  ["in/s", "ips"],
+  ["knots", "knot"],
+  ["m/s2", "mps2"],
+  ["m/s^2", "mps2"],
+  ["rad/s", "radps"],
+  ["rad per s", "radps"],
+  ["rad*s", "radps"],
+  ["rad/s2", "radps2"],
+  ["rad/s^2", "radps2"],
+  ["deg/s2", "degps2"],
+  ["rpm/s", "rpmps"],
+
+  ["lpm", "Lpm"],
+  ["l/min", "Lpm"],
+  ["mlpm", "mLpm"],
+  ["ml/min", "mLpm"],
   ["gal/min", "gpm"],
-  ["m3s", "m3s"],
   ["m3/s", "m3s"],
-  ["cfm", "cfm"],
   ["ft3/min", "cfm"],
 
-  // Electrical
-  ["a", "a"],
-  ["amp", "a"],
-  ["amps", "a"],
-  ["ampere", "a"],
-  ["amperes", "a"],
-  ["ma", "ma"],
-  ["ua", "ua"],
-  ["c", "c"],
-  ["ah", "ah"],
-  ["mah", "mah"],
-  ["v", "v"],
-  ["volt", "v"],
-  ["volts", "v"],
-  ["mv", "mv"],
-  ["kv", "kv"],
-  ["ohm", "ohm"],
-  ["ohms", "ohm"],
-  ["kohm", "kohm"],
-  ["mohm", "mohm"],
-  ["siemens", "siemens"],
-  ["msiemens", "msiemens"],
-  ["usiemens", "usiemens"],
-  ["f", "f"],
-  ["mf", "mf"],
-  ["uf", "uf"],
-  ["nf", "nf"],
-  ["pf", "pf"],
-  ["henry", "hry"],
-  ["mhenry", "mhry"],
-  ["uhenry", "uhry"],
-  ["nhenry", "nhry"],
-  ["mh", "mhry"],
-  ["uh", "uhry"],
-  ["nh", "nhry"],
-  ["wb", "wb"],
-  ["t", "t"],
-  ["tesla", "t"],
-  ["mt", "mt"],
-  ["gauss", "gauss"],
+  ["a", "A"],
+  ["amp", "A"],
+  ["amps", "A"],
+  ["ampere", "A"],
+  ["amperes", "A"],
+  ["ma", "mA"],
+  ["ua", "uA"],
+  ["c", "C"],
+  ["ah", "Ah"],
+  ["mah", "mAh"],
+  ["v", "V"],
+  ["volt", "V"],
+  ["volts", "V"],
+  ["mv", "mV"],
+  ["kv", "kV"],
+  ["ohm", "Ohm"],
+  ["ohms", "Ohm"],
+  ["kohm", "kOhm"],
+  ["mohm", "MOhm"],
+  ["siemens", "S"],
+  ["msiemens", "mS"],
+  ["usiemens", "uS"],
+  ["f", "F"],
+  ["farad", "F"],
+  ["farads", "F"],
+  ["mf", "mF"],
+  ["uf", "uF"],
+  ["nf", "nF"],
+  ["pf", "pF"],
+  ["hry", "H"],
+  ["henry", "H"],
+  ["mhenry", "mH"],
+  ["uhenry", "uH"],
+  ["nhenry", "nH"],
+  ["mh", "mH"],
+  ["uh", "uH"],
+  ["nh", "nH"],
+  ["wb", "Wb"],
+  ["tesla", "T"],
   ["gss", "gauss"],
 
-  // Density / viscosity
-  ["kgm3", "kgm3"],
   ["kg/m3", "kgm3"],
-  ["gcm3", "gcm3"],
   ["g/cm3", "gcm3"],
-  ["lbft3", "lbft3"],
   ["lb/ft3", "lbft3"],
-  ["pas", "pas"],
-  ["pa*s", "pas"],
-  ["cp", "cp"],
+  ["pas", "Pas"],
+  ["pa*s", "Pas"],
+  ["cp", "cP"],
 
-  // Temperature (linearized deltas)
-  ["k", "k"],
-  ["degc", "degc"],
-  ["celsius", "degc"],
-  ["degf", "degf"],
-  ["fahrenheit", "degf"],
-  ["rankine", "rankine"],
+  ["k", "K"],
+  ["kelvin", "K"],
+  ["degc", "degC"],
+  ["celsius", "degC"],
+  ["degf", "degF"],
+  ["fahrenheit", "degF"],
   ["r", "rankine"],
 
-// angular velocity (alternative spellings)
-  ["rad/s",        "radps"],
-  // angular acceleration
-  ["radps2",       "radps2"],  ["rad/s2",       "radps2"],  ["rad/s^2",      "radps2"],
-  ["degps2",       "degps2"],  ["deg/s2",       "degps2"],
-  ["rpmps",        "rpmps"],   ["rpm/s",        "rpmps"],
-  // stiffness
-  ["npm",          "npm"],     ["n/m",          "npm"],
-  ["knpm",         "knpm"],    ["kn/m",         "knpm"],
-  ["mnpm",         "mnpm"],    ["mn/m",         "mnpm"],
-  ["lbfpin",       "lbfpin"],  ["lbf/in",       "lbfpin"],
-  // mass flow
-  ["kgps",         "kgps"],    ["kg/s",         "kgps"],
-  ["gps",          "gps"],     ["g/s",          "gps"],
-  ["kgpm",         "kgpm"],    ["kg/min",       "kgpm"],
-  ["kgph",         "kgph"],    ["kg/h",         "kgph"],
-  // moment of inertia
-  ["kgm2",         "kgm2"],    ["kg*m2",        "kgm2"],    ["kg*m^2",       "kgm2"],
-  ["kgcm2",        "kgcm2"],   ["kg*cm2",       "kgcm2"],   ["kg*cm^2",      "kgcm2"],
-  ["gcm2",         "gcm2"],    ["g*cm2",        "gcm2"],
-  // kinematic viscosity
-  ["m2ps",         "m2ps"],    ["m2/s",         "m2ps"],    ["m^2/s",        "m2ps"],
-  ["mm2ps",        "mm2ps"],   ["mm2/s",        "mm2ps"],   ["mm^2/s",       "mm2ps"],
-  ["stk",          "stk"],     ["stokes",       "stk"],
-  ["cstk",         "cstk"],    ["cst",          "cstk"],    ["centistokes",  "cstk"],
-  // specific energy
-  ["jpkg",         "jpkg"],    ["j/kg",         "jpkg"],
-  ["kjpkg",        "kjpkg"],   ["kj/kg",        "kjpkg"],
-  ["mjpkg",        "mjpkg"],   ["mj/kg",        "mjpkg"],
-  ["whpkg",        "whpkg"],   ["wh/kg",        "whpkg"],
-  ["kwhpkg",       "kwhpkg"],  ["kwh/kg",       "kwhpkg"],
-  // thermal resistance
-  ["kpw",          "kpw"],     ["k/w",          "kpw"],
-  ["degcpw",       "degcpw"],  ["c/w",          "degcpw"],
-  // thermal conductivity
-  ["wpmk",         "wpmk"],    ["w/mk",         "wpmk"],    ["w/(m*k)",      "wpmk"],
-  ["mwpmk",        "mwpmk"],   ["mw/mk",        "mwpmk"],   ["mw/(m*k)",     "mwpmk"],
-  ["wpcmk",        "wpcmk"],   ["w/(cm*k)",     "wpcmk"],
-  // specific heat
-  ["jpkgk",        "jpkgk"],   ["j/kgk",        "jpkgk"],   ["j/(kg*k)",     "jpkgk"],
-  ["kjpkgk",       "kjpkgk"],  ["kj/kgk",       "kjpkgk"],  ["kj/(kg*k)",    "kjpkgk"],
-  // heat flux
-  ["wpm2",         "wpm2"],    ["w/m2",         "wpm2"],    ["w/m^2",        "wpm2"],
-  ["kwpm2",        "kwpm2"],   ["kw/m2",        "kwpm2"],
-  ["mwpm2",        "mwpm2"],   ["mw/m2",        "mwpm2"],
-  ["wpcm2",        "wpcm2"],   ["w/cm2",        "wpcm2"],
-  // current density
-  ["apm2",         "apm2"],    ["a/m2",         "apm2"],    ["a/m^2",        "apm2"],
-  ["kapm2",        "kapm2"],   ["ka/m2",        "kapm2"],
-  ["apmm2",        "apmm2"],   ["a/mm2",        "apmm2"],
-  ["mapmm2",       "mapmm2"],  ["ma/mm2",       "mapmm2"],
-  // electric field
-  ["vpm",          "vpm"],     ["v/m",          "vpm"],
-  ["kvpm",         "kvpm"],    ["kv/m",         "kvpm"],
-  ["mvpm",         "mvpm"],    ["mv/m",         "mvpm"],
-]);
+  ["npm", "Npm"],
+  ["n/m", "Npm"],
+  ["knpm", "kNpm"],
+  ["kn/m", "kNpm"],
+  ["mnpm", "mNpm"],
+  ["mn/m", "mNpm"],
+  ["lbf/in", "lbfpin"],
+  ["kg/s", "kgps"],
+  ["g/s", "gps"],
+  ["kg/min", "kgpm"],
+  ["kg/h", "kgph"],
+  ["kg*m2", "kgm2"],
+  ["kg*m^2", "kgm2"],
+  ["kg*cm2", "kgcm2"],
+  ["kg*cm^2", "kgcm2"],
+  ["g*cm2", "gcm2"],
+  ["m2/s", "m2ps"],
+  ["m^2/s", "m2ps"],
+  ["mm2/s", "mm2ps"],
+  ["mm^2/s", "mm2ps"],
+  ["stokes", "stk"],
+  ["cst", "cstk"],
+  ["centistokes", "cstk"],
+  ["jpkg", "Jpkg"],
+  ["j/kg", "Jpkg"],
+  ["kjpkg", "kJpkg"],
+  ["kj/kg", "kJpkg"],
+  ["mjpkg", "MJpkg"],
+  ["mj/kg", "MJpkg"],
+  ["whpkg", "Whpkg"],
+  ["wh/kg", "Whpkg"],
+  ["kwhpkg", "kWhpkg"],
+  ["kwh/kg", "kWhpkg"],
+  ["kpw", "KpW"],
+  ["k/w", "KpW"],
+  ["degcpw", "degCpW"],
+  ["c/w", "degCpW"],
+  ["wpmk", "WpmK"],
+  ["w/mk", "WpmK"],
+  ["w/(m*k)", "WpmK"],
+  ["mwpmk", "mWpmK"],
+  ["mw/mk", "mWpmK"],
+  ["mw/(m*k)", "mWpmK"],
+  ["wpcmk", "WpcmK"],
+  ["w/(cm*k)", "WpcmK"],
+  ["jpkgk", "JpkgK"],
+  ["j/kgk", "JpkgK"],
+  ["j/(kg*k)", "JpkgK"],
+  ["kjpkgk", "kJpkgK"],
+  ["kj/kgk", "kJpkgK"],
+  ["kj/(kg*k)", "kJpkgK"],
+  ["wpm2", "Wpm2"],
+  ["w/m2", "Wpm2"],
+  ["w/m^2", "Wpm2"],
+  ["kwpm2", "kWpm2"],
+  ["kw/m2", "kWpm2"],
+  ["mwpm2", "mWpm2"],
+  ["mw/m2", "mWpm2"],
+  ["wpcm2", "Wpcm2"],
+  ["w/cm2", "Wpcm2"],
+  ["apm2", "Apm2"],
+  ["a/m2", "Apm2"],
+  ["a/m^2", "Apm2"],
+  ["kapm2", "kApm2"],
+  ["ka/m2", "kApm2"],
+  ["apmm2", "Apmm2"],
+  ["a/mm2", "Apmm2"],
+  ["mapmm2", "mApmm2"],
+  ["ma/mm2", "mApmm2"],
+  ["vpm", "Vpm"],
+  ["v/m", "Vpm"],
+  ["kvpm", "kVpm"],
+  ["kv/m", "kVpm"],
+  ["mvpm", "mVpm"],
+  ["mv/m", "mVpm"],
+];
 
-export function normalizeUnitToken(rawUnit: string): string {
-  const trimmed = rawUnit.trim();
-
-  // Preserve common electrical-case abbreviations that collide with time symbols.
-  if (/^[munp]?H$/.test(trimmed)) {
-    if (trimmed === "H") {
-      return "hry";
-    }
-
-    const prefix = trimmed[0].toLowerCase();
-    return `${prefix}hry`;
-  }
-
-  if (trimmed === "S") {
-    return "siemens";
-  }
-
-  return trimmed
-    .replace(/[\u03A9\u03C9]/g, "ohm")
-    .replace(/[\u00B5\u03BC]/g, "u")
-    .toLowerCase();
+for (const [alias, token] of LEGACY_ALIASES) {
+  addAlias(alias, token);
 }
 
-export function getUnitSpec(rawUnit: string): UnitSpec | undefined {
-  const normalized = normalizeUnitToken(rawUnit);
-  const canonicalToken = UNIT_ALIASES.get(normalized) ?? normalized;
-  return UNIT_SPECS.get(canonicalToken);
-}
-
-export function getUnitFamily(rawUnit: string): string | undefined {
-  const spec = getUnitSpec(rawUnit);
-  if (!spec) {
-    return undefined;
+for (const spec of UNIT_SPEC_LIST) {
+  const lowerToken = normalizeUnitGlyphs(spec.token).toLowerCase();
+  if (!UNIT_ALIASES.has(lowerToken)) {
+    addAlias(lowerToken, spec.token);
   }
-  return SCALABLE_UNIT_FAMILY.get(spec.token);
 }
 
 export const UNIT_SCALE_FACTORS = new Map<string, number>(
@@ -1000,6 +855,454 @@ export const UNITS = Array.from(UNIT_SPECS.keys());
 export const UNIT_DIM = new Map<string, DimensionVector>(
   UNIT_SPEC_LIST.map((spec) => [spec.token, spec.dimension])
 );
+
+const NON_SI_NORMALIZATION_TOKENS = new Set<string>([
+  "in",
+  "uin",
+  "mil",
+  "thou",
+  "ft",
+  "yd",
+  "mi",
+  "nmi",
+  "lb",
+  "oz",
+  "st",
+  "slug",
+  "gr",
+  "tonus",
+  "tonuk",
+  "lbf",
+  "ozf",
+  "atm",
+  "torr",
+  "mmHg",
+  "inHg",
+  "psi",
+  "ksi",
+  "BTU",
+  "hp",
+  "btuh",
+  "gal",
+  "qt",
+  "pt",
+  "cup",
+  "floz",
+  "bbl",
+]);
+
+const NON_ENGINEERING_SI_PREFIXES = ["da", "h", "d", "c"] as const;
+
+function resolveUnitToken(rawUnit: string): string | undefined {
+  const trimmed = trimUnitBrackets(rawUnit);
+  if (!trimmed) {
+    return undefined;
+  }
+
+  if (UNIT_SPECS.has(trimmed)) {
+    return trimmed;
+  }
+
+  const glyphNormalized = normalizeUnitGlyphs(trimmed);
+  if (UNIT_SPECS.has(glyphNormalized)) {
+    return glyphNormalized;
+  }
+
+  const alias = UNIT_ALIASES.get(glyphNormalized);
+  if (alias) {
+    return alias;
+  }
+
+  const lowerAlias = UNIT_ALIASES.get(glyphNormalized.toLowerCase());
+  if (lowerAlias) {
+    return lowerAlias;
+  }
+
+  return undefined;
+}
+
+export function normalizeUnitToken(rawUnit: string): string {
+  const directToken = resolveUnitToken(rawUnit);
+  if (directToken) {
+    return directToken;
+  }
+
+  const trimmed = trimUnitBrackets(rawUnit);
+  return trimmed.replace(/[A-Za-z%][A-Za-z0-9_%]*/g, (token) => {
+    const resolved = resolveUnitToken(token);
+    return resolved ?? normalizeUnitGlyphs(token).toLowerCase();
+  });
+}
+
+export function getUnitSpec(rawUnit: string): UnitSpec | undefined {
+  const token = resolveUnitToken(rawUnit);
+  return token ? UNIT_SPECS.get(token) : undefined;
+}
+
+export function getUnitFamily(rawUnit: string): string | undefined {
+  const spec = getUnitSpec(rawUnit);
+  return spec ? SCALABLE_UNIT_FAMILY.get(spec.token) : undefined;
+}
+
+function specValueToSi(value: number, spec: UnitSpec): number {
+  return spec.toSi ? spec.toSi(value) : value * spec.factorToSi;
+}
+
+function specSiToValue(valueSi: number, spec: UnitSpec): number {
+  return spec.fromSi ? spec.fromSi(valueSi) : valueSi / spec.factorToSi;
+}
+
+export function convertUnitValueToSi(value: number, rawUnit: string): UnitResult<number> {
+  const spec = getUnitSpec(rawUnit);
+  if (spec) {
+    return {
+      ok: true,
+      value: specValueToSi(value, spec),
+    };
+  }
+
+  const parsed = parseUnitToQuantity(rawUnit);
+  if (!parsed.ok) {
+    return {
+      ok: false,
+      error: `unknown unit '${rawUnit}'`,
+    };
+  }
+
+  return {
+    ok: true,
+    value: value * parsed.value.valueSi,
+  };
+}
+
+export function convertSiToUnit(valueSi: number, rawUnit: string): UnitResult<number> {
+  const spec = getUnitSpec(rawUnit);
+  if (spec) {
+    return {
+      ok: true,
+      value: specSiToValue(valueSi, spec),
+    };
+  }
+
+  const parsed = parseUnitToQuantity(rawUnit);
+  if (!parsed.ok) {
+    return {
+      ok: false,
+      error: `unknown unit '${rawUnit}'`,
+    };
+  }
+
+  return {
+    ok: true,
+    value: valueSi / parsed.value.valueSi,
+  };
+}
+
+function displayUnitForRaw(rawUnit: string, spec: UnitSpec): string {
+  const cleaned = trimUnitBrackets(rawUnit)
+    .replace(/\u00B5/g, "\u03BC")
+    .replace(/\u03C9/g, "\u03A9");
+
+  if (/[\u03BC\u03A9]/.test(cleaned)) {
+    return cleaned;
+  }
+
+  return spec.canonical;
+}
+
+export function parseUnitToken(token: string): ParsedUnit {
+  const spec = getUnitSpec(token);
+  if (!spec) {
+    throw new Error(`unknown unit '${token}'`);
+  }
+
+  return {
+    token: spec.token,
+    factor: spec.factorToSi,
+    factorToSi: spec.factorToSi,
+    unit: spec,
+    displayUnit: displayUnitForRaw(token, spec),
+  };
+}
+
+export function createDimensionlessQuantity(value: number): Quantity {
+  return {
+    valueSi: value,
+    dimension: cloneDimension(DIMENSIONLESS),
+  };
+}
+
+export function parseUnitToQuantity(raw: string): UnitResult<Quantity> {
+  try {
+    const parser = new UnitParser(raw);
+    return parser.parse();
+  } catch (e: any) {
+    return { ok: false, error: e.message };
+  }
+}
+
+/**
+ * Decompone un token unità come "A2" in base "A" + esponente 2.
+ * Restituisce undefined se il token è già un'unità conosciuta o se la base non è valida.
+ */
+function decomposeUnitToken(token: string): { base: Quantity; exponent: number } | undefined {
+  const match = token.match(/^([A-Za-z%][A-Za-z%]*?)(\d+)$/);
+  if (!match) return undefined;
+
+  const baseToken = match[1];
+  const exponent = parseFloat(match[2]);
+  if (isNaN(exponent)) return undefined;
+
+  const spec = getUnitSpec(baseToken);
+  if (!spec) return undefined;
+
+  return {
+    base: {
+      valueSi: spec.factorToSi,
+      dimension: cloneDimension(spec.dimension),
+      preferredUnit: spec.token,
+      displayUnit: spec.canonical,
+    },
+    exponent,
+  };
+}
+
+class UnitParser {
+  private tokens: string[];
+  private cursor = 0;
+
+  constructor(input: string) {
+    const trimmed = trimUnitBrackets(input).trim();
+    const regex = /([A-Za-z%][A-Za-z0-9_%]*|[\*\/^()]|-?\d+(?:\.\d+)?)/g;
+    this.tokens = trimmed.match(regex) || [];
+  }
+
+  private peek(): string | undefined {
+    return this.tokens[this.cursor];
+  }
+
+  private next(): string | undefined {
+    return this.tokens[this.cursor++];
+  }
+
+  parse(): UnitResult<Quantity> {
+    if (this.tokens.length === 0) {
+      return { ok: true, value: createDimensionlessQuantity(1) };
+    }
+    try {
+      const result = this.parseExpression();
+      if (this.cursor < this.tokens.length) {
+        throw new Error(`Unexpected token '${this.peek()}'`);
+      }
+      return { ok: true, value: result };
+    } catch (e: any) {
+      return { ok: false, error: e.message };
+    }
+  }
+
+  private parseExpression(): Quantity {
+    let left = this.parseTerm();
+    while (
+      this.peek() === "*" ||
+      this.peek() === "/" ||
+      (this.peek() && !["*", "/", "^", ")"].includes(this.peek()!))
+    ) {
+      const op = this.peek();
+      if (op === "*" || op === "/") {
+        this.next();
+        const right = this.parseTerm();
+        const res =
+          op === "*"
+            ? multiplyQuantities(left, right)
+            : divideQuantities(left, right);
+        if (!res.ok) {
+          throw new Error(res.error);
+        }
+        left = res.value;
+      } else {
+        const right = this.parseTerm();
+        const res = multiplyQuantities(left, right);
+        if (!res.ok) {
+          throw new Error(res.error);
+        }
+        left = res.value;
+      }
+    }
+    return left;
+  }
+
+  private parseTerm(): Quantity {
+    let q = this.parseFactor();
+    if (this.peek() === "^") {
+      this.next();
+      const exponentToken = this.next();
+      if (!exponentToken) {
+        throw new Error("Expected exponent after '^'");
+      }
+      const exponent = parseFloat(exponentToken);
+      if (isNaN(exponent)) {
+        throw new Error(`Invalid exponent '${exponentToken}'`);
+      }
+      q = this.powerQuantity(q, exponent);
+    }
+    return q;
+  }
+
+  private parseFactor(): Quantity {
+    const token = this.next();
+    if (!token) {
+      throw new Error("Unexpected end of unit expression");
+    }
+
+    if (token === "(") {
+      const q = this.parseExpression();
+      if (this.next() !== ")") {
+        throw new Error("Expected ')'");
+      }
+      return q;
+    }
+
+    if (token === "1") {
+      return createDimensionlessQuantity(1);
+    }
+
+    const spec = getUnitSpec(token);
+    if (!spec) {
+      // Prova a decomporre "A2" → "A^2", "V3" → "V^3" (unità base + esponente)
+      const decomposed = decomposeUnitToken(token);
+      if (decomposed) {
+        return this.powerQuantity(decomposed.base, decomposed.exponent);
+      }
+
+      const num = parseFloat(token);
+      if (!isNaN(num)) {
+        return createDimensionlessQuantity(num);
+      }
+      throw new Error(`Unknown unit '${token}'`);
+    }
+
+    return {
+      valueSi: spec.factorToSi,
+      dimension: cloneDimension(spec.dimension),
+      preferredUnit: spec.token,
+      displayUnit: spec.canonical,
+    };
+  }
+
+  private powerQuantity(q: Quantity, exponent: number): Quantity {
+    return {
+      valueSi: Math.pow(q.valueSi, exponent),
+      dimension: {
+        M: q.dimension.M * exponent,
+        L: q.dimension.L * exponent,
+        T: q.dimension.T * exponent,
+        I: q.dimension.I * exponent,
+        K: q.dimension.K * exponent,
+      },
+      displayUnit: q.displayUnit ? `${q.displayUnit}^${exponent}` : undefined,
+    };
+  }
+}
+
+export function createQuantity(value: number, rawUnit?: string): UnitResult<Quantity> {
+  if (!Number.isFinite(value)) {
+    return {
+      ok: false,
+      error: `non-finite numeric value: ${value}`,
+    };
+  }
+
+  if (!rawUnit || rawUnit.trim().length === 0) {
+    return {
+      ok: true,
+      value: createDimensionlessQuantity(value),
+    };
+  }
+
+  const parsedUnit = parseUnitToQuantity(rawUnit);
+  if (!parsedUnit.ok) {
+    return {
+      ok: false,
+      error: parsedUnit.error,
+    };
+  }
+
+  const unitQ = parsedUnit.value;
+
+  const singleSpec = getUnitSpec(rawUnit);
+  if (singleSpec && (singleSpec.toSi || singleSpec.fromSi)) {
+    return {
+      ok: true,
+      value: {
+        valueSi: specValueToSi(value, singleSpec),
+        dimension: cloneDimension(singleSpec.dimension),
+        preferredUnit: singleSpec.token,
+        displayUnit: displayUnitForRaw(rawUnit, singleSpec),
+      },
+    };
+  }
+
+  return {
+    ok: true,
+    value: {
+      valueSi: value * unitQ.valueSi,
+      dimension: unitQ.dimension,
+      preferredUnit: unitQ.preferredUnit,
+      displayUnit: unitQ.displayUnit ?? rawUnit,
+    },
+  };
+}
+
+/**
+ * Creates a quantity from a plain data value that is already expressed in
+ * `rawUnit` (CSV/table/lookup cells, YAML constants, external symbols).
+ * It shares the same internal representation as unit literals: valueSi is
+ * converted once on input, while preferredUnit/displayUnit preserve the
+ * original unit for presentation.
+ */
+export function createQuantityFromData(
+  value: number,
+  rawUnit: string
+): UnitResult<Quantity> {
+  return createQuantity(value, rawUnit);
+}
+
+export function convertQuantityToUnit(
+  quantity: Quantity,
+  rawUnit: string
+): UnitResult<number> {
+  const parsedUnit = parseUnitToQuantity(rawUnit);
+  if (!parsedUnit.ok) {
+    return {
+      ok: false,
+      error: parsedUnit.error,
+    };
+  }
+
+  const unitQ = parsedUnit.value;
+
+  if (!dimensionsEqual(quantity.dimension, unitQ.dimension)) {
+    return {
+      ok: false,
+      error:
+        `unit mismatch: expression has ${formatDimension(quantity.dimension)} ` +
+        `but '${rawUnit}' expects ${formatDimension(unitQ.dimension)}`,
+    };
+  }
+
+  const singleSpec = getUnitSpec(rawUnit);
+  if (singleSpec && (singleSpec.toSi || singleSpec.fromSi)) {
+    return {
+      ok: true,
+      value: specSiToValue(quantity.valueSi, singleSpec),
+    };
+  }
+
+  return {
+    ok: true,
+    value: quantity.valueSi / unitQ.valueSi,
+  };
+}
 
 function buildCompositeUnit(
   left: string | undefined,
@@ -1021,89 +1324,6 @@ function buildCompositeUnit(
   return operator === "*" ? `${left}*${right}` : `${left}/${right}`;
 }
 
-export function createDimensionlessQuantity(value: number): Quantity {
-  return {
-    valueSi: value,
-    dimension: cloneDimension(DIMENSIONLESS),
-  };
-}
-
-export function createQuantity(value: number, rawUnit?: string): UnitResult<Quantity> {
-  if (!Number.isFinite(value)) {
-    return {
-      ok: false,
-      error: `non-finite numeric value: ${value}`,
-    };
-  }
-
-  if (!rawUnit || rawUnit.trim().length === 0) {
-    return {
-      ok: true,
-      value: createDimensionlessQuantity(value),
-    };
-  }
-
-  const spec = getUnitSpec(rawUnit);
-  if (!spec) {
-    return {
-      ok: false,
-      error: `unknown unit '${rawUnit}'`,
-    };
-  }
-
-  return {
-    ok: true,
-    value: {
-      valueSi: value * spec.factorToSi,
-      dimension: cloneDimension(spec.dimension),
-      preferredUnit: spec.token,
-      displayUnit: spec.canonical,
-    },
-  };
-}
-
-export function convertSiToUnit(valueSi: number, rawUnit: string): UnitResult<number> {
-  const spec = getUnitSpec(rawUnit);
-  if (!spec) {
-    return {
-      ok: false,
-      error: `unknown unit '${rawUnit}'`,
-    };
-  }
-
-  return {
-    ok: true,
-    value: valueSi / spec.factorToSi,
-  };
-}
-
-export function convertQuantityToUnit(
-  quantity: Quantity,
-  rawUnit: string
-): UnitResult<number> {
-  const spec = getUnitSpec(rawUnit);
-  if (!spec) {
-    return {
-      ok: false,
-      error: `unknown unit '${rawUnit}'`,
-    };
-  }
-
-  if (!dimensionsEqual(quantity.dimension, spec.dimension)) {
-    return {
-      ok: false,
-      error:
-        `unit mismatch: expression has ${formatDimension(quantity.dimension)} ` +
-        `but '${spec.canonical}' expects ${formatDimension(spec.dimension)}`,
-    };
-  }
-
-  return {
-    ok: true,
-    value: quantity.valueSi / spec.factorToSi,
-  };
-}
-
 function unitText(quantity: Quantity): string | undefined {
   if (quantity.displayUnit) {
     return quantity.displayUnit;
@@ -1117,6 +1337,15 @@ function unitText(quantity: Quantity): string | undefined {
   return undefined;
 }
 
+function linearPreferredUnit(quantity: Quantity): string | undefined {
+  if (!quantity.preferredUnit) {
+    return undefined;
+  }
+
+  const spec = UNIT_SPECS.get(quantity.preferredUnit);
+  return spec && !spec.toSi && !spec.fromSi ? spec.token : undefined;
+}
+
 export function addQuantities(left: Quantity, right: Quantity): UnitResult<Quantity> {
   if (!dimensionsEqual(left.dimension, right.dimension)) {
     return {
@@ -1127,13 +1356,18 @@ export function addQuantities(left: Quantity, right: Quantity): UnitResult<Quant
     };
   }
 
+  const preferredUnit = linearPreferredUnit(left) ?? linearPreferredUnit(right);
+  const displayUnit = preferredUnit
+    ? unitText(left) ?? unitText(right)
+    : undefined;
+
   return {
     ok: true,
     value: {
       valueSi: left.valueSi + right.valueSi,
       dimension: cloneDimension(left.dimension),
-      preferredUnit: left.preferredUnit ?? right.preferredUnit,
-      displayUnit: unitText(left) ?? unitText(right),
+      preferredUnit,
+      displayUnit,
     },
   };
 }
@@ -1151,13 +1385,18 @@ export function subtractQuantities(
     };
   }
 
+  const preferredUnit = linearPreferredUnit(left) ?? linearPreferredUnit(right);
+  const displayUnit = preferredUnit
+    ? unitText(left) ?? unitText(right)
+    : undefined;
+
   return {
     ok: true,
     value: {
       valueSi: left.valueSi - right.valueSi,
       dimension: cloneDimension(left.dimension),
-      preferredUnit: left.preferredUnit ?? right.preferredUnit,
-      displayUnit: unitText(left) ?? unitText(right),
+      preferredUnit,
+      displayUnit,
     },
   };
 }
@@ -1261,7 +1500,7 @@ export function toDisplayValue(quantity: Quantity): number {
     return quantity.valueSi;
   }
 
-  return quantity.valueSi / spec.factorToSi;
+  return specSiToValue(quantity.valueSi, spec);
 }
 
 export function toDisplayUnit(quantity: Quantity): string | undefined {
@@ -1295,14 +1534,27 @@ function scoreNormalizedMagnitude(absValue: number): number {
   return score;
 }
 
-function trimUnitBrackets(rawUnit: string): string {
-  return rawUnit.trim().replace(/^\[+/, "").replace(/\]+$/, "").trim();
+function scoreNormalizationUnitPenalty(spec: UnitSpec): number {
+  if (NON_SI_NORMALIZATION_TOKENS.has(spec.token)) {
+    return 2.5;
+  }
+
+  for (const definition of BASE_UNITS) {
+    if (!definition.prefixable) {
+      continue;
+    }
+
+    const baseToken = definition.prefixBase ?? definition.token;
+    for (const prefix of NON_ENGINEERING_SI_PREFIXES) {
+      if (spec.token === `${prefix}${baseToken}`) {
+        return 2;
+      }
+    }
+  }
+
+  return 0;
 }
 
-/**
- * Chooses a human-friendly representation for a numeric value with unit.
- * Example: normalizeUnit(24000, "mA") -> { value: 24, unit: "A" }.
- */
 export function normalizeUnit(
   value: number,
   rawUnit?: string
@@ -1329,6 +1581,13 @@ export function normalizeUnit(
     };
   }
 
+  if (sourceSpec.toSi || sourceSpec.fromSi) {
+    return {
+      value,
+      unit: sourceSpec.canonical,
+    };
+  }
+
   const family = SCALABLE_UNIT_FAMILY.get(sourceSpec.token);
   if (!family) {
     return {
@@ -1337,11 +1596,17 @@ export function normalizeUnit(
     };
   }
 
-  const valueSi = value * sourceSpec.factorToSi;
+  const valueSi = specValueToSi(value, sourceSpec);
   let bestSpec = sourceSpec;
-  let bestScore = scoreNormalizedMagnitude(Math.abs(value));
+  let bestScore =
+    scoreNormalizedMagnitude(Math.abs(value)) +
+    scoreNormalizationUnitPenalty(sourceSpec);
 
   for (const candidate of UNIT_SPEC_LIST) {
+    if (candidate.toSi || candidate.fromSi) {
+      continue;
+    }
+
     if (SCALABLE_UNIT_FAMILY.get(candidate.token) !== family) {
       continue;
     }
@@ -1350,12 +1615,14 @@ export function normalizeUnit(
       continue;
     }
 
-    const candidateValue = valueSi / candidate.factorToSi;
+    const candidateValue = specSiToValue(valueSi, candidate);
     if (!Number.isFinite(candidateValue)) {
       continue;
     }
 
-    const score = scoreNormalizedMagnitude(Math.abs(candidateValue));
+    const score =
+      scoreNormalizedMagnitude(Math.abs(candidateValue)) +
+      scoreNormalizationUnitPenalty(candidate);
     if (score + EPSILON < bestScore) {
       bestScore = score;
       bestSpec = candidate;
@@ -1363,7 +1630,7 @@ export function normalizeUnit(
   }
 
   return {
-    value: valueSi / bestSpec.factorToSi,
+    value: specSiToValue(valueSi, bestSpec),
     unit: bestSpec.canonical,
   };
 }
@@ -1372,33 +1639,79 @@ export function applyOutputUnit(
   quantity: Quantity,
   rawUnit: string
 ): UnitResult<{ quantity: Quantity; displayValue: number; displayUnit: string }> {
-  const spec = getUnitSpec(rawUnit);
-  if (!spec) {
+  const parsedUnit = parseUnitToQuantity(rawUnit);
+  if (!parsedUnit.ok) {
     return {
       ok: false,
-      error: `unknown unit '${rawUnit}'`,
+      error: parsedUnit.error,
     };
   }
 
-  if (!dimensionsEqual(quantity.dimension, spec.dimension)) {
+  const unitQ = parsedUnit.value;
+
+  if (!dimensionsEqual(quantity.dimension, unitQ.dimension)) {
     return {
       ok: false,
       error:
         `unit mismatch: expression has ${formatDimension(quantity.dimension)} ` +
-        `but output unit '${spec.canonical}' requires ${formatDimension(spec.dimension)}`,
+        `but output unit '${rawUnit}' requires ${formatDimension(unitQ.dimension)}`,
     };
   }
+
+  const singleSpec = getUnitSpec(rawUnit);
+  if (singleSpec && (singleSpec.toSi || singleSpec.fromSi)) {
+    const displayValue = specSiToValue(quantity.valueSi, singleSpec);
+    const displayUnit = displayUnitForRaw(rawUnit, singleSpec);
+    return {
+      ok: true,
+      value: {
+        quantity: {
+          ...quantity,
+          preferredUnit: singleSpec.token,
+          displayUnit,
+        },
+        displayValue,
+        displayUnit,
+      },
+    };
+  }
+
+  const displayValue = quantity.valueSi / unitQ.valueSi;
+  const displayUnit = unitQ.displayUnit ?? rawUnit;
 
   return {
     ok: true,
     value: {
       quantity: {
         ...quantity,
-        preferredUnit: spec.token,
-        displayUnit: spec.canonical,
+        preferredUnit: unitQ.preferredUnit,
+        displayUnit,
       },
-      displayValue: quantity.valueSi / spec.factorToSi,
-      displayUnit: spec.canonical,
+      displayValue,
+      displayUnit,
     },
   };
+}
+
+export function getUnit(symbol: string): UnitSpec | undefined {
+  return getUnitSpec(symbol);
+}
+
+export function hasUnit(symbol: string): boolean {
+  return Boolean(getUnitSpec(symbol));
+}
+
+export function getAllUnits(): UnitSpec[] {
+  return UNIT_SPEC_LIST;
+}
+
+export function debugParse(token: string): void {
+  const parsed = parseUnitToken(token);
+
+  console.log({
+    token,
+    normalizedToken: parsed.token,
+    factor: parsed.factorToSi,
+    display: parsed.displayUnit,
+  });
 }

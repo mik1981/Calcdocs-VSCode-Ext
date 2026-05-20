@@ -1124,6 +1124,7 @@ function applyCppSymbols(
   // Pulisci tutte le strutture dati
   state.allDefines.clear();
   state.defineConditions.clear();
+  state.defineComments.clear();
   state.functionDefines.clear();
   state.symbolDefs.clear();
   state.symbolConditionalDefs.clear();
@@ -1146,6 +1147,10 @@ function applyCppSymbols(
       name,
       cppSymbols.defineConditions.get(name) ?? "always"
     );
+    const comment = cppSymbols.defineComments.get(name);
+    if (comment) {
+      state.defineComments.set(name, comment);
+    }
 
     // Prova a valutare immediatamente il valore numerico
     try {

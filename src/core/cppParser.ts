@@ -20,6 +20,7 @@ export type CppSymbolDefinition = {
 export type CollectedCppSymbols = {
   defines: Map<string, string>;
   defineConditions: Map<string, string>;
+  defineComments: Map<string, string>;
   functionDefines: Map<string, FunctionMacroDefinition>;
   defineVariants: Map<string, SymbolConditionalDefinition[]>;
   consts: Map<string, number>;
@@ -38,6 +39,7 @@ type ParsedDefineDirective = {
   name: string;
   expr: string;
   params?: string[];
+  comment?: string;
 };
 
 type ParsedValueDeclaration = {
@@ -46,7 +48,46 @@ type ParsedValueDeclaration = {
   isConst?: boolean;
   isStatic?: boolean;
   isDefinition?: boolean;
+  comment?: string;
 };
+
+function extractCppLineComment(text: string): string | undefined {
+  let inString: string | null = null;
+
+  for (let i = 0; i < text.length - 1; i += 1) {
+    const current = text[i];
+    const next = text[i + 1];
+
+    if (inString) {
+      if (current === "\\") {
+        i += 1;
+        continue;
+      }
+      if (current === inString) {
+        inString = null;
+      }
+      continue;
+    }
+
+    if (current === '"' || current === "'" || current === "`") {
+      inString = current;
+      continue;
+    }
+
+    if (current === "/" && next === "/") {
+      return text.slice(i + 2).trim();
+    }
+    if (current === "/" && next === "*") {
+      const end = text.indexOf("*/", i + 2);
+      if (end !== -1) {
+        return text.slice(i + 2, end).trim();
+      }
+      return text.slice(i + 2).trim();
+    }
+  }
+
+  return undefined;
+}
 
 type ConditionalFrame = {
   parentCondition: string | null;
@@ -631,7 +672,8 @@ function parseDefineDirective(line: string): ParsedDefineDirective | undefined {
             .map((param) => param.trim())
             .filter((param) => param.length > 0);
 
-    const expr = stripComments(rawTail.slice(closeIndex + 1));
+    const comment = extractCppLineComment(rawTail.slice(closeIndex + 1));
+    const expr = stripComments(rawTail.slice(closeIndex + 1)).trim();
     if (!expr) {
       return undefined;
     }
@@ -640,9 +682,11 @@ function parseDefineDirective(line: string): ParsedDefineDirective | undefined {
       name,
       expr,
       params,
+      comment,
     };
   }
 
+  const comment = extractCppLineComment(rawTail);
   const expr = stripComments(rawTail).trim();
   if (!expr) {
     return undefined;
@@ -651,6 +695,7 @@ function parseDefineDirective(line: string): ParsedDefineDirective | undefined {
   return {
     name,
     expr,
+    comment,
   };
 }
 
@@ -703,6 +748,7 @@ function parseValueDeclaration(
     return undefined;
   }
 
+  const comment = extractCppLineComment(line);
   const declaration = cleaned.slice(0, semicolonIndex).trim();
 
   if (!declaration) {
@@ -865,6 +911,7 @@ function parseValueDeclaration(
     isConst,
     isStatic,
     isDefinition,
+    comment,
   };
 }
 
@@ -990,6 +1037,7 @@ export async function collectDefinesAndConsts(
   
   const defines = new Map<string, string>();
   const defineConditions = new Map<string, string>();
+  const defineComments = new Map<string, string>();
   const functionDefines = new Map<string, FunctionMacroDefinition>();
   const defineVariants = new Map<string, SymbolConditionalDefinition[]>();
   const consts = new Map<string, number>();
@@ -1101,16 +1149,9 @@ export async function collectDefinesAndConsts(
         } else {
           // Allow overwrite in case later file redefines
           defines.set(name, expr);
-
-          const unitMatch = line.match(UNIT_COMMENT_RX);
-
-          if (unitMatch) {
-            units.set(name, unitMatch[1]);
-          }
-
-          try {
-            consts.set(name, safeEval(expr));
-          } catch {}
+            if (parsedDefine.comment) {
+              defineComments.set(name, parsedDefine.comment);
+            }
 
           defineConditions.set(name, "always");
 
@@ -1149,9 +1190,11 @@ export async function collectDefinesAndConsts(
           // Ignore ALL static variables, including static const
           if (!isStatic) {
             defines.set(name, expr);
+            if (parsedValueDeclaration.comment) {
+              defineComments.set(name, parsedValueDeclaration.comment);
+            }
 
             const unitMatch = line.match(UNIT_COMMENT_RX);
-
             if (unitMatch) {
               units.set(name, unitMatch[1]);
             }
@@ -1490,6 +1533,9 @@ export async function collectDefinesAndConsts(
             if (!isStatic) {
               if (!defines.has(name)) {
                 defines.set(name, expr);
+                if (parsedValueDeclaration.comment) {
+                  defineComments.set(name, parsedValueDeclaration.comment);
+                }
               }
 
               const unitMatch = line.match(UNIT_COMMENT_RX);
@@ -1539,13 +1585,75 @@ export async function collectDefinesAndConsts(
 
   const dedupedDefineVariants = dedupeDefineVariants(defineVariants);
 
+  augmentRegisterFamilyAliases(defines, defineConditions);
+
   return {
     defines,
     defineConditions,
+    defineComments,
     functionDefines,
     defineVariants: dedupedDefineVariants,
     consts,
     units,
     locations
   };
+}
+
+function stripTrailingDigits(name: string): string {
+  return name.replace(/\d+$/, "");
+}
+
+function augmentRegisterFamilyAliases(
+  defines: Map<string, string>,
+  defineConditions: Map<string, string>
+): void {
+  const aliasCandidates = new Map<string, Set<string>>();
+  const identifierRegex = /[A-Za-z_]\w*/g;
+
+  for (const [name, expr] of Array.from(defines.entries())) {
+    const instanceMatch = name.match(/^([A-Za-z_][\w]*\d+)__(.+)$/);
+    if (!instanceMatch) {
+      continue;
+    }
+
+    const instanceName = instanceMatch[1];
+    const registerName = instanceMatch[2];
+    const familyName = stripTrailingDigits(instanceName);
+    if (!familyName || familyName === instanceName) {
+      continue;
+    }
+
+    const genericPrefix = `${familyName}_${registerName}_`;
+    const specificPrefix = `${instanceName}_${registerName}_`;
+
+    for (const token of expr.match(identifierRegex) ?? []) {
+      if (!token.startsWith(genericPrefix)) {
+        continue;
+      }
+
+      const genericName = token;
+      if (defines.has(genericName)) {
+        continue;
+      }
+
+      const specificName = `${specificPrefix}${genericName.slice(genericPrefix.length)}`;
+      if (!defines.has(specificName)) {
+        continue;
+      }
+
+      const candidates = aliasCandidates.get(genericName) ?? new Set<string>();
+      candidates.add(specificName);
+      aliasCandidates.set(genericName, candidates);
+    }
+  }
+
+  for (const [genericName, candidates] of aliasCandidates.entries()) {
+    if (defines.has(genericName) || candidates.size !== 1) {
+      continue;
+    }
+
+    const [specificName] = Array.from(candidates);
+    defines.set(genericName, specificName);
+    defineConditions.set(genericName, "always");
+  }
 }

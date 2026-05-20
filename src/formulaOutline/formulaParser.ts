@@ -8,7 +8,17 @@ export type OutlineFormula = {
   lineStart: number;
   lineEnd: number;
   _filePath?: string;
+  line?: number;
 };
+
+// export function isFormulaYamlDocument(document: vscode.TextDocument): boolean {
+//     const fileName = document.fileName.toLowerCase();
+
+//     return (
+//         document.languageId === "yaml" &&
+//         /(^|[\\/])formulas.*\.ya?ml$/i.test(fileName)
+//     );
+// }
 
 /**
  * Lightweight line-based parser for formulas*.yaml.

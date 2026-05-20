@@ -7,6 +7,7 @@ import {
   type ExpressionNode,
 } from "./ast";
 import { createCsvLookupResolver } from "./csvLookup";
+import { formatNumberToSigFigs } from "../utils/nformat";
 import {
   buildExplainSteps,
   evaluateExpressionAst,
@@ -17,15 +18,19 @@ import {
 import {
   applyOutputUnit,
   createQuantity,
+  createQuantityFromData,
   dimensionsEqual,
   formatDimension,
   getUnitSpec,
   isDimensionless,
+  parseUnitToQuantity,
   toDisplayUnit,
   toDisplayValue,
   type UnitSpec,
   type Quantity,
   SCALABLE_UNIT_FAMILY,
+  UNIT_SPEC_LIST,
+  UNIT_SPECS,
 } from "./units";
 
 export type YamlSymbolType = "const" | "expr" | "lookup";
@@ -90,6 +95,51 @@ export type EvaluateYamlOptions = {
   externalUnits?: Map<string, string>;
   csvTables?: CsvTableMap;
 };
+
+/**
+* Ricava l'unità canonica (es. "A", "W", "Pa") dalla dimensione fisica
+ * di una Quantity. Preferisce le unità SI (factorToSi = 1) per coerenza
+ * col valore già espresso in SI.
+ */
+function inferCanonicalUnit(quantity: Quantity): string | undefined {
+  if (isDimensionless(quantity.dimension)) {
+    return undefined;
+  }
+
+  // Se la quantità ha già un'unità preferita riconosciuta, usala direttamente
+  if (quantity.preferredUnit) {
+    const spec = UNIT_SPECS.get(quantity.preferredUnit);
+    if (spec) {
+      return spec.canonical;
+    }
+  }
+
+  // displayUnit non è una stringa dimensionale grezza (es. "M^1 L^2 T^-3")
+  if (quantity.displayUnit && !/^[MLTIK]/.test(quantity.displayUnit)) {
+    return quantity.displayUnit;
+  }
+
+  const EPSILON = 1e-12;
+
+  // Prima passata: cerca un'unità SI (factorToSi ≈ 1) con dimensione uguale
+  for (const spec of UNIT_SPEC_LIST) {
+    if (
+      Math.abs(spec.factorToSi - 1) < EPSILON &&
+      dimensionsEqual(spec.dimension, quantity.dimension)
+    ) {
+      return spec.canonical;
+    }
+  }
+
+  // Seconda passata: qualsiasi unità con dimensione corrispondente
+  for (const spec of UNIT_SPEC_LIST) {
+    if (dimensionsEqual(spec.dimension, quantity.dimension)) {
+      return spec.canonical;
+    }
+  }
+
+  return undefined;
+}
 
 function toNumericValue(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value)) {
@@ -202,11 +252,8 @@ function buildLookupExpression(node: Record<string, unknown>): string | null {
 }
 
 function formatExplainNumber(value: number): string {
-  if (Number.isInteger(value)) {
-    return String(value);
-  }
-
-  return value.toFixed(10).replace(/\.?0+$/, "");
+  if (!Number.isFinite(value)) return String(value);
+  return formatNumberToSigFigs(value, 6);
 }
 
 function formatResolvedDependency(
@@ -272,8 +319,12 @@ function expressionNeedsOutputConversion(ast: ExpressionNode | undefined): boole
 
 function shouldConvertPureExpressionOutput(
   quantity: Quantity,
-  outputSpec: UnitSpec
+  outputSpec?: UnitSpec
 ): boolean {
+  if (!outputSpec) {
+    return true;
+  }
+
   // If no native preferred unit is available (composite/derived result),
   // honoring explicit output unit is the only way to provide a stable display unit.
   const sourceToken = quantity.preferredUnit;
@@ -592,7 +643,9 @@ export function evaluateYamlDocument(
     }
 
     const unit = externalUnits.get(name);
-    const quantity = createQuantity(value, unit);
+    const quantity = unit
+      ? createQuantityFromData(value, unit)
+      : createQuantity(value);
     if (!quantity.ok) {
       return undefined;
     }
@@ -659,7 +712,9 @@ export function evaluateYamlDocument(
         return result;
       }
 
-      const quantity = createQuantity(symbol.literalValue, symbol.effectiveUnit);
+      const quantity = symbol.effectiveUnit
+        ? createQuantityFromData(symbol.literalValue, symbol.effectiveUnit)
+        : createQuantity(symbol.literalValue);
       if (!quantity.ok) {
         addError(quantity.error);
         evaluating.delete(name);
@@ -668,7 +723,16 @@ export function evaluateYamlDocument(
 
       result.quantity = quantity.value;
       result.value = toDisplayValue(quantity.value);
-      result.outputUnit = toDisplayUnit(quantity.value);
+      // result.outputUnit = toDisplayUnit(quantity.value);
+      // toDisplayUnit restituisce la dimensione grezza ("M^1 L^2 T^-3") quando
+      // non c'è un'unità preferita. Proviamo a trovare l'unità canonica.
+      const rawUnit = toDisplayUnit(quantity.value);
+      const isRawDimension = rawUnit != null && /^[MLTIK]/.test(rawUnit);
+      result.outputUnit = isRawDimension || rawUnit == null
+        ? inferCanonicalUnit(quantity.value)
+        : rawUnit;
+
+
       result.expanded = formatExplainNumber(result.value);
       result.explainSteps = [`= ${result.expanded}`];
 
@@ -679,6 +743,17 @@ export function evaluateYamlDocument(
           symbol.line,
           "info",
           `unit '${symbol.effectiveUnit}' inferred from C/C++ declarations`
+        );
+      }
+
+      // Notifica se l'unità è stata derivata automaticamente dalle dimensioni
+      if (!symbol.declaredUnit && !symbol.effectiveUnit && result.outputUnit) {
+        createDiagnostic(
+          diagnostics,
+          symbol.name,
+          symbol.line,
+          "info",
+          `unit '${result.outputUnit}' derived from formula dimensions (add 'unit: ${result.outputUnit}' to confirm)`
         );
       }
 
@@ -714,7 +789,7 @@ export function evaluateYamlDocument(
         const extUnit = externalUnits.get(identifier);
         
         if (extUnit) {
-          const q = createQuantity(extValue ?? 1.0, extUnit);
+          const q = createQuantityFromData(extValue ?? 1.0, extUnit);
           if (q.ok) return q.value;
         }
 
@@ -743,21 +818,28 @@ export function evaluateYamlDocument(
 
     let quantity = evaluatedExpression.quantity;
     if (symbol.effectiveUnit) {
-      const outputSpec = getUnitSpec(symbol.effectiveUnit);
-      if (!outputSpec) {
-        addError(`unknown unit '${symbol.effectiveUnit}'`);
+      const outputUnit = symbol.effectiveUnit;
+      const parsedUnit = parseUnitToQuantity(outputUnit);
+      if (!parsedUnit.ok) {
+        addError(`unknown unit '${outputUnit}'`);
         evaluating.delete(name);
         return result;
       }
 
+      const outputSpec = getUnitSpec(outputUnit);
+      const isRawDimensionless = isDimensionless(quantity.dimension);
+
       const hasUnitMismatch =
-        !dimensionsEqual(quantity.dimension, outputSpec.dimension) && !hasUnknownVariables;
+        !isRawDimensionless &&
+        !dimensionsEqual(quantity.dimension, parsedUnit.value.dimension) &&
+        !hasUnknownVariables;
+
       if (hasUnitMismatch) {
         const calcDim = formatDimension(quantity.dimension);
-        const targetDim = formatDimension(outputSpec.dimension);
+        const targetDim = formatDimension(parsedUnit.value.dimension);
         addError(
           `unit mismatch: expression has ${calcDim} ` +
-            `but output unit '${outputSpec.canonical}' expects ${targetDim}`
+            `but output unit '${outputUnit}' expects ${targetDim}`
         );
         // Keep the native evaluated quantity and avoid re-emitting the same
         // mismatch from a downstream conversion layer.
@@ -765,11 +847,33 @@ export function evaluateYamlDocument(
         result.value = toDisplayValue(quantity);
         result.outputUnit = toDisplayUnit(quantity);
       } else {
+        if (isRawDimensionless) {
+          const tagged = createQuantityFromData(
+            quantity.valueSi,
+            outputUnit
+          );
+
+          if (!tagged.ok) {
+            addError(tagged.error);
+            evaluating.delete(name);
+            return result;
+          }
+
+          quantity = tagged.value;
+
+          result.quantity = quantity;
+          result.value = toDisplayValue(quantity);
+          result.outputUnit = toDisplayUnit(quantity);
+
+          evaluating.delete(name);
+          return result;
+        }
+        
         const shouldConvertOutput =
           expressionNeedsOutputConversion(symbol.ast) ||
           shouldConvertPureExpressionOutput(quantity, outputSpec);
         if (shouldConvertOutput) {
-          const output = applyOutputUnit(quantity, symbol.effectiveUnit);
+          const output = applyOutputUnit(quantity, outputUnit);
           if (!output.ok) {
             addError(output.error);
             evaluating.delete(name);
