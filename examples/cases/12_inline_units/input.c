@@ -33,13 +33,6 @@
 // @test P_Pa @p1 -> Pa
 // = @p1 -> Pa
 
-// Motor speed conversion
-// @rpm_v = 3000 V
-// @rpm_v -> mV
-// torque = 1.2 Nm
-// power = torque * @rpm
-
-
 // @test P_atm @p1 + @p2 -> atm 
 // = @p1 + @p2 -> atm
 

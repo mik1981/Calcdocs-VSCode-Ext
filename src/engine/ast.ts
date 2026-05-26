@@ -64,7 +64,7 @@ export class ExpressionSyntaxError extends Error {
 }
 
 const NUMBER_RX = /^(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?/;
-const IDENTIFIER_RX = /^[A-Za-z_][A-Za-z0-9_]*/;
+const IDENTIFIER_RX = /^[A-Za-z_][A-Za-z0-9_.]*/;
 
 function tokenize(source: string): Token[] {
   const tokens: Token[] = [];

@@ -11,7 +11,7 @@ import { pickWord } from "../utils/editor";
 import { localize } from "../utils/localize";
 import { generateFormulaHeader } from "../utils/headerGenerator";
 // import { openInlineCalcGuide } from "./guide";
-import { openInteractiveView } from "../ui/interactiveView";
+import { openInteractiveView, hasInteractiveContent, refreshInteractiveViewContext } from "../ui/interactiveView";
 import { FormulaRegistry } from "../formulaOutline/formulaRegistry";
 
 type RegisterCommandsParams = {
@@ -189,9 +189,48 @@ export function registerCommands({
     ),  
 
     vscode.commands.registerCommand("calcdocs.openInteractiveView", async () => {
-      // await runAnalysisAndRefreshUi();
+      const editor = vscode.window.activeTextEditor;
+
+      if (!hasInteractiveContent(editor, state)) {
+        const detail = editor
+          ? `The file "${path.basename(editor.document.fileName)}" does not contain any calculable formulas.\n\nOpen this command from:\n• a C/C++ file with inline assignments  (@variable = expression)\n• a formula*.yaml file with at least one formula or constant`
+          : `No active file detected.\n\nOpen this command from:\n• a C/C++ file with inline assignments  (@variable = expression)\n• a formula*.yaml file with at least one formula or constant`;
+
+        await vscode.window.showInformationMessage(
+          "CalcDocs – Interactive View: no formulas found.",
+          { modal: true, detail }
+        );
+        return;
+      }
+
       openInteractiveView(context, state);
     }),
+  );
+
+  // ── Context key per il bottone "Open Interactive View" nel view/title ────────
+  // Valore iniziale calcolato sull'editor già aperto al momento dell'attivazione.
+  refreshInteractiveViewContext(vscode.window.activeTextEditor, state);
+
+  // Aggiornamento al cambio di editor attivo.
+  context.subscriptions.push(
+    vscode.window.onDidChangeActiveTextEditor(editor => {
+      refreshInteractiveViewContext(editor, state);
+    })
+  );
+
+  // Aggiornamento alle modifiche del documento, con debounce per non
+  // rieseguire il test regex su ogni singola battuta.
+  let contextRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeTextDocument(event => {
+      const editor = vscode.window.activeTextEditor;
+      if (!editor) return;
+      if (event.document.uri.toString() !== editor.document.uri.toString()) return;
+      clearTimeout(contextRefreshTimer);
+      contextRefreshTimer = setTimeout(() => {
+        refreshInteractiveViewContext(editor, state);
+      }, 600);
+    })
   );
 
   async function openRuntimeQuickMenu(
@@ -212,6 +251,7 @@ export function registerCommands({
           | "toggleGhostValues"
           | "showOutput"
           | "generateFormulaHeader"
+          | "openInteractiveView"
           | "openSettings";
       }
     > = [
@@ -276,6 +316,11 @@ export function registerCommands({
         action: "showOutput",
       },
       {
+        label: "$(beaker) Open Interactive View",
+        description: "Open the interactive formula explorer for the active file",
+        action: "openInteractiveView",
+      },
+      {
         label: "$(settings-gear) Open CalcDocs Settings",
         description: "Open settings filtered by @ext:convergo-dev.calcdocs-vscode-extension",
         action: "openSettings",
@@ -336,6 +381,9 @@ export function registerCommands({
         return;
       case "showOutput":
         state.output.show(false);
+        return;
+      case "openInteractiveView":
+        await vscode.commands.executeCommand("calcdocs.openInteractiveView");
         return;
       case "openSettings":
         await vscode.commands.executeCommand(

@@ -1,2 +1,2 @@
 vin: { value: 12, unit: V }
-curr: { value: 2, unit: A }
+curr: { value: 2, unit: mA }

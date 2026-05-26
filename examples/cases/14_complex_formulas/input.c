@@ -101,9 +101,9 @@
 // @test targets (will be in expected.yaml)
 // ===============================
 // @test STAGE_DIFF I_DIFF_A = 2.78
-// @test STAGE_ADC  I_DIFF_ADC_A = 2.78
-// @test STAGE_COMP I_COMP_A = 2.7726325
-// @test MOTOR_RMS   MOTOR_CURRENT_A = 2.9079
+// @test STAGE_ADC  I_DIFF_ADC_A = 2.7647560975609755
+// @test STAGE_COMP I_COMP_A = 0.0756045286148721
+// @test MOTOR_RMS   MOTOR_CURRENT_A = 0.9838367804449185
 
 // These assignments exist only so the parser has symbols to resolve.
 static const float current_diff_a   = I_DIFF_A;

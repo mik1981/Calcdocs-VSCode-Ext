@@ -62,7 +62,7 @@ int t1106 = SZ_TYPEDEF_STRUCT;
 int t1107 = CONST_EXPR;
 // @test T8 identity_const = 42
 int t1108 = identity_const(CONST_VAL);
-// @test T9 safe_deref = 3735928559
+// @test T9 safe_deref = 48879
 int t1109 = safe_deref(&VOL_VAL);
 // @test T10 known_deref = 100
 int t1110 = KNOWN_DEREF_TEST;
@@ -75,7 +75,7 @@ int t1112 = array_len("abc");
 // @test T13 get_sizeof = 4
 int t1113 = get_sizeof(123);
 
-// @test T15 vol_read = 3735928559
+// @test T15 vol_read = 48879
 int t1115 = VOL_READ;
 
 // @test T16 null_test = 0

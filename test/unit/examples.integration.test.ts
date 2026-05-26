@@ -929,7 +929,8 @@ function findNextNamedDefinition(
 
 function shouldUseFollowingDefinition(
   expression: string,
-  nextDefinition: ReturnType<typeof collectDocumentSymbolDefinitions>[number] | undefined
+  nextDefinition: ReturnType<typeof collectDocumentSymbolDefinitions>[number] | undefined,
+  knownSymbols?: Set<string>
 ): boolean {
   if (!nextDefinition || !nextDefinition.parsed.name) {
     return false;
@@ -946,7 +947,11 @@ function shouldUseFollowingDefinition(
     return true;
   }
 
-  return isSimpleAliasExpression(expression);
+  if (!isSimpleAliasExpression(expression)) {
+    return false;
+  }
+
+  return !knownSymbols?.has(normalizeInlineSymbol(expression));
 }
 
 function splitTestExpression(remainder: string): {
@@ -984,7 +989,10 @@ function buildTransformedInlineExpression(expression: string): string {
   return `(${expression}) + 0`;
 }
 
-function transformTestComments(documentText: string): {
+function transformTestComments(
+  documentText: string,
+  knownSymbols?: Set<string>
+): {
   transformedText: string;
   commands: ParsedTestCommand[];
 } {
@@ -1007,7 +1015,8 @@ function transformTestComments(documentText: string): {
     const nextDefinition = findNextNamedDefinition(definitions, lineIndex);
     const useFollowingDefinition = shouldUseFollowingDefinition(
       parsed.expression,
-      nextDefinition
+      nextDefinition,
+      knownSymbols
     );
     const transformedExpression =
       useFollowingDefinition && nextDefinition
@@ -1039,10 +1048,15 @@ async function collectInlineResults(
 ): Promise<InlineCollection> {
   const resultsById = new Map<string, InlineTestResult>();
   const commandsById = new Map<string, ParsedTestCommand>();
+  const knownSymbols = new Set<string>([
+    ...Array.from(state.symbolValues?.keys?.() ?? []),
+    ...Array.from(state.allDefines?.keys?.() ?? []),
+    ...Array.from(state.functionDefines?.keys?.() ?? []),
+  ]);
 
   for (const sourceFile of sourceFiles) {
     const originalText = await fsp.readFile(sourceFile, "utf8");
-    const { transformedText, commands } = transformTestComments(originalText);
+    const { transformedText, commands } = transformTestComments(originalText, knownSymbols);
 
     const inlineResults = evaluateInlineCalcs(
       transformedText,

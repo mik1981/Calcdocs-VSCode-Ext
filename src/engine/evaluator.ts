@@ -12,6 +12,7 @@ import {
   createDimensionlessQuantity,
   createQuantity,
   divideQuantities,
+  formatDimension,
   getUnitSpec,
   isDimensionless,
   multiplyQuantities,
@@ -38,6 +39,7 @@ export type EvaluationContext = {
   resolveIdentifier: (name: string) => Quantity | undefined;
   resolveLookup?: (functionName: string, args: PrimitiveArgument[]) => number | Quantity;
   ignoreUnitCompatibility?: boolean;
+  onWarning?: (message: string) => void;
 };
 
 export type EvaluationResult =
@@ -380,11 +382,33 @@ function evaluateBinary(
       const result = addQuantities(left.value, right.value);
       if (!result.ok) {
         if (context.ignoreUnitCompatibility) {
+          context.onWarning?.(
+            `incompatible units: ${formatDimension(left.value.dimension)} and ${formatDimension(
+              right.value.dimension
+            )}`
+          );
+          let quantity: Quantity;
+          if (isDimensionless(left.value.dimension)) {
+            quantity = {
+              ...right.value,
+              valueSi: left.value.valueSi + right.value.valueSi,
+            };
+          } else if (isDimensionless(right.value.dimension)) {
+            quantity = {
+              ...left.value,
+              valueSi: left.value.valueSi + right.value.valueSi,
+            };
+          } else {
+            quantity = {
+              ...left.value,
+              valueSi: left.value.valueSi + right.value.valueSi,
+            };
+          }
           return {
             ok: true,
             value: {
               kind: "quantity",
-              quantity: createDimensionlessQuantity(left.value.valueSi + right.value.valueSi),
+              quantity,
             },
           };
         }
@@ -403,11 +427,33 @@ function evaluateBinary(
       const result = subtractQuantities(left.value, right.value);
       if (!result.ok) {
         if (context.ignoreUnitCompatibility) {
+          context.onWarning?.(
+            `incompatible units: ${formatDimension(left.value.dimension)} and ${formatDimension(
+              right.value.dimension
+            )}`
+          );
+          let quantity: Quantity;
+          if (isDimensionless(left.value.dimension)) {
+            quantity = {
+              ...right.value,
+              valueSi: left.value.valueSi - right.value.valueSi,
+            };
+          } else if (isDimensionless(right.value.dimension)) {
+            quantity = {
+              ...left.value,
+              valueSi: left.value.valueSi - right.value.valueSi,
+            };
+          } else {
+            quantity = {
+              ...left.value,
+              valueSi: left.value.valueSi - right.value.valueSi,
+            };
+          }
           return {
             ok: true,
             value: {
               kind: "quantity",
-              quantity: createDimensionlessQuantity(left.value.valueSi - right.value.valueSi),
+              quantity,
             },
           };
         }
@@ -927,6 +973,12 @@ export function evaluateExpressionWithOutputUnit(
 
   const converted = applyOutputUnit(evaluated.quantity, outputUnit);
   if (!converted.ok) {
+    if (context.ignoreUnitCompatibility) {
+      context.onWarning?.(converted.error);
+      return {
+        ...evaluated,
+      };
+    }
     return {
       ok: false,
       error: converted.error,

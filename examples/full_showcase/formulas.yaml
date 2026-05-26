@@ -3,9 +3,9 @@ power:
   unit: W
 
 efficiency:
-  formula: (power / 72W) * 100
-  unit: "%"
+  formula: (power / 72 W)
+  unit: %
 
-ntc_temperature:
+ntc_resistance:
   formula: csv("data/ntc_10k.csv", "25", "temperature", "resistance")
-  unit: degc
+  unit: ohm

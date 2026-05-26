@@ -2,5 +2,5 @@
 #pragma once
 
 // Formula: R6 = csv("table.csv", "24.9", "temp", "res", "linear")
-#define R6                               (10080)  // [degc]
+#define R6                               (10080)  // [ohm]
 

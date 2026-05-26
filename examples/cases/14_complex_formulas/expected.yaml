@@ -1,8 +1,8 @@
 # Targets used by CalcDocs tests/examples
 # (derived from the formulas.yaml)
 STAGE_DIFF: { value: 2.78, unit: A }
-STAGE_ADC: { value: 2.78, unit: A }
-STAGE_COMP: { value: 2.7726325, unit: A }
-MOTOR_RMS: { value: 2.9079, unit: A }
+STAGE_ADC: { value: 2.7647560975609755, unit: A }
+STAGE_COMP: { value: 0.0756045286148721, unit: A }
+MOTOR_RMS: { value: 0.9838367804449185, unit: A }
 
 

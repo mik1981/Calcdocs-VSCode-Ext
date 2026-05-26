@@ -79,6 +79,7 @@ export type EvaluatedYamlSymbol = {
   yamlValue?: number;
   errors: string[];
   warnings: string[];
+  isParameterized?: boolean;
 };
 
 export type YamlEvaluationResult = {
@@ -767,7 +768,14 @@ export function evaluateYamlDocument(
       return result;
     }
 
+    const hasUnknownVariables = symbol.dependencies.some(
+      (dep) => !symbols.has(dep) && !externalUnits.has(dep) && !externalValues.has(dep)
+    );
+
+    result.isParameterized = hasUnknownVariables;
+
     const context: EvaluationContext = {
+      ignoreUnitCompatibility: hasUnknownVariables,
       resolveIdentifier: (identifier: string): Quantity | undefined => {
         // 1. Prova a risolvere dai simboli YAML già valutati o in corso di valutazione
         if (symbols.has(identifier)) {
@@ -802,10 +810,6 @@ export function evaluateYamlDocument(
       },
       resolveLookup: (functionName, args) => csvLookup(functionName, args),
     };
-
-    const hasUnknownVariables = symbol.dependencies.some(
-      (dep) => !symbols.has(dep) && !externalUnits.has(dep) && !externalValues.has(dep)
-    );
 
     const evaluatedExpression = evaluateExpressionAst(symbol.ast, context);
     if (!evaluatedExpression.ok) {

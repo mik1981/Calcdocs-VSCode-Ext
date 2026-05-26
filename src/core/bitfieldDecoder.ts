@@ -357,8 +357,9 @@ export function matchesContext(
 
   // Determine which prefix to use for define validation.
   let matchedPrefix: string | null = null;
+  const hasDefineContext = allDefines !== undefined;
 
-  if (allDefines && allDefines.size > 0) {
+  if (hasDefineContext) {
     matchedPrefix = resolveDefinePrefix(accessParts[0], accessParts[1], allDefines) ?? null;
   } else {
     const strippedFirstToken = accessParts[0].replace(/\d+$/, "");
@@ -366,17 +367,19 @@ export function matchesContext(
       ? `${strippedFirstToken}_${accessParts[1]}`
       : `${strippedFirstToken}_${accessParts.slice(1).join("_")}`;
 
-    matchedPrefix =
-      entry.registerPrefix === candidatePrefix || entry.registerPrefix === candidatePrefixAlt
-        ? entry.registerPrefix
-        : null;
+    const prefixMatches =
+      entry.registerPrefix === candidatePrefix || entry.registerPrefix === candidatePrefixAlt;
+    const fieldMatches =
+      accessParts.length < 3 || accessParts[2] === entry.name;
+
+    matchedPrefix = prefixMatches && fieldMatches ? entry.registerPrefix : null;
   }
 
   if (!matchedPrefix) {
     return false;
   }
 
-  if (allDefines && allDefines.size > 0) {
+  if (hasDefineContext) {
     const hasDefines = hasPositionalOrMaskDefines(matchedPrefix, allDefines);
     if (!hasDefines) {
       return false;
@@ -406,7 +409,7 @@ function hasPositionalOrMaskDefines(
     : `${prefix}_`;
 
   const rx = new RegExp(
-    `^${escapeRegexForPrefix(normalizedPrefix)}[A-Za-z0-9_]+(?:_(?:Pos|pos|Msk|msk))?$`
+    `^${escapeRegexForPrefix(normalizedPrefix)}[A-Za-z0-9_]+_(?:Pos|pos|Msk|msk)$`
   );
 
   for (const name of allDefines.keys()) {

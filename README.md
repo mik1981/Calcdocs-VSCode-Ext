@@ -1,9 +1,10 @@
-# 🧮 CalcDocs — Instantly See What Your Firmware REALLY Computes [0.2.8 *prerelease*]
+# 🧮 CalcDocs — Instantly See What Your Firmware REALLY Computes
 
 <p align="center">
   <b>Reveal hidden firmware values directly inside VS Code.</b><br>
   Inline calculations • Macro value expansion • Engineering formulas • Unit conversions<br><br>
-  <b>Live engineering knowledge embedded directly into firmware.</b>
+  <b>Live engineering knowledge embedded directly into firmware.</b><br>
+  <b>Stop rebuilding firmware formulas in Excel ➡️ Reuse the originals directly.</b>
 </p>
 
 ---
@@ -12,7 +13,6 @@
 [![Download](https://vsmarketplacebadges.dev/downloads-short/convergo-dev.calcdocs-vscode-extension.svg)](https://visualstudio.com)
 [![License](./resources/license-badge.png)](./LICENSE.md)
 
-> [!IMPORTANT]
 > Firmware logic is often invisible.
 >
 > Values are buried behind:
@@ -91,7 +91,6 @@ CalcDocs evaluates everything live:
 
 ---
 
-> [!TIP]
 > Keep engineering calculations close to the firmware logic instead of:
 > - Excel sheets
 > - random `.txt` files
@@ -101,7 +100,29 @@ CalcDocs evaluates everything live:
 
 ---
 
-## 3️⃣ Macro Chain Revelation
+## 3️⃣ Interactive Formula Explorer
+
+Explore firmware formulas as a live dependency graph directly inside VS Code.
+
+![Macro Chain Revelation in code](./resources/interactive_formula_viewer.gif)
+
+CalcDocs keeps formulas and firmware intrinsically synchronized.
+
+The same engineering logic can now:
+
+✅ live next to production code  
+✅ be evaluated in real time  
+✅ be reused during debugging  
+✅ propagate through dependencies automatically  
+✅ stay permanently aligned with the firmware implementation  
+
+No duplicated engineering logic.  
+No spreadsheet drift.  
+No parallel maintenance.  
+
+---
+
+## 4️⃣ Macro Chain Revelation
 
 | File | Preview |
 | :---: | :---: |
@@ -114,8 +135,7 @@ CalcDocs evaluates everything live:
 
 | Before | After |
 | :---: | :---: |
-| **Before** | ![Before](./resources/firmware_blindness_before.png) |
-| **After** | ![After](./resources/firmware_blindness_after.png) |
+| ![Before](./resources/firmware_blindness_before.png) | ![After](./resources/firmware_blindness_after.png) |
 
 ---
 
@@ -152,7 +172,6 @@ Understanding a single value may require:
 
 ---
 
-> [!WARNING]
 > Most firmware projects suffer from:
 > - duplicated formulas
 > - stale spreadsheets
@@ -203,7 +222,6 @@ Detect issues early:
 
 ---
 
-> [!IMPORTANT]
 > CalcDocs is designed for real embedded firmware workflows.
 
 ---
@@ -262,7 +280,6 @@ It is:
 
 ---
 
-> [!NOTE]
 > CalcDocs focuses on one thing:
 >
 > **making firmware numeric logic visible.**
@@ -283,7 +300,6 @@ CalcDocs integrates without conflicts.
 
 ---
 
-> [!TIP]
 > CalcDocs supports engineering prefixes automatically:
 >
 > `mV`, `uV`, `nV`, `kV`, `MHz`, `mA`, etc.
@@ -315,6 +331,7 @@ Full documentation available on GitHub:
 - 👉 [Limitations](https://github.com/mik1981/Calcdocs-VSCode-Extension/blob/main/docs/limitations.md)
 - 👉 [Contributing](https://github.com/mik1981/Calcdocs-VSCode-Extension/blob/main/docs/contributing.md)
 - 👉 [Inline Calculations](https://github.com/mik1981/Calcdocs-VSCode-Extension/blob/main/docs/inline-calculations.md)
+- 👉 [Interactive Formula Viewer](https://github.com/mik1981/Calcdocs-VSCode-Extension/blob/main/docs/interactive-formula-viewer.md)
 
 ---
 

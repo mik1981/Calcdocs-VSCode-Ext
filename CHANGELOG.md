@@ -1,6 +1,20 @@
 # Changelog
 
-## [0.2.8] - 05/19/2026
+## [0.3.0] - 05/26/2026
+
+- Added sponsor badge
+- Rounded computed values to 6 meaningful digits
+- Added interactive formula viewer for formula*.yaml
+- Added interactive formula viewer for c files with inline calculation
+- Improved and fixed example snippets
+
+### Upcoming Features:
+
+- Visual dependency graph
+- Fixed-point Analyzer (Q15/Q31)
+- Join formulaoutline and unit in one only formula parser
+
+## [0.2.8] - 05/20/2026
 
 - Added 13_bitfield_decoder example case
 - Added bitfield decoder support (currently validated with ST register-definition structs)
@@ -10,15 +24,6 @@
 - Fixed false-positive ghost values on enum types
 - Extended `CalcDocs: Formulas` explorer view in VSCode for formula navigation and inspection
 - Fixed prevent partial temperature conversion on lookup table load
-
-### Upcoming Features:
-
-- Visual dependency graph
-- Fixed-point Analyzer (Q15/Q31)
-- Rounding computed value at 6 meanfull
-- Join formulaoutline and unit in one only formula parser
-- Interactive formula viewer
-![Interactive formula viewer](./resources/interactive_formula_viewer.png)
 
 ## [0.2.7] - 05/12/2026
 

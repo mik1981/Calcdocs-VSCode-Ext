@@ -1,0 +1,751 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-PLACEHOLDER_NONCE'; img-src data:;">
+<title>CalcDocs Interactive View</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; }
+body {
+  margin: 0;
+  height: 100vh;
+  overflow: hidden;
+  color: var(--vscode-editor-foreground);
+  background: var(--vscode-editor-background);
+  font-family: var(--vscode-font-family, Segoe UI, sans-serif);
+  font-size: var(--vscode-font-size, 13px);
+}
+button, input { font: inherit; }
+.layout {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  height: 100vh;
+  min-width: 0;
+}
+.sidebar {
+  border-right: 1px solid var(--vscode-widget-border);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.main {
+  min-width: 0;
+  overflow: auto;
+}
+.header {
+  min-height: 36px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--vscode-widget-border);
+  color: var(--vscode-descriptionForeground);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0;
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+.badge {
+  background: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+  border-radius: 6px;
+  padding: 1px 6px;
+  font-size: 0.68rem;
+}
+.file-label {
+  padding: 8px 10px 4px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 0.78rem;
+  word-break: break-all;
+}
+.formula-list {
+  overflow: auto;
+  padding: 6px;
+}
+.formula-item {
+  width: 100%;
+  border: 0;
+  border-radius: 5px;
+  padding: 7px 8px;
+  margin: 0 0 3px;
+  background: transparent;
+  color: var(--vscode-foreground);
+  text-align: left;
+  cursor: pointer;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+.formula-item:hover { background: var(--vscode-list-hoverBackground); }
+.formula-item.selected {
+  background: var(--vscode-list-activeSelectionBackground);
+  color: var(--vscode-list-activeSelectionForeground);
+}
+.formula-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  font-family: var(--vscode-editor-font-family, Consolas, monospace);
+}
+.formula-meta {
+  color: var(--vscode-descriptionForeground);
+  font-size: 0.76rem;
+  font-family: var(--vscode-editor-font-family, Consolas, monospace);
+}
+.formula-type-icon {
+  font-size: 0.70rem;
+  font-weight: 700;
+  font-style: normal;
+  margin-right: 5px;
+  opacity: 0.85;
+  font-family: var(--vscode-editor-font-family, Consolas, monospace);
+}
+.formula-type-icon.type-formula {
+  color: var(--vscode-symbolIcon-functionForeground, #569cd6);
+}
+.formula-type-icon.type-constant {
+  color: var(--vscode-symbolIcon-constantForeground, #d19a66);
+}
+.main-head {
+  border-bottom: 1px solid var(--vscode-widget-border);
+  padding: 14px 18px 12px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 18px;
+  align-items: center;
+}
+.root-title {
+  min-width: 0;
+}
+.root-name {
+  margin: 0;
+  font-size: 1.25rem;
+  line-height: 1.25;
+  font-weight: 700;
+  font-family: var(--vscode-editor-font-family, Consolas, monospace);
+  overflow-wrap: anywhere;
+}
+.root-expression {
+  margin-top: 5px;
+  color: var(--vscode-descriptionForeground);
+  font-family: var(--vscode-editor-font-family, Consolas, monospace);
+  overflow-wrap: anywhere;
+}
+.result-box {
+  min-width: 190px;
+  text-align: right;
+}
+.result-label {
+  color: var(--vscode-descriptionForeground);
+  text-transform: uppercase;
+  letter-spacing: 0;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+.result-value {
+  margin-top: 2px;
+  font-size: 2rem;
+  line-height: 1.1;
+  font-weight: 700;
+  font-family: var(--vscode-editor-font-family, Consolas, monospace);
+}
+.result-unit {
+  color: var(--vscode-descriptionForeground);
+  font-family: var(--vscode-editor-font-family, Consolas, monospace);
+}
+.content {
+  padding: 12px 18px 24px;
+  max-width: 1180px;
+}
+.section {
+  border-bottom: 1px solid var(--vscode-widget-border);
+  padding: 12px 0;
+}
+.section:first-child { padding-top: 0; }
+.section-title {
+  margin: 0 0 7px;
+  color: var(--vscode-descriptionForeground);
+  text-transform: uppercase;
+  letter-spacing: 0;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+pre.yaml, pre.expression {
+  margin: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--vscode-widget-border);
+  border-radius: 5px;
+  background: var(--vscode-textCodeBlock-background, rgba(127,127,127,0.12));
+  color: var(--vscode-editor-foreground);
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--vscode-editor-font-family, Consolas, monospace);
+  font-size: 0.86rem;
+}
+.tree {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.node {
+  border-left: 2px solid var(--vscode-widget-border);
+  padding-left: 10px;
+}
+.node.depth-0 { border-left-color: var(--vscode-focusBorder); }
+.node.depth-1 { border-left-color: #d19a66; }
+.node.depth-2 { border-left-color: #98c379; }
+.node.depth-3 { border-left-color: #56b6c2; }
+.node.depth-4 { border-left-color: #c678dd; }
+.node.depth-5 { border-left-color: #e06c75; }
+.node-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: baseline;
+  padding: 3px 0 5px;
+}
+.node-name {
+  font-family: var(--vscode-editor-font-family, Consolas, monospace);
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+.node-result {
+  font-family: var(--vscode-editor-font-family, Consolas, monospace);
+  color: var(--vscode-editor-foreground);
+  white-space: nowrap;
+}
+.node-expression {
+  color: var(--vscode-descriptionForeground);
+  font-family: var(--vscode-editor-font-family, Consolas, monospace);
+  overflow-wrap: anywhere;
+  margin: 0 0 6px;
+}
+.params {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.param-row {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) minmax(120px, auto) auto;
+  gap: 8px;
+  align-items: center;
+  min-height: 30px;
+  padding: 4px 6px;
+  border-radius: 5px;
+}
+.param-row:hover { background: var(--vscode-list-hoverBackground); }
+.param-row.overridden { outline: 1px solid rgba(86, 156, 214, 0.7); }
+.param-row.calculated { background: rgba(127, 127, 127, 0.08); }
+.param-row.invalid { outline: 1px solid var(--vscode-errorForeground); }
+.param-row.propagation { border-left: 3px solid #d19a66; }
+.param-row.last { background: rgba(86, 156, 214, 0.16); }
+.param-name {
+  min-width: 0;
+  font-family: var(--vscode-editor-font-family, Consolas, monospace);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.param-origin {
+  display: inline-flex;
+  margin-left: 6px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 0.72rem;
+  font-family: var(--vscode-font-family, Segoe UI, sans-serif);
+  font-weight: 500;
+}
+.param-value {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+  min-width: 0;
+  font-family: var(--vscode-editor-font-family, Consolas, monospace);
+}
+.param-value input {
+  width: 110px;
+  max-width: 100%;
+  min-width: 0;
+  padding: 3px 6px;
+  color: var(--vscode-input-foreground);
+  background: var(--vscode-input-background);
+  border: 1px solid var(--vscode-input-border, var(--vscode-widget-border));
+  border-radius: 4px;
+  text-align: right;
+  font-family: var(--vscode-editor-font-family, Consolas, monospace);
+}
+.param-value input:focus {
+  outline: 1px solid var(--vscode-focusBorder);
+}
+.param-unit {
+  color: var(--vscode-descriptionForeground);
+  white-space: nowrap;
+}
+details.nested {
+  grid-column: 1 / -1;
+  margin: 2px 0 0 14px;
+}
+details.nested > summary {
+  cursor: pointer;
+  color: var(--vscode-textLink-foreground);
+  font-size: 0.82rem;
+  user-select: none;
+}
+.message {
+  margin: 5px 0;
+  padding: 6px 8px;
+  border-radius: 5px;
+  background: rgba(127, 127, 127, 0.10);
+  color: var(--vscode-descriptionForeground);
+}
+.message.error {
+  color: var(--vscode-errorForeground);
+  background: rgba(224, 108, 117, 0.12);
+}
+.message.warning {
+  color: var(--vscode-editorWarning-foreground, #cca700);
+  background: rgba(204, 167, 0, 0.12);
+}
+.param-row .message { grid-column: 1 / -1; }
+.steps {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.step {
+  border-left: 2px solid var(--vscode-widget-border);
+  padding-left: 8px;
+  font-family: var(--vscode-editor-font-family, Consolas, monospace);
+}
+.step-name { font-weight: 700; }
+.step-expr, .step-resolved {
+  color: var(--vscode-descriptionForeground);
+  overflow-wrap: anywhere;
+}
+.empty {
+  color: var(--vscode-descriptionForeground);
+  padding: 18px;
+}
+@media (max-width: 760px) {
+  .layout { grid-template-columns: 1fr; grid-template-rows: 220px 1fr; }
+  .sidebar { border-right: 0; border-bottom: 1px solid var(--vscode-widget-border); }
+  .main-head { grid-template-columns: 1fr; }
+  .result-box { text-align: left; }
+  .param-row { grid-template-columns: 1fr; }
+  .param-value { justify-content: flex-start; }
+}
+</style>
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="header"><span>Formulas</span><span class="badge" id="formula-count">0</span></div>
+    <div class="file-label" id="active-file-name"></div>
+    <div class="formula-list" id="formula-list"></div>
+  </aside>
+  <main class="main">
+    <div class="main-head">
+      <div class="root-title">
+        <h1 class="root-name" id="root-name">Select a formula</h1>
+        <div class="root-expression" id="root-expression"></div>
+      </div>
+      <div class="result-box">
+        <div class="result-label">Realtime result</div>
+        <div class="result-value" id="result-value">-</div>
+        <div class="result-unit" id="result-unit"></div>
+      </div>
+    </div>
+    <div class="content" id="content">
+      <div class="empty">No formula selected.</div>
+    </div>
+  </main>
+</div>
+
+<!-- INJECT_INITIAL_JSON -->
+
+<script nonce="PLACEHOLDER_NONCE">
+"use strict";
+
+const vscode = acquireVsCodeApi();
+const initial = window.__CALCDOCS_INITIAL || {};
+const persisted = vscode.getState() || {};
+
+let formulas = initial.formulas || [];
+let selectedId = persisted.selectedId || initial.selectedFormulaId || (formulas[0] && formulas[0].id) || null;
+let params = persisted.params || {};
+let values = {};
+let units = {};
+let errors = {};
+let warnings = {};
+let currentTree = null;
+let steps = [];
+let openNodes = new Set(persisted.openNodes || []);
+let lastActive = null;
+let propagation = [];
+let inputDebounceTimer = null;
+
+function escapeHtml(value) {
+  return String(value == null ? "" : value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function fmt(value) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "-";
+  const abs = Math.abs(value);
+  if (abs === 0) return "0";
+  if (abs >= 1e6 || abs < 1e-4) return value.toExponential(5);
+  if (abs >= 100) return Number.parseFloat(value.toPrecision(7)).toString();
+  return Number.parseFloat(value.toPrecision(8)).toString();
+}
+
+function valueWithUnit(value, unit) {
+  const formatted = fmt(value);
+  return unit ? `${formatted} ${unit}` : formatted;
+}
+
+function selectedFormula() {
+  return formulas.find((formula) => formula.id === selectedId) || null;
+}
+
+function findInputByName(name) {
+  return Array.from(document.querySelectorAll("input[data-name]"))
+    .find((input) => input.dataset.name === name) || null;
+}
+
+function persist() {
+  vscode.setState({
+    selectedId,
+    params,
+    openNodes: Array.from(openNodes),
+  });
+}
+
+function setFileLabel(label) {
+  const el = document.getElementById("active-file-name");
+  el.textContent = label ? label.split(/[/\\]/).pop() : "";
+  el.title = label || "";
+}
+
+function renderFormulaList() {
+  const list = document.getElementById("formula-list");
+  document.getElementById("formula-count").textContent = String(formulas.length);
+
+  if (!formulas.length) {
+    list.innerHTML = '<div class="empty">No formulas found.</div>';
+    return;
+  }
+
+  list.innerHTML = formulas.map((formula) => {
+    const value = values[formula.id] !== undefined ? values[formula.id] : formula.value;
+    const unit = units[formula.id] || formula.unit || "";
+    const isConst = formula.type === "constant";
+    const typeClass = isConst ? "type-constant" : "type-formula";
+    const typeIcon = isConst ? "#" : "ƒ";
+    return `
+      <button class="formula-item ${formula.id === selectedId ? "selected" : ""}" data-id="${escapeHtml(formula.id)}">
+        <span class="formula-name">
+          <span class="formula-type-icon ${typeClass}" title="${isConst ? "constant" : "formula"}">${typeIcon}</span>${escapeHtml(formula.name)}
+        </span>
+        <span class="formula-meta">${escapeHtml(valueWithUnit(value, unit))}</span>
+      </button>`;
+  }).join("");
+
+  list.querySelectorAll(".formula-item").forEach((button) => {
+    button.addEventListener("click", () => selectFormula(button.dataset.id));
+  });
+}
+
+function renderRootHeader(formula, tree) {
+  document.getElementById("root-name").textContent = formula ? formula.name : "Select a formula";
+  document.getElementById("root-expression").textContent = formula ? formula.expression || "" : "";
+
+  const resultValue =
+    tree && tree.result && tree.result.value !== undefined
+      ? tree.result.value
+      : formula && values[formula.id] !== undefined
+        ? values[formula.id]
+        : formula && formula.value !== undefined
+          ? formula.value
+          : undefined;
+  const resultUnit =
+    tree && tree.result && tree.result.unit
+      ? tree.result.unit
+      : formula
+        ? units[formula.id] || formula.unit
+        : "";
+
+  document.getElementById("result-value").textContent = fmt(resultValue);
+  document.getElementById("result-unit").textContent = resultUnit || "";
+}
+
+function renderMessages(items, kind) {
+  if (!items || !items.length) return "";
+  return items.map((message) => `<div class="message ${kind}">${escapeHtml(message)}</div>`).join("");
+}
+
+function inputValue(input) {
+  if (params[input.name] !== undefined) return params[input.name];
+  if (input.currentValue !== undefined) return input.currentValue;
+  if (input.defaultValue !== undefined) return input.defaultValue;
+  return "";
+}
+
+function originLabel(input) {
+  if (input.overridden) return "overridden";
+  if (input.kind === "formula") return "formula";
+  if (input.kind === "constant") return "yaml";
+  if (input.kind === "external") return "c/c++";
+  return "input";
+}
+
+function renderParam(input, child) {
+  const invalid = input.errors && input.errors.length;
+  const classes = [
+    "param-row",
+    input.overridden ? "overridden" : "",
+    input.calculated ? "calculated" : "",
+    invalid ? "invalid" : "",
+    propagation.includes(input.name) ? "propagation" : "",
+    lastActive === input.name ? "last" : "",
+  ].filter(Boolean).join(" ");
+  const unit = input.unit || "";
+  const val = input.currentValue !== undefined ? input.currentValue : input.defaultValue;
+  const editable = input.editable !== false;
+  const valueCell = editable
+    ? `<input type="number" step="any" data-name="${escapeHtml(input.name)}" value="${escapeHtml(inputValue(input))}">`
+    : `<span>${escapeHtml(valueWithUnit(val, unit))}</span>`;
+  const unitCell = editable && unit ? `<span class="param-unit">${escapeHtml(unit)}</span>` : "";
+  const nested = child
+    ? `<details class="nested" data-node="${escapeHtml(child.instanceId || child.name)}" ${openNodes.has(child.instanceId || child.name) ? "open" : ""}>
+         <summary>details</summary>
+         ${renderNode(child)}
+       </details>`
+    : "";
+
+  return `
+    <div class="${classes}" data-name="${escapeHtml(input.name)}">
+      <div class="param-name">
+        ${escapeHtml(input.name)}
+        <span class="param-origin">${escapeHtml(originLabel(input))}</span>
+      </div>
+      <div class="param-value">${valueCell}${unitCell}</div>
+      <div class="param-value">${input.kind === "formula" && !child ? "depth limit" : ""}</div>
+      ${renderMessages(input.errors, "error")}
+      ${renderMessages(input.warnings, "warning")}
+      ${nested}
+    </div>`;
+}
+
+function renderNode(node) {
+  const nodeKey = node.instanceId || node.name;
+  const result = node.result || {};
+  const value = result.value !== undefined ? result.value : values[node.name];
+  const unit = result.unit || units[node.name] || node.unit || "";
+  const childByName = new Map((node.children || []).map((child) => [child.name, child]));
+  const paramsHtml = (node.localInputs || [])
+    .map((input) => renderParam(input, childByName.get(input.name)))
+    .join("");
+  const depthClass = `depth-${Math.min(node.depth || 0, 5)}`;
+  const depthLimited = node.depthLimited
+    ? '<div class="message warning">Maximum nested depth reached.</div>'
+    : "";
+  const cycle = node.cycle
+    ? `<div class="message error">Cycle: ${escapeHtml((node.cyclePath || []).join(" -> "))}</div>`
+    : "";
+
+  return `
+    <section class="node ${depthClass}" data-node="${escapeHtml(nodeKey)}">
+      <div class="node-header">
+        <div class="node-name">${escapeHtml(node.name)}</div>
+        <div class="node-result">${escapeHtml(valueWithUnit(value, unit))}</div>
+      </div>
+      ${node.expression ? `<div class="node-expression">${escapeHtml(node.expression)}</div>` : ""}
+      ${renderMessages(node.errors, "error")}
+      ${renderMessages(node.warnings, "warning")}
+      ${depthLimited}
+      ${cycle}
+      ${paramsHtml ? `<div class="params">${paramsHtml}</div>` : ""}
+    </section>`;
+}
+
+function renderSteps() {
+  if (!steps.length) {
+    return '<div class="message">No intermediate steps yet.</div>';
+  }
+
+  return `<div class="steps">${steps.map((step) => `
+    <div class="step">
+      <div class="step-name">${escapeHtml(step.name)} = ${escapeHtml(valueWithUnit(step.result, step.unit || ""))}</div>
+      <div class="step-expr">${escapeHtml(step.expression)}</div>
+      <div class="step-resolved">${escapeHtml(step.resolved)}</div>
+    </div>`).join("")}</div>`;
+}
+
+function renderContent() {
+  const formula = selectedFormula();
+  const tree = currentTree || (formula && formula.tree) || null;
+  renderRootHeader(formula, tree);
+  renderFormulaList();
+
+  const content = document.getElementById("content");
+  if (!formula || !tree) {
+    content.innerHTML = '<div class="empty">No formula selected.</div>';
+    return;
+  }
+
+  const rawYaml = tree.rawYaml || formula.rawYaml || "";
+  // Genera un finto blocco YAML pulito se la sorgente è un file C (ovvero non ha un rawYaml di partenza)
+  const fallbackYaml = `${formula.name}:\n  formula: ${formula.expression || ""}${formula.unit ? `\n  unit: ${formula.unit}` : ""}`;
+
+  content.innerHTML = `
+    <section class="section">
+      <h2 class="section-title">Original Formula Source</h2>
+      <pre class="yaml">${escapeHtml(rawYaml || fallbackYaml)}</pre>
+    </section>
+    <section class="section">
+      <h2 class="section-title">Original Expression</h2>
+      <pre class="expression">${escapeHtml(formula.expression || tree.expression || "")}</pre>
+    </section>
+    <section class="section">
+      <h2 class="section-title">Dependency Tree</h2>
+      <div class="tree">${renderNode(tree)}</div>
+    </section>
+    <section class="section">
+      <h2 class="section-title">Evaluation</h2>
+      ${renderSteps()}
+    </section>`;
+
+  attachInputHandlers();
+  attachDetailsHandlers();
+}
+
+function attachDetailsHandlers() {
+  document.querySelectorAll("details.nested").forEach((details) => {
+    details.addEventListener("toggle", () => {
+      const key = details.dataset.node;
+      if (!key) return;
+      if (details.open) openNodes.add(key);
+      else openNodes.delete(key);
+      persist();
+    });
+  });
+}
+
+function attachInputHandlers() {
+  document.querySelectorAll("input[data-name]").forEach((input) => {
+    input.addEventListener("input", () => {
+      const name = input.dataset.name;
+      if (!name) return;
+      const parsed = Number.parseFloat(input.value);
+      if (Number.isFinite(parsed)) params[name] = parsed;
+      else delete params[name];
+      persist();
+
+      // Aggiorna i parametri subito ma ritarda la valutazione:
+      // così si può scrivere "1234" senza che ogni cifra
+      // scateni un re-render che sposta il cursore.
+      clearTimeout(inputDebounceTimer);
+      inputDebounceTimer = setTimeout(() => {
+        requestEvaluation(name);
+      }, 350);
+    });
+  });
+}
+
+function requestEvaluation(changedId) {
+  if (!selectedId) return;
+  vscode.postMessage({
+    action: "updateInput",
+    formulaId: selectedId,
+    inputs: params,
+    changedId: changedId || undefined,
+  });
+}
+
+function selectFormula(id) {
+  selectedId = id;
+  currentTree = null;
+  steps = [];
+  persist();
+  renderContent();
+  requestEvaluation(undefined);
+}
+
+function applyResult(message) {
+  const focused = document.activeElement && document.activeElement.dataset
+    ? document.activeElement.dataset.name
+    : null;
+  values = message.values || {};
+  units = message.units || {};
+  errors = message.errors || {};
+  warnings = message.warnings || {};
+  currentTree = message.tree || currentTree;
+  lastActive = message.last || null;
+  propagation = message.propagation || [];
+  if (message.params) params = message.params;
+  steps = message.steps || (currentTree && currentTree.name ? collectStepsFromTree(currentTree) : steps);
+  renderContent();
+  if (focused) {
+    const input = findInputByName(focused);
+    if (input) {
+      input.focus();
+      input.selectionStart = input.value.length;
+      input.selectionEnd = input.value.length;
+    }
+  }
+}
+
+function collectStepsFromTree(tree) {
+  const collected = [];
+  const walk = (node) => {
+    if (node.expression && node.result && node.result.value !== undefined) {
+      collected.push({
+        name: node.name,
+        expression: node.expression,
+        resolved: node.expression,
+        result: node.result.value,
+        unit: node.result.unit || node.unit,
+      });
+    }
+    (node.children || []).forEach(walk);
+  };
+  walk(tree);
+  return collected;
+}
+
+window.addEventListener("message", ({ data: message }) => {
+  if (!message || !message.action) return;
+
+  if (message.action === "updateResult") {
+    applyResult(message);
+    return;
+  }
+
+  if (message.action === "updateFormulas") {
+    formulas = message.formulas || [];
+    selectedId = message.selectedFormulaId || (formulas[0] && formulas[0].id) || null;
+    currentTree = null;
+    setFileLabel(message.activeFileName || "");
+    renderContent();
+    requestEvaluation(undefined);
+    return;
+  }
+
+  if (message.action === "forceSelect") {
+    selectFormula(message.formulaId);
+  }
+});
+
+setFileLabel(initial.activeFileName || "");
+renderContent();
+if (selectedId) requestEvaluation(undefined);
+</script>
+</body>
+</html>

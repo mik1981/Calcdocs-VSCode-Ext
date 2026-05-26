@@ -1,471 +1,331 @@
-import * as vscode from 'vscode';
-import * as path from 'path';
-import * as fs from 'fs';
-import * as crypto from 'crypto';
+import * as crypto from "crypto";
+import * as fs from "fs";
+import * as path from "path";
+import * as vscode from "vscode";
 
-import { CalcDocsState } from '../core/state';
-import { evaluateExpression, type EvaluationContext } from '../engine/evaluator';
-import { evaluateInlineCalcs } from '../core/inlineCalc';
-import { parseFormulaDocument } from '../formulaOutline/formulaParser';
-import { hasUnit, Quantity, DIMENSIONLESS } from '../engine/units';
-
+import { evaluateInlineCalcs } from "../core/inlineCalc";
+import type { CalcDocsState } from "../core/state";
+import type { FormulaEntry as CoreFormulaEntry } from "../types/FormulaEntry";
+import { parseFormulaDocument } from "../formulaOutline/formulaParser";
+import {
+  InteractiveFormulaEngine,
+  buildInteractiveFormulaEntries,
+} from "./interactiveFormulaEngine";
 import type {
-  FormulaEntry,
-  FormulaTreeNode,
-  FormulaInputNode,
-  EvalStep,
-  EvaluationState,
-  HistoryEntry,
-  InteractiveSnapshot,
-  ExtensionToWebviewMsg,
-  WebviewToExtensionMsg,
   CalcDocsInitialData,
-} from './webview-types';
+  ExtensionToWebviewMsg,
+  FormulaEntry,
+  WebviewToExtensionMsg,
+} from "./webview-types";
+import { extractFormulasFromCpp, isCppLanguage, isCppExtension } from "../extractors/cppFormulaExtractor";
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+type FormulaViewModel = {
+  entries: CoreFormulaEntry[];
+  formulas: FormulaEntry[];
+  engine: InteractiveFormulaEngine;
+};
 
-function buildInputNode(name: string, state: CalcDocsState): FormulaInputNode {
-  const childFormula = state.formulaIndex.get(name);
-
-  return {
-    name,
-    unit: state.symbolUnits.get(name),
-    defaultValue: state.symbolValues.get(name),
-    hasDefault: state.symbolValues.has(name),
-    kind: childFormula?.formula ? 'formula' : 'leaf',
-  };
-}
-
-function generateNonce(): string {
-  return crypto.randomBytes(16).toString('base64');
-}
-
-function generateId(): string {
-  return crypto.randomBytes(8).toString('hex');
-}
-
-function extractIdentifiersFromFormula(formula: string): Set<string> {
-  const identifiers = new Set<string>();
-  const regex = /\b([A-Za-z_][A-Za-z0-9_]*)\b(?!\()/g;
-  let match;
-  while ((match = regex.exec(formula)) !== null) {
-    const id = match[1];
-    if (['csv', 'defined', 'ifdef', 'ifndef'].includes(id.toLowerCase())) continue;
-    if (hasUnit(id)) continue;
-    identifiers.add(id);
-  }
-  return identifiers;
-}
-
-function normalizeInlineExpression(expression: string): string {
-  return expression.replace(/@([A-Za-z_]\w*)/g, '$1');
-}
-
-// ─── Dependency tree ──────────────────────────────────────────────────────────
-
-function buildDependencyTree(
-  name: string,
-  state: CalcDocsState,
-  visited = new Set<string>(),
-  depth = 0
-): FormulaTreeNode {
-  const formula = state.formulaIndex.get(name);
-
-  if (!formula?.formula) {
-    return {
-      id: name,
-      name,
-      depth,
-      expression: '',
-      unit: state.symbolUnits.get(name),
-      localInputs: [ buildInputNode(name, state) ],
-      children: [],
-    };
-  }
-
-  if (visited.has(name)) {
-    return {
-      id: name,
-      name,
-      depth,
-      expression: formula.formula,
-      unit: formula.unit,
-      localInputs: [],
-      children: [],
-    };
-  }
-
-  visited.add(name);
-
-  const identifiers = Array.from(extractIdentifiersFromFormula(formula.formula));
-  const children: FormulaTreeNode[] = [];
-  const localInputs: FormulaInputNode[] = [];
-
-  for (const id of identifiers) {
-    localInputs.push(buildInputNode(id, state))
-    
-    const childFormula = state.formulaIndex.get(id);
-    if (childFormula?.formula) {
-      children.push(buildDependencyTree(id, state, new Set(visited), depth + 1));
-    }
-  }
-
-  console.log("FORMULA", formula.formula);
-  console.log("IDENTIFIERS", identifiers);
-  console.log("LOCAL INPUTS", localInputs); 
-  
-  return {
-    id: name,
-    name,
-    depth,
-    expression: formula.formula,
-    unit: formula.unit,
-    localInputs,
-    children,
-  };
-}
-
-// ─── Formula node builder ─────────────────────────────────────────────────────
-
-function buildFormulaNodes(
+/**
+ * Verifica se c'è contenuto calcolabile sufficiente per aprire la Interactive View.
+ * Restituisce false se il file attivo non è rilevante o non contiene formule.
+ */
+export function hasInteractiveContent(
   editor: vscode.TextEditor | undefined,
   state: CalcDocsState
-): FormulaEntry[] {
+): boolean {
+  // Nessun editor aperto: controlla se lo stato ha già voci indicizzate
+  if (!editor || editor.document.uri.scheme !== "file") {
+    return Array.from(state.formulaIndex.values()).some(isFormulaLikeEntry);
+  }
 
-  if (editor) {
-    const relativePath = path.relative(state.workspaceRoot, editor.document.uri.fsPath);
-    const yamlEntries = Array.from(state.formulaIndex.values()).filter(
-      (entry) =>
-        entry._filePath === relativePath &&
-        (entry.formula || entry.valueYaml !== undefined)
-    );
+  const languageId = editor.document.languageId;
+  const fileName   = editor.document.fileName.toLowerCase();
+  const relativePath = path.relative(state.workspaceRoot, editor.document.uri.fsPath);
 
-    if (yamlEntries.length > 0) {
-      return yamlEntries.map((entry) => {
-        const tree = buildDependencyTree(entry.key, state, new Set(), 0);
-        return {
-          id: entry.key,
-          name: entry.key,
-          expression: entry.formula ?? String(entry.valueYaml ?? entry.valueCalc ?? 0),
-          unit: entry.unit,
-          localInputs: tree.localInputs, // <-- Assegna alla root
-          tree,
-          line: entry._line !== undefined ? entry._line + 1 : undefined,
-          type: entry.formula ? 'formula' : 'constant',
-        };
-      });
-    }
+  // ── File C/C++ ──────────────────────────────────────────────────────────
+  if (isCppLanguage(languageId)) {
+    // Controllo rapido: cerca almeno un'assegnazione @variable = ...
+    // senza eseguire la valutazione completa.
+    return /@[A-Za-z_][A-Za-z0-9_]*\s*=/.test(editor.document.getText());
+  }
 
-    if (/^ya?ml$/i.test(editor.document.languageId)) {
+  // ── File YAML ───────────────────────────────────────────────────────────
+  if (/^ya?ml$/i.test(languageId)) {
+    // Se ci sono già voci indicizzate per questo file, è sufficiente.
+    const hasIndexed = Array.from(state.formulaIndex.values())
+      .some(e => e._filePath === relativePath && isFormulaLikeEntry(e));
+    if (hasIndexed) return true;
+
+    // Per i file formula*.yaml, tenta un parsing leggero.
+    if (/formula.*\.ya?ml$/i.test(fileName)) {
       const outline = parseFormulaDocument(
         editor.document.getText().split(/\r?\n/),
         relativePath
       );
-      if (outline.length > 0) {
-        return outline.map((f) => {
-          const expr = f.expr || (f.value !== undefined ? String(f.value) : '');
-          const identifiers = Array.from(extractIdentifiersFromFormula(expr));
-          const localInputs = identifiers.map(n => buildInputNode(n, state));
-
-          return {
-            id: f.id,
-            name: f.id,
-            expression: expr,
-            unit: f.unit,
-            localInputs, // <-- Assegna alla root
-            tree: {
-              id: f.id,
-              name: f.id,
-              expression: expr,
-              unit: f.unit,
-              depth: 0,
-              localInputs,
-              children: [],
-            },
-            line: f.line !== undefined ? f.line + 1 : undefined,
-            type: f.expr ? 'formula' : 'constant',
-          };
-        });
-      }
+      return outline.length > 0;
     }
 
-    const inlineResults = evaluateInlineCalcs(
-      editor.document.getText(),
-      state,
-      { includeAssignments: true, includeSuppressed: true },
-      editor.document.languageId
-    );
-
-    if (inlineResults.length > 0) {
-      return inlineResults.map((result) => {
-        const expression = normalizeInlineExpression(result.expression);
-        const identifiers = Array.from(extractIdentifiersFromFormula(expression));
-        const id = `inline-${result.line}-${result.kind}-${result.variable ?? 'calc'}`;
-        const name = result.variable ? `@${result.variable}` : `calc:${result.line + 1}`;
-        const localInputs = identifiers.map(n => buildInputNode(n, state));
-
-        return {
-          id,
-          name,
-          expression,
-          unit: result.outputUnit,
-          localInputs, // <-- Assegna alla root
-          tree: {
-            id,
-            name,
-            expression,
-            unit: result.outputUnit,
-            depth: 0,
-            localInputs,
-            children: [],
-          },
-          line: result.line + 1,
-          type: result.variable ? 'formula' : 'constant',
-        };
-      });
-    }
+    return false;
   }
 
-  return Array.from(state.formulaIndex.values())
-    .filter((entry) => entry.formula || entry.valueYaml !== undefined)
-    .map((entry) => {
-      const tree = buildDependencyTree(entry.key, state, new Set(), 0);
-      return {
-        id: entry.key,
-        name: entry.key,
-        expression: entry.formula ?? String(entry.valueYaml ?? entry.valueCalc ?? 0),
-        unit: entry.unit,
-        localInputs: tree.localInputs, // <-- Assegna alla root
-        tree,
-        line: entry._line !== undefined ? entry._line + 1 : undefined,
-        type: entry.formula ? 'formula' : 'constant',
-      };
-    });
-}
-
-// ─── Evaluation engine ────────────────────────────────────────────────────────
-
-function buildExecutionOrder(formulaId: string, formulas: FormulaEntry[]): string[] {
-  const order: string[] = [];
-  const visited = new Set<string>();
-
-  function visit(id: string) {
-    if (visited.has(id)) return;
-    visited.add(id);
-
-    const f = formulas.find((x) => x.id === id);
-    if (!f) return;
-
-    const deps = Array.from(extractIdentifiersFromFormula(f.expression));
-    for (const dep of deps) {
-      if (formulas.find((x) => x.id === dep)) {
-        visit(dep);
-      }
-    }
-    order.push(id);
-  }
-
-  visit(formulaId);
-  return order;
+  return false;
 }
 
 /**
- * Evaluate a formula forward (bottom-up). Returns the final value, all
- * intermediate values, and a step trace.
+ * Aggiorna il context key VS Code usato dal menu view/title
+ * per mostrare/nascondere il bottone "Open Interactive View".
+ * Da chiamare ad ogni cambio di editor attivo o modifica del documento.
  */
-function evaluateFormulaWithState(
-  formulaId: string,
-  params: Record<string, number>,
-  state: CalcDocsState,
-  formulas: FormulaEntry[]
-): { value: number | null; error?: string; steps: EvalStep[]; allValues: Record<string, number> } {
-  const steps: EvalStep[] = [];
-  const allValues: Record<string, number> = {};
-
-  try {
-    const execOrder = buildExecutionOrder(formulaId, formulas);
-    const internalMap = new Map<string, Quantity>();
-
-    // Seed from params (user overrides) and state defaults
-    for (const [k, v] of Object.entries(params)) {
-      internalMap.set(k, {
-        valueSi: v,
-        dimension: DIMENSIONLESS,
-      });
-
-      allValues[k] = v;
-    }
-
-    // 2. Seed from state defaults for any dependencies that are not formulas themselves
-    const allRequired = new Set<string>();
-    for (const id of execOrder) {
-      const entry = formulas.find(f => f.id === id);
-      if (entry) {
-        extractIdentifiersFromFormula(entry.expression).forEach(dep => allRequired.add(dep));
-      }
-    }
-
-    for (const id of allRequired) {
-      // ✅ PRIORITÀ PARAMS
-      if (params[id] !== undefined) {
-        internalMap.set(id, {
-          valueSi: params[id],
-          dimension: DIMENSIONLESS,
-        });
-        allValues[id] = params[id];
-        continue;
-      }
-
-      // ✅ fallback default
-      if (!formulas.find(f => f.id === id)) {
-        const defVal = state.symbolValues.get(id);
-        if (typeof defVal === 'number') {
-          internalMap.set(id, {
-            valueSi: defVal,
-            dimension: DIMENSIONLESS,
-          });
-          allValues[id] = defVal;
-        }
-      }
-    }
-
-    const context: EvaluationContext = {
-      resolveIdentifier: (name: string) => internalMap.get(name),
-    };
-
-    for (const id of execOrder) {
-      const entry = formulas.find(f => f.id === id);
-      if (!entry?.expression) continue;
-
-      const result = evaluateExpression(entry.expression, context);
-      if (result.ok) {
-        const numVal =
-          typeof result.quantity.valueSi === 'number'
-            ? result.quantity.valueSi
-            : Number(result.quantity.valueSi);
-
-        // Build resolved expression (substitute known values)
-        let resolved = entry.expression;
-        for (const [k, v] of internalMap) {
-          if (typeof v.valueSi === 'number') {
-            resolved = resolved.replace(
-              new RegExp(`\\b${k}\\b`, 'g'),
-              v.valueSi.toPrecision(6).replace(/\.?0+$/, '')
-            );
-          }
-        }
-
-        steps.push({
-          name: id,
-          expression: entry.expression,
-          resolved,
-          result: numVal,
-          unit: entry.unit,
-        });
-
-        internalMap.set(id, result.quantity);
-        allValues[id] = numVal;
-      }
-    }
-
-    const finalQuantity = internalMap.get(formulaId);
-    if (finalQuantity !== undefined && typeof finalQuantity.valueSi === 'number') {
-      return { value: finalQuantity.valueSi, steps, allValues };
-    }
-
-    return { value: null, error: `Cannot evaluate "${formulaId}"`, steps, allValues };
-  } catch (err) {
-    return {
-      value: null,
-      error: err instanceof Error ? err.message : String(err),
-      steps,
-      allValues,
-    };
-  }
+export function refreshInteractiveViewContext(
+  editor: vscode.TextEditor | undefined,
+  state: CalcDocsState
+): void {
+  const has = hasInteractiveContent(editor, state);
+  vscode.commands.executeCommand(
+    "setContext",
+    "calcdocs.hasInteractiveContent",
+    has
+  );
 }
 
-// ─── Inverse solver (Newton-Raphson) ─────────────────────────────────────────
+function generateNonce(): string {
+  return crypto.randomBytes(16).toString("base64");
+}
 
-/**
- * Given a target output value, find the value of `solveFor` (one of the
- * formula's inputs) that makes the formula evaluate to `targetOutput`.
- *
- * Uses Newton-Raphson with a finite-difference Jacobian.
- */
-function inverseSolve(
-  formulaId: string,
-  params: Record<string, number>,
-  targetOutput: number,
-  solveFor: string,
+function normalizeInlineExpression(expression: string): string {
+  // return expression.replace(/@([A-Za-z_]\w*)/g, "$1");
+  return expression.replace(/@([A-Za-z_][A-Za-z0-9_.]*)/g, "$1");
+}
+
+function isYamlEditor(editor: vscode.TextEditor | undefined): editor is vscode.TextEditor {
+  if (!editor) {
+    return false;
+  }
+
+  return /^ya?ml$/i.test(editor.document.languageId);
+}
+
+function isFormulaLikeEntry(entry: CoreFormulaEntry): boolean {
+  return Boolean(entry.formula) || entry.valueYaml !== undefined || entry.valueCalc !== undefined;
+}
+
+function cloneStateWithFormulaEntries(
   state: CalcDocsState,
-  formulas: FormulaEntry[]
-): { value: number | null; error?: string; steps: EvalStep[]; allValues: Record<string, number> } {
-  const MAX_ITER = 60;
-  const TOL = 1e-9;
-  const H = 1e-7; // finite-difference step
-
-  // Initial guess: use existing param value, or 1.0 as fallback
-  let x = params[solveFor] ?? (state.symbolValues.get(solveFor) as number | undefined) ?? 1.0;
-
-  // Guard: if x is 0, shift to avoid zero-derivative traps
-  if (Math.abs(x) < 1e-12) x = 0.1;
-
-  function evalAt(xVal: number) {
-    const testParams = { ...params, [solveFor]: xVal };
-    return evaluateFormulaWithState(formulaId, testParams, state, formulas);
+  entries: CoreFormulaEntry[],
+  rawText?: string,
+  yamlPath?: string
+): CalcDocsState {
+  const formulaIndex = new Map<string, CoreFormulaEntry>(state.formulaIndex);
+  for (const entry of entries) {
+    formulaIndex.set(entry.key, entry);
   }
 
-  let lastSteps: EvalStep[] = [];
-  let lastAllValues: Record<string, number> = {};
-
-  for (let i = 0; i < MAX_ITER; i++) {
-    const fx = evalAt(x);
-    if (fx.value === null) {
-      return { value: null, error: fx.error ?? 'Evaluation failed', steps: lastSteps, allValues: lastAllValues };
-    }
-    lastSteps = fx.steps;
-    lastAllValues = fx.allValues;
-
-    const residual = fx.value - targetOutput;
-    if (Math.abs(residual) < TOL) break;
-
-    // Finite-difference derivative df/dx
-    const fxh = evalAt(x + H);
-    if (fxh.value === null) {
-      return { value: null, error: 'Derivative evaluation failed', steps: lastSteps, allValues: lastAllValues };
-    }
-
-    const derivative = (fxh.value - fx.value) / H;
-
-    if (Math.abs(derivative) < 1e-15) {
-      return {
-        value: null,
-        error: `Formula output is not sensitive to "${solveFor}". Choose a different parameter to solve for.`,
-        steps: lastSteps,
-        allValues: lastAllValues,
-      };
-    }
-
-    const step = residual / derivative;
-    x = x - step;
-
-    // Damping: avoid runaway steps
-    if (!Number.isFinite(x)) {
-      return { value: null, error: 'Solver diverged — try a different starting value.', steps: lastSteps, allValues: lastAllValues };
-    }
-  }
-
-  // Final evaluation with the solved x
-  const finalResult = evalAt(x);
   return {
-    value: x,
-    error: finalResult.error,
-    steps: finalResult.steps,
-    allValues: { ...finalResult.allValues, [solveFor]: x },
+    ...state,
+    formulaIndex,
+    lastYamlRaw: rawText ?? state.lastYamlRaw,
+    lastYamlPath: yamlPath ?? state.lastYamlPath,
   };
 }
 
-// ─── HTML builder ─────────────────────────────────────────────────────────────
+function buildTransientYamlEntries(
+  editor: vscode.TextEditor,
+  state: CalcDocsState
+): CoreFormulaEntry[] {
+  const relativePath = path.relative(state.workspaceRoot, editor.document.uri.fsPath);
+  const outline = parseFormulaDocument(
+    editor.document.getText().split(/\r?\n/),
+    relativePath
+  );
+
+  return outline.map((formula): CoreFormulaEntry => ({
+    key: formula.id,
+    unit: formula.unit || undefined,
+    formula: formula.expr || undefined,
+    exprType: formula.expr ? "expr" : "const",
+    steps: [],
+    labels: [],
+    valueYaml: formula.value,
+    valueCalc: formula.value ?? null,
+    _filePath: relativePath,
+    _line: formula.lineStart,
+  }));
+}
+
+function buildInlineEntries(
+  editor: vscode.TextEditor,
+  state: CalcDocsState
+): CoreFormulaEntry[] {
+  const inlineResults = evaluateInlineCalcs(
+    editor.document.getText(),
+    state,
+    // includeSuppressed: false → rispetta #calcdocs-ignore-line e simili,
+    // coerentemente con il comportamento del motore inline.
+    { includeAssignments: true, includeSuppressed: false },
+    editor.document.languageId
+  );
+
+  const seen = new Set<string>();
+
+  return inlineResults
+    .filter(result => {
+      // Richiede un'assegnazione esplicita (@nome = ...).
+      // Le espressioni standalone nei commenti (// = 25% * 200W -> W)
+      // non hanno result.variable e vengono scartate: sono documentazione,
+      // non parametri interattivi.
+      if (!result.variable) return false;
+      const src = result.source.trim();
+      return src.includes('=') || src.includes('@');
+    })
+    .map((result): CoreFormulaEntry | null => {
+      // 1. Puliamo l'espressione rimuovendo i caratteri '@'
+      const expression = normalizeInlineExpression(result.expression).trim();
+
+      // Ricava il nome: usa result.variable se disponibile,
+      // altrimenti estrae la parte sinistra dell'assegnazione
+      // rimuovendo caratteri di commento (// /* * @) e spazi.
+      const rawKey = result.variable
+        ? result.variable.replace(/@/g, "").trim()
+        : result.source
+            .split('=')[0]
+            .replace(/[/@*]/g, " ")   // sostituisce /  @  * con spazio
+            .trim()
+            .replace(/\s+/g, "_")     // normalizza spazi interni
+            || `inline_${result.line}`;
+
+      const key = rawKey.replace(/@/g, "").trim();
+      if (!key || seen.has(key)) return null;
+      seen.add(key);
+
+      const isPureConstant = /^-?\d+(\.\d+)?([eE][+-]?\d+)?(\s+[A-Za-z%][A-Za-z0-9_%/^*.-]*)?$/.test(expression);
+      const exprType = isPureConstant ? "const" : "expr";
+
+      // Per costanti pure (es. "5 mm", "9.81 m/s2") estrai l'unità dall'espressione
+      // se l'evaluator non l'ha già fornita in outputUnit.
+      let inferredUnit = result.outputUnit;
+      if (isPureConstant && !inferredUnit) {
+        const constUnitMatch = expression.match(
+          /^-?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?\s+([A-Za-z%][A-Za-z0-9_%/^*.\-]*)$/
+        );
+        if (constUnitMatch) {
+          inferredUnit = constUnitMatch[1];
+        }
+      }
+
+      return {
+        key,
+        unit: inferredUnit,
+        // Se è una costante numerica pura, non passiamo la formula stringa per evitare che il motore la blocchi
+        formula: exprType === "const" ? undefined : expression,
+        exprType,
+        steps: [],
+        labels: [],
+        valueYaml: isPureConstant ? parseFloat(expression) : undefined,
+        valueCalc: typeof result.value === "number" ? result.value : null,
+        expanded: result.resolvedExpression,
+        evaluationErrors: result.error ? [result.error] : undefined,
+        _filePath: path.relative(state.workspaceRoot, editor.document.uri.fsPath),
+        _line: result.line,
+      };
+    })
+    .filter((entry): entry is CoreFormulaEntry => entry !== null);
+}
+
+function buildFormulaViewModel(
+  editor: vscode.TextEditor | undefined,
+  state: CalcDocsState
+): FormulaViewModel {
+  const relativePath =
+    editor && editor.document.uri.scheme === "file"
+      ? path.relative(state.workspaceRoot, editor.document.uri.fsPath)
+      : undefined;
+
+  // ── Priorità 1: file C/C++ con calc inline nei commenti.
+  // Le entry inline vengono aggiunte sopra al state completo (che contiene
+  // tutti i simboli indicizzati: #define, YAML, ecc.) così i riferimenti
+  // @ADC_MAX, @NTC_R ecc. vengono risolti come input interattivi.
+  if (editor && isCppLanguage(editor.document.languageId)) {
+    const inlineEntries = buildInlineEntries(editor, state);
+    if (inlineEntries.length > 0) {
+      const transientState = cloneStateWithFormulaEntries(state, inlineEntries);
+      const engine = new InteractiveFormulaEngine(transientState);
+      return {
+        entries: inlineEntries,
+        formulas: buildInteractiveFormulaEntries(transientState, inlineEntries, engine),
+        engine,
+      };
+    }
+  }
+
+  const allIndexedEntries = Array.from(state.formulaIndex.values())
+    .filter(isFormulaLikeEntry);
+
+  // ── Priorità 2: entry indicizzate del file corrente (non-C, o C senza inline)
+  if (relativePath) {
+    const sameFileEntries = allIndexedEntries.filter(
+      (entry) => entry._filePath === relativePath
+    );
+
+    if (sameFileEntries.length > 0) {
+      const engine = new InteractiveFormulaEngine(state);
+      return {
+        entries: sameFileEntries,
+        formulas: buildInteractiveFormulaEntries(state, sameFileEntries, engine),
+        engine,
+      };
+    }
+  }
+
+  // ── Priorità 3: YAML aperto direttamente nell'editor (transient parse)
+  if (isYamlEditor(editor)) {
+    const transientEntries = buildTransientYamlEntries(editor, state);
+    if (transientEntries.length > 0) {
+      const transientState = cloneStateWithFormulaEntries(
+        state,
+        transientEntries,
+        editor.document.getText(),
+        editor.document.uri.fsPath
+      );
+      const engine = new InteractiveFormulaEngine(transientState);
+      return {
+        entries: transientEntries,
+        formulas: buildInteractiveFormulaEntries(transientState, transientEntries, engine),
+        engine,
+      };
+    }
+  }
+
+  // ── Priorità 4: tutte le entry indicizzate del workspace
+  if (allIndexedEntries.length > 0) {
+    const engine = new InteractiveFormulaEngine(state);
+    return {
+      entries: allIndexedEntries,
+      formulas: buildInteractiveFormulaEntries(state, allIndexedEntries, engine),
+      engine,
+    };
+  }
+
+  // ── Priorità 5: inline calcs generici per qualsiasi tipo di file
+  if (editor) {
+    const inlineEntries = buildInlineEntries(editor, state);
+    if (inlineEntries.length > 0) {
+      const transientState = cloneStateWithFormulaEntries(state, inlineEntries);
+      const engine = new InteractiveFormulaEngine(transientState);
+      return {
+        entries: inlineEntries,
+        formulas: buildInteractiveFormulaEntries(transientState, inlineEntries, engine),
+        engine,
+      };
+    }
+  }
+
+  const engine = new InteractiveFormulaEngine(state);
+  return {
+    entries: [],
+    formulas: [],
+    engine,
+  };
+}
 
 function buildWebviewHtml(
   webview: vscode.Webview,
@@ -473,31 +333,31 @@ function buildWebviewHtml(
   nonce: string,
   initialData: CalcDocsInitialData
 ): string {
-  const htmlPath = path.join(extensionPath, 'resources', 'calcdocs-webview.html');
+  const htmlPath = path.join(extensionPath, "resources", "interactive_webview_class.html");
 
   if (!fs.existsSync(htmlPath)) {
-    return `<!DOCTYPE html><html><body style="font-family:monospace;color:#ccc;padding:20px;">
-      <h3>⚠️ CalcDocs WebView not found</h3>
-      <p>The file <code>resources/calcdocs-webview.html</code> is missing.</p>
+    return `<!DOCTYPE html><html><body style="font-family:monospace;padding:20px;">
+      <h3>CalcDocs WebView not found</h3>
+      <p>The file <code>resources/interactive_webview_class.html</code> is missing.</p>
     </body></html>`;
   }
 
-  let html = fs.readFileSync(htmlPath, 'utf8');
+  let html = fs.readFileSync(htmlPath, "utf8");
   html = html.replace(/PLACEHOLDER_NONCE/g, nonce);
 
   const initialScript = `<script nonce="${nonce}">
     window.__CALCDOCS_INITIAL = ${JSON.stringify(initialData)};
   </script>`;
-  html = html.replace('<!-- INJECT_INITIAL_JSON -->', initialScript);
+  html = html.replace("<!-- INJECT_INITIAL_JSON -->", initialScript);
 
   const cspSource = webview.cspSource;
   const csp = [
-    `default-src 'none'`,
+    "default-src 'none'",
     `style-src ${cspSource} 'unsafe-inline'`,
-    `script-src 'nonce-${nonce}' ${cspSource} https://cdn.jsdelivr.net`,
+    `script-src 'nonce-${nonce}' ${cspSource}`,
     `img-src ${cspSource} data:`,
     `font-src ${cspSource}`,
-  ].join('; ');
+  ].join("; ");
 
   html = html.replace(
     /<meta http-equiv="Content-Security-Policy"[^>]*>/,
@@ -507,66 +367,79 @@ function buildWebviewHtml(
   return html;
 }
 
-// ─── Main entry point ─────────────────────────────────────────────────────────
-
 export function openInteractiveView(
   context: vscode.ExtensionContext,
   state: CalcDocsState
 ): vscode.WebviewPanel {
   const panel = vscode.window.createWebviewPanel(
-    'calcdocsInteractiveView',
-    'CalcDocs — Interactive View',
+    "calcdocsInteractiveView",
+    "CalcDocs - Interactive View",
     vscode.ViewColumn.One,
     {
       enableScripts: true,
       retainContextWhenHidden: true,
-      localResourceRoots: [
-        vscode.Uri.file(path.join(context.extensionPath, 'resources', 'webview')),
-      ],
+      localResourceRoots: [vscode.Uri.file(path.join(context.extensionPath, "resources"))],
     }
   );
 
-  let currentFormulas: FormulaEntry[] = [];
-  let selectedFormulaId: string | null = null;
+  let viewModel: FormulaViewModel = buildFormulaViewModel(
+    vscode.window.activeTextEditor,
+    state
+  );
+  let selectedFormulaId: string | null = viewModel.formulas[0]?.id ?? null;
 
-  /** Full modification history (auto). */
-  const history: HistoryEntry[] = [];
-  /** User-named snapshots. */
-  const snapshots = new Map<string, InteractiveSnapshot>();
+  function rebuild(editor?: vscode.TextEditor): void {
+    viewModel = buildFormulaViewModel(editor ?? vscode.window.activeTextEditor, state);
+    selectedFormulaId =
+      viewModel.formulas.find((formula) => formula.id === selectedFormulaId)?.id ??
+      viewModel.formulas[0]?.id ??
+      null;
+  }
 
-  // ── Helpers ────────────────────────────────────────────────────────────────
-
-  function pushHistory(entry: HistoryEntry) {
-    // Keep the last 100 entries
-    history.unshift(entry);
-    if (history.length > 100) history.pop();
-
+  function postFormulaList(): void {
+    const activeEditor = vscode.window.activeTextEditor;
     const msg: ExtensionToWebviewMsg = {
-      action: 'historyUpdated',
-      entries: history.slice(0, 50),
+      action: "updateFormulas",
+      formulas: viewModel.formulas,
+      selectedFormulaId,
+      activeFileName: activeEditor?.document.fileName ?? "",
     };
     panel.webview.postMessage(msg);
   }
 
-  // ── Refresh (full HTML rebuild) ────────────────────────────────────────────
+  function postEvaluation(
+    formulaId: string,
+    inputs: Record<string, number>,
+    changedId?: string
+  ): void {
+    selectedFormulaId = formulaId;
+    const result = viewModel.engine.evaluate(formulaId, inputs, changedId);
+    const msg: ExtensionToWebviewMsg = {
+      action: "updateResult",
+      values: result.values,
+      units: result.units,
+      errors: result.errors,
+      warnings: result.warnings,
+      active: result.active,
+      propagation: result.propagation,
+      tree: result.tree,
+      params: inputs,
+      steps: result.steps,
+      last: result.last,
+    };
+    panel.webview.postMessage(msg);
+  }
 
-  function refresh(editor?: vscode.TextEditor) {
-    const target = editor ?? vscode.window.activeTextEditor;
-    currentFormulas = buildFormulaNodes(target, state);
-
-    const prevId = selectedFormulaId;
-    selectedFormulaId =
-      currentFormulas.find((f) => f.id === prevId)?.id ??
-      currentFormulas[0]?.id ??
-      null;
-
+  function refreshHtml(editor?: vscode.TextEditor): void {
+    rebuild(editor);
+    const nonce = generateNonce();
+    const activeEditor = editor ?? vscode.window.activeTextEditor;
     const initialData: CalcDocsInitialData = {
-      formulas: currentFormulas,
+      formulas: viewModel.formulas,
       selectedFormulaId,
-      activeFileName: target?.document.fileName ?? '',
+      activeFileName: activeEditor?.document.fileName ?? "",
     };
 
-    const nonce = generateNonce();
     panel.webview.html = buildWebviewHtml(
       panel.webview,
       context.extensionPath,
@@ -575,231 +448,37 @@ export function openInteractiveView(
     );
   }
 
-  function sendUpdate() {
-    const msg: ExtensionToWebviewMsg = {
-      action: 'updateFormulas',
-      formulas: currentFormulas,
-      selectedFormulaId,
-      activeFileName: vscode.window.activeTextEditor?.document.fileName ?? '',
-    };
-    panel.webview.postMessage(msg);
-  }
-
-  // ── Initial render ─────────────────────────────────────────────────────────
-
-  // Capture the active editor at the moment the command is launched
-  const initialEditor = vscode.window.activeTextEditor;
-  refresh(initialEditor);
-
-  // Ignore active-editor changes for a short period after opening the webview.
-  // This avoids replacing the initial formula set while VS Code settles focus.
-  const interactiveOpenTime = Date.now();
-
-  // Schedule an explicit update after the webview has time to initialize listeners
-  setTimeout(() => {
-    if (selectedFormulaId) {
-      const msg: ExtensionToWebviewMsg = {
-        action: 'forceSelect',
-        formulaId: selectedFormulaId,
-      };
-      panel.webview.postMessage(msg);
-    }
-  }, 300);
-
-  // ── Watchers ───────────────────────────────────────────────────────────────
+  refreshHtml(vscode.window.activeTextEditor);
 
   const activeEditorWatcher = vscode.window.onDidChangeActiveTextEditor((editor) => {
-    if (Date.now() - interactiveOpenTime < 1000) {
+    if (!editor) {
       return;
     }
 
-    if (editor === undefined) return;
-
-    currentFormulas = buildFormulaNodes(editor, state);
-    selectedFormulaId = currentFormulas[0]?.id ?? null;
-    sendUpdate();
+    rebuild(editor);
+    postFormulaList();
   });
 
   const documentWatcher = vscode.workspace.onDidChangeTextDocument((event) => {
     const editor = vscode.window.activeTextEditor;
-    if (editor && event.document.uri.toString() === editor.document.uri.toString()) {
-      currentFormulas = buildFormulaNodes(editor, state);
-      sendUpdate();
+    if (!editor || event.document.uri.toString() !== editor.document.uri.toString()) {
+      return;
     }
+
+    rebuild(editor);
+    postFormulaList();
   });
 
-  // ── Message handler ────────────────────────────────────────────────────────
+  panel.webview.onDidReceiveMessage((msg: WebviewToExtensionMsg) => {
+    if (msg.action === "updateInput") {
+      postEvaluation(msg.formulaId, msg.inputs, msg.changedId);
+      return;
+    }
 
-  panel.webview.onDidReceiveMessage(
-    (message: WebviewToExtensionMsg) => {
-      switch (message.action) {
-
-      // ── Forward evaluation ──────────────────────────────────────────────────
-      case 'evaluate': {
-        const result = evaluateFormulaWithState(
-          message.formulaId,
-          message.params,
-          state,
-          currentFormulas
-        );
-
-        const msg: ExtensionToWebviewMsg = {
-          action: 'result',
-          value: result.value,
-          error: result.error,
-          steps: result.steps,
-          allValues: result.allValues,
-        };
-        panel.webview.postMessage(msg);
-        pushHistory({
-          id: generateId(),
-          ts: Date.now(),
-          formulaId: message.formulaId,
-          changedParam: Object.keys(message.params)[0] ?? 'eval',
-          changedValue: Object.values(message.params)[0] ?? 0,
-          direction: 'forward',
-          state: {
-            params: { ...message.params },
-            results: result.allValues,
-          },
-          result: result.value,
-          steps: result.steps,
-        });
-        break;
-      }
-
-      // ── Inverse solve ───────────────────────────────────────────────────────
-      case 'inverseSolve': {
-        const result = inverseSolve(
-          message.formulaId,
-          message.params,
-          message.targetOutput,
-          message.solveFor,
-          state,
-          currentFormulas
-        );
-
-        const msg: ExtensionToWebviewMsg = {
-          action: 'inverseResult',
-          targetParam: message.solveFor,
-          newValue: result.value ?? NaN,
-          error: result.error,
-          steps: result.steps,
-          allValues: result.allValues,
-        };
-        panel.webview.postMessage(msg);
-
-        // Push to history if successful
-        if (result.value !== null) {
-          pushHistory({
-            id: generateId(),
-            ts: Date.now(),
-            formulaId: message.formulaId,
-            changedParam: message.solveFor,
-            changedValue: result.value,
-            direction: 'inverse',
-            state: {
-              params: { ...message.params, [message.solveFor]: result.value },
-              results: result.allValues,
-            },
-            result: message.targetOutput,
-            steps: result.steps,
-          });
-        }
-        break;
-      }
-
-      // ── Save snapshot ───────────────────────────────────────────────────────
-      case 'saveSnapshot': {
-        const id = `snap-${Date.now()}`;
-        const result = evaluateFormulaWithState(
-          message.formulaId,
-          message.params,
-          state,
-          currentFormulas
-        );
-        const snapshot: InteractiveSnapshot = {
-          id,
-          ts: Date.now(),
-          formulaId: message.formulaId,
-          params: message.params,
-          note: message.note,
-          result: result.value,
-          steps: result.steps,
-        };
-        snapshots.set(id, snapshot);
-
-        const msg: ExtensionToWebviewMsg = { action: 'snapshotSaved', snapshot };
-        panel.webview.postMessage(msg);
-        break;
-      }
-
-      // ── Request full history ────────────────────────────────────────────────
-      case 'requestHistory': {
-        const msg: ExtensionToWebviewMsg = {
-          action: 'history',
-          entries: history.slice(0, 50),
-        };
-        panel.webview.postMessage(msg);
-        break;
-      }
-
-      // ── Restore a history entry ─────────────────────────────────────────────
-      case 'loadHistoryEntry': {
-        const entry = history.find((h) => h.id === message.id);
-        if (!entry) break;
-
-        // Re-evaluate with the restored state to get fresh allValues
-        const result = evaluateFormulaWithState(
-          entry.formulaId,
-          entry.state.params,
-          state,
-          currentFormulas
-        );
-
-        // Reuse the snapshot restore path in the webview
-        const snap: InteractiveSnapshot = {
-          id: entry.id,
-          ts: entry.ts,
-          formulaId: entry.formulaId,
-          params: entry.state.params,
-          result: result.value,
-          steps: result.steps,
-        };
-        const msg: ExtensionToWebviewMsg = { action: 'loadSnapshot', snapshot: snap };
-        panel.webview.postMessage(msg);
-        break;
-      }
-
-      // ── Restore a named snapshot ────────────────────────────────────────────
-      case 'loadSnapshot': {
-        const snap = snapshots.get(message.id);
-        if (!snap) break;
-        selectedFormulaId = snap.formulaId;
-        const msg: ExtensionToWebviewMsg = { action: 'loadSnapshot', snapshot: snap };
-        panel.webview.postMessage(msg);
-        break;
-      }
-
-      // ── Clear history ───────────────────────────────────────────────────────
-      case 'clearHistory': {
-        history.length = 0;
-        const msg: ExtensionToWebviewMsg = { action: 'historyUpdated', entries: [] };
-        panel.webview.postMessage(msg);
-        break;
-      }
-
-      case 'exportPdf': {
-        vscode.window.showInformationMessage('Export PDF not yet implemented.');
-        break;
-      }
-      } // end switch
-    },
-    undefined,
-    context.subscriptions
-  );
-
-  // ── Dispose ────────────────────────────────────────────────────────────────
+    if (msg.action === "evaluate") {
+      postEvaluation(msg.formulaId, msg.params);
+    }
+  });
 
   panel.onDidDispose(() => {
     activeEditorWatcher.dispose();

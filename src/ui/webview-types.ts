@@ -9,18 +9,42 @@ export type FormulaInputNode = {
   name: string;
   unit?: string;
   defaultValue?: number;
+  currentValue?: number;
   hasDefault: boolean;
-  kind: 'leaf' | 'formula';
+  kind: 'leaf' | 'formula' | 'constant' | 'external' | 'unknown';
+  origin?: 'yaml-formula' | 'yaml-constant' | 'cpp-symbol' | 'user-override' | 'unknown';
+  sourceFormulaId?: string;
+  expression?: string;
+  editable?: boolean;
+  overridden?: boolean;
+  calculated?: boolean;
+  errors?: string[];
+  warnings?: string[];
 };
 
 export type FormulaTreeNode = {
   id: string;
+  instanceId?: string;
   name: string;
   expression: string;
   unit?: string;
   depth: number;
   localInputs: FormulaInputNode[];
   children: FormulaTreeNode[];
+  rawYaml?: string;
+  sourceFile?: string;
+  line?: number;
+  type?: 'formula' | 'constant' | 'leaf';
+  result?: {
+    value?: number;
+    unit?: string;
+    error?: string;
+  };
+  errors?: string[];
+  warnings?: string[];
+  cycle?: boolean;
+  cyclePath?: string[];
+  depthLimited?: boolean;
 };
 
 export type FormulaEntry = {
@@ -30,6 +54,10 @@ export type FormulaEntry = {
   unit?: string;
   localInputs?: FormulaInputNode[];
   tree: FormulaTreeNode;
+  rawYaml?: string;
+  value?: number;
+  errors?: string[];
+  warnings?: string[];
   line?: number;
   type?: 'formula' | 'constant';
 };
@@ -42,6 +70,7 @@ export type EvalStep = {
   resolved: string;
   result: number;
   unit?: string;
+  depth?: number; // livello di annidamento (0 = formula radice)
 };
 
 /** Full snapshot of every computed intermediate value during one evaluation. */
@@ -91,44 +120,27 @@ export type InteractiveSnapshot = {
 
 export type ExtensionToWebviewMsg =
   | {
-      action: 'updateFormulas';
-      formulas: FormulaEntry[];
-      activeFileName: string;
-      selectedFormulaId: string | null;
-    }
-  | {
-      action: 'result';
-      value: number | null;
-      error?: string;
-      steps: EvalStep[];
-      /** All intermediate values produced during this evaluation. */
-      allValues: Record<string, number>;
-    }
-  | {
-      action: 'inverseResult';
-      /** The input parameter that was back-solved. */
-      targetParam: string;
-      /** The new value found for that parameter. */
-      newValue: number;
-      error?: string;
-      steps: EvalStep[];
-      allValues: Record<string, number>;
-    }
-  | {
-      action: 'snapshotSaved';
-      snapshot: InteractiveSnapshot;
-    }
-  | {
-      action: 'history';
-      entries: HistoryEntry[];
+      action: 'updateResult';
+      values: Record<string, number>;
+      units?: Record<string, string>;
+      errors?: Record<string, string[]>;
+      warnings?: Record<string, string[]>;
+      active: string[];
+      propagation: string[];
+      tree?: FormulaTreeNode;
+      params?: Record<string, number>;
+      steps?: EvalStep[];
+      last?: string;
     }
   | {
       action: 'historyUpdated';
       entries: HistoryEntry[];
     }
   | {
-      action: 'loadSnapshot';
-      snapshot: InteractiveSnapshot;
+      action: 'updateFormulas';
+      formulas: FormulaEntry[];
+      selectedFormulaId: string | null;
+      activeFileName: string;
     }
   | {
       action: 'forceSelect';
@@ -144,38 +156,10 @@ export type WebviewToExtensionMsg =
       params: Record<string, number>;
     }
   | {
-      /**
-       * Back-solve: given the current params (minus `solveFor`), find the
-       * value of `solveFor` that makes the formula output equal to `targetOutput`.
-       */
-      action: 'inverseSolve';
+      action: 'updateInput';
       formulaId: string;
-      params: Record<string, number>;
-      targetOutput: number;
-      solveFor: string;
-    }
-  | {
-      action: 'saveSnapshot';
-      formulaId: string;
-      params: Record<string, number>;
-      note?: string;
-    }
-  | {
-      action: 'requestHistory';
-    }
-  | {
-      action: 'loadHistoryEntry';
-      id: string;
-    }
-  | {
-      action: 'loadSnapshot';
-      id: string;
-    }
-  | {
-      action: 'clearHistory';
-    }
-  | {
-      action: 'exportPdf';
+      inputs: Record<string, number>;
+      changedId: string;
     };
 
 // ─── Initial payload injected into the HTML ──────────────────────────────────

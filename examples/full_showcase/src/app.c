@@ -57,12 +57,17 @@ float filteredCurrent = LPF(12.5f, 8.0f);
 // YAML FORMULA SYSTEM
 // ============================================================
 
-#define FS_VIN         24.0f
-#define FS_CURRENT     2.5f
+#define FS_VIN         24.0f    //  @unit=V
+#define FS_CURRENT     2.5f     //  @unit=A
 
-float power = power;
-float efficiency = efficiency;
-float ntcTemperature = ntc_temperature;
+// @il_vin = 24 mV
+// @il_current = 2.5 A
+// = @il_vin * @il_current -> W
+
+// YAML formulas are evaluated by CalcDocs inline (not as C variables)
+// power = 60.0 W   (from power: formula: FS_VIN * FS_CURRENT)
+// efficiency = 83.33 %  (from efficiency: formula: (power / 72 W))
+// ntc_resistance = 10000 ohm  (from ntc_resistance: csv lookup using NTC table)
 
 
 // ============================================================
