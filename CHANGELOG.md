@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.3.1] - 05/27/2026
+
+- Extended inline calculations to support structures composed of @var = ... forms
+- Fixed issues in the interactive formula viewer constant/formula evaluator
+- Fixed bitfield fallback decoder handling across all entries
+- Added ghost values support for .h files
+- Added enum ghost values resolution support
+
+### Upcoming Features:
+
+- Visual dependency graph
+- Fixed-point Analyzer (Q15/Q31)
+- Unified formula and unit parser
+- Formula tolerance evluator
+- Table formula support
+- Generic formula reuse via predefined parameters
+
 ## [0.3.0] - 05/26/2026
 
 - Added sponsor badge
@@ -7,12 +24,6 @@
 - Added interactive formula viewer for formula*.yaml
 - Added interactive formula viewer for c files with inline calculation
 - Improved and fixed example snippets
-
-### Upcoming Features:
-
-- Visual dependency graph
-- Fixed-point Analyzer (Q15/Q31)
-- Join formulaoutline and unit in one only formula parser
 
 ## [0.2.8] - 05/20/2026
 

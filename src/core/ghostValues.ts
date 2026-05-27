@@ -5,7 +5,14 @@ import { shouldRenderGhostInsteadOfCodeLens } from "./ghostPolicy";
 import { CalcDocsState } from "./state";
 import { evaluateInlineCalcs } from "./inlineCalc";
 
+// Languages that receive inline-calc ghost decorations (=calc / @assign).
 const INLINE_CALC_GHOST_LANGUAGES = new Set(["c", "cpp", "plaintext", "yaml"]);
+
+// Languages for which C/C++ symbol resolution (collectCppCodeLensItems) is run.
+// Extended from just "c" so that .h files identified as "cpp" by VSCode also
+// receive ghost values instead of falling back to CodeLens.
+const CPP_SYMBOL_GHOST_LANGUAGES = new Set(["c", "cpp"]);
+
 const MAX_GHOST_TEXT_LEN = 180;
 
 function clampGhostText(text: string): string {
@@ -75,7 +82,14 @@ export class GhostValueProvider {
 
     const document = editor.document;
 
-    if (!this.state.enabled || !this.state.inlineGhostEnabled || document.languageId !== "c") {
+    // Guard: ghost is only available for supported languages.
+    // CPP_SYMBOL_GHOST_LANGUAGES covers "c" and "cpp" (the latter includes .h
+    // files identified as cpp).  INLINE_CALC_GHOST_LANGUAGES is a superset that
+    // also includes plaintext and yaml, handled in the inline-calc block below.
+    const hasCppSymbolGhost = CPP_SYMBOL_GHOST_LANGUAGES.has(document.languageId);
+    const hasInlineCalcGhost = INLINE_CALC_GHOST_LANGUAGES.has(document.languageId);
+
+    if (!this.state.enabled || !this.state.inlineGhostEnabled || (!hasCppSymbolGhost && !hasInlineCalcGhost)) {
       editor.setDecorations(this.decorationType, []);
       return;
     }
@@ -83,7 +97,7 @@ export class GhostValueProvider {
     const perLineGhostTexts = new Map<number, string[]>();
 
     // ── C/C++ code-lens ghost values (existing logic, C only) ──────────────
-    if (document.languageId === "c") {
+    if (hasCppSymbolGhost) {
       const maxItemsPerFile = Math.max(1, this.state.cppCodeLens.maxItemsPerFile);
       const items = collectCppCodeLensItems(document, this.state, maxItemsPerFile * 4);
 
@@ -103,12 +117,12 @@ export class GhostValueProvider {
       }
     }
 
-    // ── Inline-calc ghost values for all supported languages ───────────────
-    if (INLINE_CALC_GHOST_LANGUAGES.has(document.languageId)) {
+    // ── Inline-calc ghost (=calc / @assign annotations) ──
+    if (hasInlineCalcGhost) {
       const results = evaluateInlineCalcs(
         document.getText(),
         this.state,
-        { includeAssignments: false },
+        { includeAssignments: true },
         document.languageId
       );
 
@@ -116,8 +130,24 @@ export class GhostValueProvider {
         if (result.line < 0 || result.line >= document.lineCount) {
           continue;
         }
+
+        // Assegnamento con valore numerico puro: il ghost è ridondante
+        if (
+          result.kind === "assign" &&
+          /^-?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?\s*(?:[A-Za-z%][A-Za-z0-9_%/^*.-]*)?$/.test(
+            result.expression.trim()
+          )
+        ) {
+          continue;
+        }
+
+        const ghostText =
+          result.kind === "assign"
+            ? result.displayValue.replace(/^@[A-Za-z_]\w*\s*=\s*/, "")
+            : result.displayValue;
+
         const texts = perLineGhostTexts.get(result.line) ?? [];
-        texts.push(result.displayValue);
+        texts.push(ghostText);
         perLineGhostTexts.set(result.line, texts);
       }
     }

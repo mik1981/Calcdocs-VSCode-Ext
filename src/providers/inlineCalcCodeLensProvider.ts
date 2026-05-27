@@ -76,7 +76,7 @@ export class InlineCalcCodeLensProvider implements vscode.CodeLensProvider {
 
     const maxItemsPerFile = Math.max(1, this.state.inlineCodeLens.maxItemsPerFile);
     const results = evaluateInlineCalcs(document.getText(), this.state, {
-      includeAssignments: false,
+      includeAssignments: true,
     }, document.languageId);
     const lenses: vscode.CodeLens[] = [];
 

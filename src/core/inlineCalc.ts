@@ -1086,7 +1086,8 @@ function isLikelyInlineCalculationExpression(
   expression: string,
   state: CalcDocsState,
   knownInlineVariables: Map<string, number>,
-  outputUnit?: string
+  outputUnit?: string,
+  isAssignment: boolean = false
 ): boolean {
   // const logPrefix = "[inline]";
   const trimmed = expression.trim();
@@ -1125,6 +1126,12 @@ function isLikelyInlineCalculationExpression(
       knownInlineVariables.has(token)
     );
   });
+
+  // Assignments are more likely to be intentional if they start with @var =
+  // so we accept them if they have at least a number or a variable/symbol, even without operators.
+  if (isAssignment) {
+    return hasNumber || hasAtVariable || hasQuantity || hasKnownSymbolToken || hasMathOperator || hasFunctionCall;
+  }
 
   if (
     !hasMathOperator &&
@@ -1238,12 +1245,12 @@ export function evaluateInlineCalcs(
 
   for (const command of commands) {
     if (
-      command.kind === "calc" &&
       !isLikelyInlineCalculationExpression(
         command.expression,
         state,
         variables,
-        command.outputUnit
+        command.outputUnit,
+        command.kind === "assign"
       )
     ) {
       continue;

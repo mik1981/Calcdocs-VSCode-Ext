@@ -197,7 +197,7 @@ function buildInlineEntries(
       if (!key || seen.has(key)) return null;
       seen.add(key);
 
-      const isPureConstant = /^-?\d+(\.\d+)?([eE][+-]?\d+)?(\s+[A-Za-z%][A-Za-z0-9_%/^*.-]*)?$/.test(expression);
+      const isPureConstant = /^-?\d+(\.\d+)?([eE][+-]?\d+)?(\s*[A-Za-z%][A-Za-z0-9_%/^*.-]*)?$/.test(expression);
       const exprType = isPureConstant ? "const" : "expr";
 
       // Per costanti pure (es. "5 mm", "9.81 m/s2") estrai l'unità dall'espressione
@@ -205,7 +205,7 @@ function buildInlineEntries(
       let inferredUnit = result.outputUnit;
       if (isPureConstant && !inferredUnit) {
         const constUnitMatch = expression.match(
-          /^-?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?\s+([A-Za-z%][A-Za-z0-9_%/^*.\-]*)$/
+          /^-?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?\s*([A-Za-z%][A-Za-z0-9_%/^*.\-]*)$/
         );
         if (constUnitMatch) {
           inferredUnit = constUnitMatch[1];

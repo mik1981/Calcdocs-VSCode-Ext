@@ -323,71 +323,79 @@ export function matchesContext(
     return false;
   }
 
-  // Normalize separators to underscore so contexts like:
-  //   TIM1->CR1
-  //   TIM1.CR1
-  // become comparable.
-  const normalizedContext = raw.replace(/->|\./g, "_");
+  // Dividi sull'operatore di accesso (->, .) preservando i confini dei token.
+  //
+  // Vecchio approccio:  replace("->"|".", "_") poi split("_")
+  //   → "ADC1_COMMON->CCR" diventava ["ADC1","COMMON","CCR"]  ← SBAGLIATO
+  //   → la variabile "ADC1_COMMON" veniva spezzata internamente
+  //
+  // Nuovo approccio:  split sul solo operatore
+  //   → "ADC1_COMMON->CCR"     → ["ADC1_COMMON", "CCR"]       ← CORRETTO
+  //   → "TIM2->CR1"            → ["TIM2", "CR1"]
+  //   → "handle->Instance->CR1"→ ["handle", "Instance", "CR1"]
+  //   → "my_timer.CR1"         → ["my_timer", "CR1"]
+  const accessChain = raw.split(/->|\./).map((s) => s.trim()).filter(Boolean);
 
-  const accessParts = normalizedContext.split("_").filter(Boolean);
-  if (accessParts.length < 2) {
+  if (accessChain.length < 2 || accessChain.length > 3) {
     return false;
   }
 
-  // Strong filter: do not accept contexts that include extra chaining parts.
-  if (accessParts.length > 3) {
-    return false;
-  }
-
-  // REQUIRE: each token must be a valid C identifier.
-  // Reject tokens containing non-identifier characters: e.g. `arr[`, `(p`, `ptr)`, `0x1`, etc.
   const identifierRx = /^[A-Za-z_][A-Za-z0-9_]*$/;
-  for (const part of accessParts) {
+  for (const part of accessChain) {
     if (!identifierRx.test(part)) {
       return false;
     }
   }
 
-  // Build candidate register prefix from the context.
-  // Examples:
-  //   "TIM1->CR2"     → accessParts = ["TIM1", "CR2"]     → candidatePrefix = "TIM1_CR2"
-  //   "TIM1->CR2->CEN" → accessParts = ["TIM1", "CR2", "CEN"] → candidatePrefix = "TIM1_CR2"
-  const candidatePrefix =
-    accessParts.length === 3 ? accessParts.slice(0, 2).join("_") : accessParts.join("_");
-
-  // Determine which prefix to use for define validation.
-  let matchedPrefix: string | null = null;
   const hasDefineContext = allDefines !== undefined;
 
+  // ── Risoluzione del prefisso ────────────────────────────────────────────
+
+  let matchedPrefix: string | null = null;
+
   if (hasDefineContext) {
-    matchedPrefix = resolveDefinePrefix(accessParts[0], accessParts[1], allDefines) ?? null;
+    if (accessChain.length === 2) {
+      // Caso semplice: instance->register  o  instance.register
+      const [instanceName, registerName] = accessChain;
+      matchedPrefix =
+        resolveDefinePrefix(instanceName, registerName, allDefines) ?? null;
+    } else {
+      // Catena a 3 livelli, es. "handle->Instance->CR1".
+      // Interpretazione A: instance = chain[0]_chain[1], register = chain[2]
+      const [p0, p1, p2] = accessChain;
+      matchedPrefix =
+        resolveDefinePrefix(`${p0}_${p1}`, p2, allDefines) ?? null;
+
+      // Interpretazione B: instance = chain[0], register = chain[1]
+      // (chain[2] è un nome di campo già estratto, es. in un'espressione composta)
+      if (!matchedPrefix) {
+        matchedPrefix =
+          resolveDefinePrefix(p0, p1, allDefines) ?? null;
+      }
+    }
   } else {
-    const strippedFirstToken = accessParts[0].replace(/\d+$/, "");
-    const candidatePrefixAlt = accessParts.length === 3
-      ? `${strippedFirstToken}_${accessParts[1]}`
-      : `${strippedFirstToken}_${accessParts.slice(1).join("_")}`;
+    // ── Fallback senza define: matching puramente testuale ──────────────────
+    // Fallback without define context: pure string matching.
+    const [instanceName, registerName] = accessChain;
 
-    const prefixMatches =
-      entry.registerPrefix === candidatePrefix || entry.registerPrefix === candidatePrefixAlt;
-    const fieldMatches =
-      accessParts.length < 3 || accessParts[2] === entry.name;
+    // Same uppercase normalisation: define-derived prefixes are always uppercase.
+    const inst = instanceName.toUpperCase();
+    const reg  = registerName.toUpperCase();
 
-    matchedPrefix = prefixMatches && fieldMatches ? entry.registerPrefix : null;
+    const strippedFirst    = stripInstanceSuffix(inst);
+    const candidateExact   = `${inst}_${reg}`;
+    const candidateGeneric = `${strippedFirst}_${reg}`;
+
+    return (
+      entry.registerPrefix === candidateExact ||
+      entry.registerPrefix === candidateGeneric
+    );
   }
 
   if (!matchedPrefix) {
     return false;
   }
 
-  if (hasDefineContext) {
-    const hasDefines = hasPositionalOrMaskDefines(matchedPrefix, allDefines);
-    if (!hasDefines) {
-      return false;
-    }
-  }
-
-  // FINAL FILTER:
-  // the entry itself MUST belong to the resolved register prefix.
   return entry.registerPrefix === matchedPrefix;
 }
 
@@ -422,44 +430,154 @@ function hasPositionalOrMaskDefines(
 }
 
 /**
- * Strips a trailing numeric suffix from an identifier segment.
- * e.g. "TIM2" → "TIM", "GPIO1" → "GPIO", "ADC" → "ADC" (invariant)
+ * Ricava il "tipo" del periferico eliminando il suffisso istanza dal nome
+ * della variabile, per confrontarlo con i prefissi delle #define.
+ *
+ *   TIM2    → TIM       (cifre finali – la maggior parte delle famiglie MCU)
+ *   USART1  → USART
+ *   ADC3    → ADC
+ *   LPUART1 → LPUART
+ *   GPIOA   → GPIO      (singola lettera finale – nomi di porta STM32)
+ *   GPIOB   → GPIO
+ *   CAN     → CAN       (nome corto senza suffisso, lasciato intatto)
  */
-function stripTrailingNumber(name: string): string {
-  return name.replace(/\d+$/, "");
+function stripInstanceSuffix(name: string): string {
+  // 1. Cifre finali (caso più comune: TIM2, SPI1, USART3, ADC1 …)
+  const noDigits = name.replace(/\d+$/, "");
+  if (noDigits !== name && noDigits.length > 0) {
+    return noDigits;
+  }
+  // 2. Singola lettera maiuscola finale (GPIOA → GPIO).
+  //    Guardia: il risultato deve avere almeno 3 caratteri per evitare
+  //    over-stripping su nomi corti (es. CAN → CA non viene prodotto).
+  if (name.length >= 4 && /[A-Z]$/.test(name)) {
+    return name.slice(0, -1);
+  }
+  return name;
 }
 
 /**
- * Resolves which define prefix to use for a register access like "TIM2->CR3".
+ * Verifica se un dato prefisso è associato a define di bitfield,
+ * riconoscendo i tre stili prevalenti nelle famiglie MCU:
  *
- * Priority:
- *  1. Exact match:   "TIM2_CR3_*"  — instance-specific defines
- *  2. Generic match: "TIM_CR3_*"   — family-wide defines (strip trailing digits)
- *  3. No match:       undefined    — treat as false bitfield, skip
+ *  1. CMSIS moderno (STM32 LL / CMSIS-Core):
+ *       PREFIX_CAMPO_Pos  /  PREFIX_CAMPO_Msk
  *
- * Returns the resolved prefix string, or undefined if nothing matches.
+ *  2. Bit numerati (STM32 HAL per campi multi-bit):
+ *       PREFIX_CAMPO_0, PREFIX_CAMPO_1, PREFIX_CAMPO_2 …
+ *
+ *  3. Maschere dirette vecchio stile (STM8, CMSIS pre-v5):
+ *       PREFIX_CAMPO  (richiede ≥ 3 define distinti per ridurre i falsi positivi
+ *                      rispetto a costanti generiche a due token)
+ */
+function hasAnyBitfieldDefines(
+  prefix: string,
+  allDefines: Map<string, string>
+): boolean {
+  // Stile 1 – _Pos / _Msk
+  if (hasPositionalOrMaskDefines(prefix, allDefines)) {
+    return true;
+  }
+
+  const normalizedPrefix = prefix.endsWith("_") ? prefix : `${prefix}_`;
+  const esc = escapeRegexForPrefix(normalizedPrefix);
+
+  // Stile 2 – bit numerati  PREFIX_CAMPO_N
+  const numberedRx = new RegExp(`^${esc}[A-Za-z][A-Za-z0-9_]*_\\d+$`);
+  for (const name of allDefines.keys()) {
+    if (numberedRx.test(name)) {
+      return true;
+    }
+  }
+
+  // Stile 3 – maschere dirette  PREFIX_CAMPO  (≥ 3 occorrenze)
+  const directRx = new RegExp(`^${esc}[A-Za-z][A-Za-z0-9]+$`);
+  let directCount = 0;
+  for (const name of allDefines.keys()) {
+    if (directRx.test(name) && ++directCount >= 3) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Cerca in tutti i define il pattern  TIPO_NOMEREG_CAMPO_Pos/Msk
+ * e restituisce i prefissi "TIPO_NOMEREG" trovati.
+ *
+ * Usato come fallback quando il nome della variabile prima del punto
+ * non codifica il tipo del periferico (es. "my_timer.CR1"):
+ * se un solo tipo possiede quel registro, la corrispondenza è non ambigua.
+ *
+ * Volutamente limitato allo stile _Pos/_Msk per massima precisione.
+ */
+function findPrefixesByRegisterName(
+  registerName: string,
+  allDefines: Map<string, string>
+): string[] {
+  const candidates = new Set<string>();
+  const escapedReg = escapeRegexForPrefix(registerName);
+  // es. "TIM_CR1_CEN_Pos" → cattura "TIM" come gruppo 1 → prefisso "TIM_CR1"
+  const rx = new RegExp(
+    `^([A-Za-z][A-Za-z0-9]*)_${escapedReg}_[A-Za-z][A-Za-z0-9_]*_(?:Pos|pos|Msk|msk)$`
+  );
+  for (const name of allDefines.keys()) {
+    const m = name.match(rx);
+    if (m) {
+      candidates.add(`${m[1]}_${registerName}`);
+    }
+  }
+  return Array.from(candidates);
+}
+
+/**
+ * Risolve il prefisso register-define (es. "TIM_CR1") a partire dai
+ * componenti dell'espressione di accesso.
+ *
+ * Strategia in ordine di priorità:
+ *  1. Esatto:   INSTANCE_REGISTER         (es. TIM2_CR1 se i define usano quel prefisso)
+ *  2. Generico: STRIPPED_INSTANCE_REGISTER (es. TIM_CR1 dopo TIM2→TIM o GPIOA→GPIO)
+ *  3. Fallback dot-notation: cerca in tutti i define un prefisso *non ambiguo*
+ *     TYPE_REGISTER — utile quando la variabile prima del punto ha un nome
+ *     arbitrario che non corrisponde al tipo del periferico (es. "my_timer.CR1").
+ *     Non viene applicato se più tipi condividono lo stesso nome di registro
+ *     (es. CR1 è presente in TIM, SPI, USART, …): preferibile non decodificare
+ *     anziché mostrare campi sbagliati.
  */
 function resolveDefinePrefix(
-  instanceName: string,   // e.g. "TIM2"
-  registerName: string,   // e.g. "CR3"
+  instanceName: string,
+  registerName: string,
   allDefines: Map<string, string>
 ): string | undefined {
-  const exactPrefix = `${instanceName}_${registerName}`;
-  if (hasPositionalOrMaskDefines(exactPrefix, allDefines)) {
+  // Normalise to uppercase: MCU peripheral defines are always uppercase,
+  // while the source variable may use any case (tim1->cr1, TIM1->CR1, …).
+  const inst = instanceName.toUpperCase();
+  const reg  = registerName.toUpperCase();
+
+  // 1. Exact prefix
+  const exactPrefix = `${inst}_${reg}`;
+  if (hasAnyBitfieldDefines(exactPrefix, allDefines)) {
     return exactPrefix;
   }
 
-  const genericInstance = stripTrailingNumber(instanceName);
-  if (genericInstance !== instanceName) {              // only if there was actually a number
-    const genericPrefix = `${genericInstance}_${registerName}`;
-    if (hasPositionalOrMaskDefines(genericPrefix, allDefines)) {
+  // 2. Generic peripheral type (TIM2→TIM, GPIOA→GPIO)
+  const genericInstance = stripInstanceSuffix(inst);
+  if (genericInstance !== inst) {
+    const genericPrefix = `${genericInstance}_${reg}`;
+    if (hasAnyBitfieldDefines(genericPrefix, allDefines)) {
       return genericPrefix;
     }
   }
 
-  return undefined; // false bitfield
-}
+  // 3. Dot-notation fallback (unambiguous register name)
+  const byRegName = findPrefixesByRegisterName(reg, allDefines);
+  if (byRegName.length === 1) {
+    return byRegName[0];
+  }
 
+  return undefined;
+}
 
 /**
  * Escapes special regex characters in a prefix string for safe use in RegExp construction.
@@ -474,28 +592,31 @@ export function decodeBitfieldValue(
   state: CalcDocsState,
   context?: string
 ): BitfieldDecodeResult | null {
+  // Senza contesto di accesso registro (nessun -> o .) non decodificare:
+  // non sappiamo a quale registro il valore appartiene e mostreremmo
+  // entry casuali estratti dall'intero set di #define.
+  const contextIdentifier = context ? context.trim() : "";
+  if (!contextIdentifier) {
+    return null;
+  }
+
   const entries = buildBitfieldEntries(allDefines, state);
   if (entries.length === 0) {
     return null;
   }
 
-  const contextIdentifier = context ? context.trim() : "";
-  const candidates = contextIdentifier
-    ? entries.filter((entry) => matchesContext(entry, contextIdentifier, allDefines))
-    : entries;
+  const candidates = entries.filter(
+    (entry) => matchesContext(entry, contextIdentifier, allDefines)
+  );
 
-  // When a context was explicitly provided, NEVER fall back to all entries
-  // if no candidate matched. This prevents false decodings like `screen.state`
-  // (which normalizes to `screen_state` and has no _Pos/_Msk defines, but would
-  // previously fall back to showing every known bitfield).
-  const selectedEntries = contextIdentifier
-    ? (candidates.length > 0 ? candidates : [])
-    : (candidates.length > 0 ? candidates : entries);
-  if (selectedEntries.length === 0) {
+  // Se il contesto è presente ma non corrisponde a nessun registro noto,
+  // non fare fallback al set completo: restituire null è più corretto
+  // che mostrare bitfield di periferici non correlati.
+  if (candidates.length === 0) {
     return null;
   }
 
-  const fields = selectedEntries
+  const fields = candidates
     .sort((left, right) => {
       if (left.registerPrefix !== right.registerPrefix) {
         return left.registerPrefix.localeCompare(right.registerPrefix);
@@ -538,11 +659,11 @@ export function decodeBitfieldValue(
   }
 
   return {
-    target: contextIdentifier || null,
+    target: contextIdentifier,
     value,
     fields,
-    activeFields: fields.filter((field) => field.active).map((field) => field.name),
-    inactiveFields: fields.filter((field) => !field.active).map((field) => field.name),
+    activeFields:   fields.filter((f) => f.active).map((f) => f.name),
+    inactiveFields: fields.filter((f) => !f.active).map((f) => f.name),
   };
 }
 

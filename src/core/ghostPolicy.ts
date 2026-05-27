@@ -3,7 +3,10 @@ import { collectCppCodeLensItems, type CppCodeLensItem } from "./cppCodeLensItem
 import { extractPureGhostValue } from "./ghostValues";
 import { CalcDocsState } from "./state";
 
-const GHOST_SUPPORTED_LANGUAGE = "c";
+// Extended to include "cpp" so that .h files (which VSCode may identify as
+// either "c" or "cpp" depending on workspace / extension config) also receive
+// ghost decorations instead of falling back to CodeLens only.
+const GHOST_SUPPORTED_LANGUAGES = new Set(["c", "cpp"]);
 
 function isGhostReplaceableItem(item: CppCodeLensItem): boolean {
   return (
@@ -22,7 +25,7 @@ export function shouldRenderGhostInsteadOfCodeLens(
     return false;
   }
 
-  if (document.languageId !== GHOST_SUPPORTED_LANGUAGE) {
+  if (!GHOST_SUPPORTED_LANGUAGES.has(document.languageId)) {
     return false;
   }
 
@@ -124,4 +127,3 @@ export function getLineDisplayPriority(
 
   return { showGhost, showCodeLens, showHover };
 }
-
