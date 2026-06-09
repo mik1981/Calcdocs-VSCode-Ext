@@ -12,6 +12,7 @@ import {
   toViewportLineRanges,
   viewportRangesKey,
   VIEWPORT_REFRESH_DEBOUNCE_MS,
+  padLineRanges
 } from "../core/viewport";
 
 function toCodeLens(item: CppCodeLensItem): vscode.CodeLens {
@@ -90,15 +91,16 @@ export class CppValueCodeLensProvider implements vscode.CodeLensProvider {
       });
       return [];
     }
+    const paddedLineRanges = padLineRanges(lineRanges, document.lineCount, 3);
 
     const maxItemsPerViewport = getMaxItemsPerViewport(this.state.cppCodeLens, 40);
     const items = collectCppCodeLensItems(
       document,
       this.state,
       maxItemsPerViewport * 4,
-      { lineRanges }
+      { lineRanges: paddedLineRanges }
     );
-    const viewportItems = filterItemsToViewport(items, lineRanges);
+    const viewportItems = filterItemsToViewport(items, paddedLineRanges);
     const lineItemCounts = countItemsByLine(viewportItems);
     const lenses: vscode.CodeLens[] = [];
 

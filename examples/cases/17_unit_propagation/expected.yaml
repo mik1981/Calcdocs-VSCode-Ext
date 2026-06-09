@@ -1,0 +1,32 @@
+# Case 17 — Inline unit calculations
+#
+# All values are in the OUTPUT unit requested by the -> annotation.
+# The runner stores results keyed by the @test ID, then compares via
+# getComparableInlineValue which divides by factorToSi so we compare
+# in SI-equivalent space.  Values below are already in the output unit
+# (mA, mW, mbar, K, mm, km/h).
+#
+#   I_mA   = 12 / 4700 A = 0.0025532 A → 2.5532 mA
+#   P_mW   = 12 * (12/4700) W = 0.030638 W → 30.638 mW
+#   P_mbar = 101325 Pa → 1013.25 mbar
+#   T_K    = 25 + 273.15 = 298.15 K
+#   L_mm   = 1.5 m → 1500 mm
+#   V_kmh  = 72 m/s → 259.2 km/h
+
+I_mA:
+  value: 2.553191489
+
+P_mW:
+  value: 30.638297872
+
+P_mbar:
+  value: 1013.25
+
+T_K:
+  value: 298.15
+
+L_mm:
+  value: 1500
+
+V_kmh:
+  value: 259.2

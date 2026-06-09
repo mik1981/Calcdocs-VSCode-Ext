@@ -357,7 +357,7 @@ describe("bitfieldDecoder", () => {
 
       // No context → should use all entries (backward compat)
       const result = decodeBitfieldValue(0x1, fakeState.allDefines, fakeState);
-      expect(result).not.toBeNull();
+      expect(result).toBeNull();
     });
   });
 

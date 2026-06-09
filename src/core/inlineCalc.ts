@@ -156,6 +156,17 @@ function scaleDimensions(value: DimensionVector, exponent: number): DimensionVec
   };
 }
 
+// inlineCalc.ts — aggiungi questa funzione
+/**
+ * Returns true when an assign expression is already a trivial literal
+ * (pure number, or number with unit) and shows no calculated information.
+ * Examples: "42", "1.5 h", "3.14e2 kg", "100 %"
+ */
+export function isTrivialAssignExpression(expression: string): boolean {
+  const trimmed = expression.trim();
+  return /^-?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?(?:\s+[A-Za-z%][A-Za-z0-9_%/^*.\-]*)?$/.test(trimmed);
+}
+
 export function dimensionsEqual(left: DimensionVector, right: DimensionVector): boolean {
   if (!left || !right) {
     return false;

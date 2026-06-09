@@ -1,4 +1,4 @@
-﻿import * as fsp from "fs/promises";
+import * as fsp from "fs/promises";
 import * as path from "path";
 
 import { updateBraceDepth } from "../utils/braceDepth";
@@ -1121,6 +1121,9 @@ export async function collectDefinesAndConsts(
         consts.delete(undefinedName);
         locations.delete(undefinedName);
         globallyDefinedSymbols.delete(undefinedName);
+        // Also remove from seenDefinesInFile so a subsequent
+        // #define of the same name in the same file is not skipped.
+        seenDefinesInFile.delete(undefinedName);
 
         continue;
       }
@@ -1422,7 +1425,13 @@ export async function collectDefinesAndConsts(
               consts.delete(undefName);
               defineConditions.delete(undefName);
               locations.delete(undefName);
+              // Remove from seenDefinesInFile so a subsequent #define
+              // in the same file can be processed (e.g. #undef + #define
+              // inside an active conditional branch).
+              seenDefinesInFile.delete(undefName);
+              defineVariants.delete(undefName);
             }
+
 
             isDirectiveLine = true;
           }

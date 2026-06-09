@@ -9,12 +9,41 @@ import { getMaxItemsPerViewport } from "./viewport";
 // ghost decorations instead of falling back to CodeLens only.
 const GHOST_SUPPORTED_LANGUAGES = new Set(["c", "cpp"]);
 
+// Cache: uri+line → { showGhost, showCodeLens } 
+// Invalidata solo quando cambiano symbolValues/allDefines, non allo scroll
+const priorityCache = new Map<string, { showGhost: boolean; showCodeLens: boolean; tick: number }>();
+
+let currentDataTick = 0; // incrementato ogni volta che i dati cambiano
+
+export function invalidatePriorityCache(): void {
+  currentDataTick++;
+}
+
 function isGhostReplaceableItem(item: CppCodeLensItem): boolean {
   return (
     item.kind === "resolvedValue" ||
     item.kind === "expandedPreview" ||
     item.kind === "functionCall" // ghost/hover only, never code lens
   );
+}
+
+export function shouldRenderInlineCalcGhostForResult(
+  result: { line: number; kind: string; expression: string },
+  state: CalcDocsState
+): boolean {
+  if (!state.inlineGhostEnabled) return false;
+
+  // Stessa esclusione che fa GhostValueProvider: assign con valore puro = no ghost
+  if (
+    result.kind === "assign" &&
+    /^-?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?\s*(?:[A-Za-z%][A-Za-z0-9_%/^*.-]*)?$/.test(
+      result.expression.trim()
+    )
+  ) {
+    return false;
+  }
+
+  return true;
 }
 
 export function shouldRenderGhostInsteadOfCodeLens(
@@ -46,9 +75,13 @@ export function shouldRenderGhostInsteadOfCodeLens(
 export function getPotentialGhostItems(
   document: vscode.TextDocument,
   line: number,
-  state: CalcDocsState
+  state: CalcDocsState,
+  { forPriority = false }: { forPriority?: boolean } = {}
 ): CppCodeLensItem[] {
-  const maxItems = getMaxItemsPerViewport(state.cppCodeLens, 40);
+  const maxItems = forPriority
+    ? 500  // costante generosa, non dipende dal viewport
+    : getMaxItemsPerViewport(state.cppCodeLens, 40);
+
   const allItems = collectCppCodeLensItems(document, state, maxItems, {
     lineRanges: [{ startLine: line, endLine: line }],
   });
@@ -62,7 +95,7 @@ export function shouldRenderGhost(
   line: number,
   state: CalcDocsState
 ): boolean {
-  const items = getPotentialGhostItems(document, line, state);
+  const items = getPotentialGhostItems(document, line, state, { forPriority: true });
   for (const item of items) {
     if (!shouldRenderGhostInsteadOfCodeLens(document, item, state)) {
       continue;
@@ -88,7 +121,7 @@ export function shouldShowCodeLens(
 
   // functionCall items are never code lens — exclude them so they don't
   // cause getLineDisplayPriority to suppress the hover provider.
-  const items = getPotentialGhostItems(document, line, state).filter(
+  const items = getPotentialGhostItems(document, line, state, { forPriority: true }).filter(
     (item) => item.kind !== "functionCall"
   );
   if (items.length === 0) {
@@ -123,10 +156,18 @@ export function getLineDisplayPriority(
   line: number,
   state: CalcDocsState
 ): LineDisplayPriority {
+  const key = `${document.uri.toString()}:${line}`;
+  const cached = priorityCache.get(key);
+  
+  if (cached && cached.tick === currentDataTick) {
+    return { ...cached, showHover: true };
+  }
+
   const showGhost = shouldRenderGhost(document, line, state);
   const showCodeLens = !showGhost && shouldShowCodeLens(document, line, state);
   const richHover = hasRichHoverContent(state);
   const showHover = richHover || (!showGhost && !showCodeLens);
 
+  priorityCache.set(key, { showGhost, showCodeLens, tick: currentDataTick });
   return { showGhost, showCodeLens, showHover };
 }

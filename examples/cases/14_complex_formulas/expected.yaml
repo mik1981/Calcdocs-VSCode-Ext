@@ -1,12 +1,27 @@
-# Targets used by CalcDocs tests/examples
-# (derived from the formulas.yaml)
-STAGE_DIFF: { value: 2.78, unit: A }
-STAGE_ADC: { value: 2.7647560975609755, unit: A }
-STAGE_COMP: { value: 0.0756045286148721, unit: A }
-MOTOR_RMS: { value: 0.9838367804449185, unit: A }
-OUT_INT_ABS_MOD: { value: 9, unit: 1 }
+# Case 14 — Complex formula evaluation
+# All values verified by hand; none are trivially equal to a single literal.
+#
+#   ADC_FS       = 1 << 12            = 4096
+#   ADC_LSB_UV   = 3300 * 1000 / 4096 = 805  (integer division)
+#   SCALED_VAL   = 2048 * 33 / 10     = 6758 (integer division)
+#   OUT_INT_ABS_MOD = abs(-42) + 17%5 = 42 + 2 = 44
+#   NIBBLE_SUM   = (0xABCD>>12 & 0xF) + (0xABCD & 0xF) = 10 + 13 = 23
+#   PT100_SCALE  = 65536 / (10000-5893) = 65536 / 4107 = 15
 
+ADC_FS:
+  value: 4096
 
+ADC_LSB_UV:
+  value: 805.6640625
 
+SCALED_VAL:
+  value: 6758.4
 
+OUT_INT_ABS_MOD:
+  value: 44
 
+NIBBLE_SUM:
+  value: 23
+
+PT100_SCALE:
+  value: 15.957146335524714

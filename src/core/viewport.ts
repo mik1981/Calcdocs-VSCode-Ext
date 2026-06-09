@@ -25,6 +25,17 @@ function sameDocumentUri(left: vscode.Uri, right: vscode.Uri): boolean {
   return left.toString() === right.toString();
 }
 
+export function padLineRanges(
+  ranges: ViewportLineRange[],
+  totalLines: number,
+  pad: number
+): ViewportLineRange[] {
+  return ranges.map(({ startLine, endLine }) => ({
+    startLine: Math.max(0, startLine - pad),
+    endLine: Math.min(totalLines - 1, endLine + pad),
+  }));
+}
+
 export function getMaxItemsPerViewport(
   config: ViewportLimitConfig,
   fallback: number

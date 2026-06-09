@@ -47,6 +47,7 @@ import { FormulaOutlineProvider } from "./formulaOutline/formulaOutlineProvider"
 import { FormulaRegistry } from "./formulaOutline/formulaRegistry";
 import { registerFormulaCommands } from "./formulaOutline/commands";
 import { registerFormulaOutlineHoverProvider } from "./formulaOutline/hoverProvider";
+import { invalidatePriorityCache } from "./core/ghostPolicy";
 
 
 function isCppFileEditor(
@@ -294,6 +295,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         clearDiagnostics(state);
         clearInlineCalcDiagnostics(state);
         refreshRuntimeStatus();
+        invalidatePriorityCache();
         codeLensProvider.refresh();
         inlineCalcCodeLensProvider.refresh();
         inlineCalcResultsViewProvider.refresh();
@@ -315,6 +317,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
       // Aggiorna tutti i componenti UI
       refreshRuntimeStatus();
+      invalidatePriorityCache();
       codeLensProvider.refresh();
       inlineCalcCodeLensProvider.refresh();
       inlineCalcResultsViewProvider.refresh();
@@ -340,6 +343,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
       await runActiveCppFileAnalysis(state, editor.document.uri.fsPath);
       refreshRuntimeStatus();
+      invalidatePriorityCache();
       codeLensProvider.refresh();
       inlineCalcCodeLensProvider.refresh();
       inlineCalcResultsViewProvider.refresh();
@@ -524,6 +528,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         cpuThreshold: nextConfig.resourceCpuThreshold,
       });
       refreshRuntimeStatus();
+      invalidatePriorityCache();
       codeLensProvider.refresh();
       inlineCalcCodeLensProvider.refresh();
       inlineCalcResultsViewProvider.refresh();

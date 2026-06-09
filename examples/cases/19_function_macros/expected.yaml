@@ -1,0 +1,36 @@
+# Case 19 — Function-like macro expansion
+#
+# Manual derivation (BASE=10, STEP=3):
+#   R_DOUBLE   = DOUBLE(10)              = 10*2           = 20
+#   R_TRIPLE   = TRIPLE(10)              = 10*3           = 30
+#   R_ADD      = ADD(10, 3)              = 10+3           = 13
+#   R_MUL      = MUL(10, 3)             = 10*3           = 30
+#   R_MAX2     = MAX2(10, 3)            = 10 > 3 ? 10:3  = 10
+#   R_SCALE    = SCALE(10, 3)           = DOUBLE(10)*3   = 20*3 = 60
+#   R_NORM     = NORM(10, 3, 10)        = MUL(DOUBLE(10), ADD(10,3))
+#                                       = MUL(20, 13)    = 260
+#   R_EXPR_ARG = ADD(10*2, 3+1)         = ADD(20, 4)     = 24
+
+R_DOUBLE:
+  value: 20
+
+R_TRIPLE:
+  value: 30
+
+R_ADD:
+  value: 13
+
+R_MUL:
+  value: 30
+
+R_MAX2:
+  value: 10
+
+R_SCALE:
+  value: 60
+
+R_NORM:
+  value: 260
+
+R_EXPR_ARG:
+  value: 24

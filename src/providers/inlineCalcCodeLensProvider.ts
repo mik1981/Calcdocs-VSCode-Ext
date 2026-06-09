@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 
-import { evaluateInlineCalcsInLineRanges, type InlineCalcResult } from "../core/inlineCalc";
+import { evaluateInlineCalcsInLineRanges, isTrivialAssignExpression, type InlineCalcResult } from "../core/inlineCalc";
 import { CalcDocsState } from "../core/state";
 import {
   CODELENS_DENSE_LINE_ITEM_LIMIT,
@@ -12,7 +12,9 @@ import {
   toViewportLineRanges,
   viewportRangesKey,
   VIEWPORT_REFRESH_DEBOUNCE_MS,
+  padLineRanges
 } from "../core/viewport";
+import { shouldRenderInlineCalcGhostForResult } from "../core/ghostPolicy";
 
 const CODELENS_MAX_TITLE_LEN = 160;
 const CODELENS_SOURCE_PREVIEW_LEN = 80;
@@ -135,15 +137,16 @@ export class InlineCalcCodeLensProvider implements vscode.CodeLensProvider {
       return [];
     }
 
+    const paddedLineRanges = padLineRanges(lineRanges, document.lineCount, 3);
     const maxItemsPerViewport = getMaxItemsPerViewport(this.state.inlineCodeLens, 30);
     const results = evaluateInlineCalcsInLineRanges(
       document,
       this.state,
       { includeAssignments: true },
       document.languageId,
-      lineRanges
+      paddedLineRanges   
     );
-    const viewportResults = filterItemsToViewport(results, lineRanges);
+    const viewportResults = filterItemsToViewport(results, paddedLineRanges);
     const lineResultCounts = countItemsByLine(viewportResults);
     const lenses: vscode.CodeLens[] = [];
     const ghostCanRender = this.state.inlineGhostEnabled && INLINE_CALC_GHOST_LANGUAGES.has(document.languageId);
@@ -153,10 +156,11 @@ export class InlineCalcCodeLensProvider implements vscode.CodeLensProvider {
         break;
       }
 
-      if (
-        ghostCanRender &&
-        (lineResultCounts.get(result.line) ?? 0) > CODELENS_DENSE_LINE_ITEM_LIMIT
-      ) {
+      if (ghostCanRender && shouldRenderInlineCalcGhostForResult(result, this.state)) {
+        continue;
+      }
+
+      if (result.kind === "assign" && isTrivialAssignExpression(result.expression)) {
         continue;
       }
 

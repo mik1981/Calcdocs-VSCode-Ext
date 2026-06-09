@@ -138,7 +138,7 @@ export class InlineCalcResultsViewProvider
     );
 
     if (results.length === 0) {
-      items.push(createInfoItem("No inline calculations found (= ...)"));
+      items.push(createInfoItem("No inline calculations (= ...) or formulas file found (formula*.yaml)"));
       return items;
     }
 

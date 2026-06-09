@@ -72,6 +72,7 @@ MYFN:
   parameters: [a, b]
 OUT_INT_ABS_MOD:
   formula: MYFN(ARR[1], ARR[3])
+  value: 5
   unit: count
 OUT_INT_ABS_MOD2:
   formula: ARR[1]

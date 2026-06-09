@@ -1,0 +1,42 @@
+# Case 16 — Cast overflow / truncation
+#
+# Unsigned casts wrap silently (modulo semantics):
+#   U8_WRAP   = 256 % 256         = 0
+#   U8_VALID  = 200                (fits)
+#   U16_WRAP  = 65536 % 65536     = 0
+#   U16_VALID = 50000              (fits)
+#
+# Signed casts raise CalcDocsCastOverflowError when out of range:
+#   I8_OK    = 100                 (fits [-128..127])
+#   I8_OVF   → error               (200 > 127)
+#   I16_OK   = 30000               (fits [-32768..32767])
+#   I16_OVF  → error               (40000 > 32767)
+#
+# CAST_SUM = 100 + 50 = 150 (both operands fit uint8)
+
+U8_WRAP:
+  value: 0
+
+U8_VALID:
+  value: 200
+
+U16_WRAP:
+  value: 0
+
+U16_VALID:
+  value: 50000
+
+I8_OK:
+  value: 100
+
+I8_OVF:
+  value: error
+
+I16_OK:
+  value: 30000
+
+I16_OVF:
+  value: error
+
+CAST_SUM:
+  value: 150

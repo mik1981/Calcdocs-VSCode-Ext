@@ -1,9 +1,13 @@
 # Changelog
 
-## [0.3.3] - 06/04/2026
+## [0.3.4] - 06/xx/2026
 
-- Added `cppCodeLens.maxItemsPerViewport` and `inlineCodeLens.maxItemsPerViewport` settings (defaulting to 40 and 30 - respectively).
-- Fixed ghost value range limit, applying it only to the actual editor view.
+- Fixed flicker on the last CodeLens value viewed.
+- Fixed useless CodeLens showing on pure assignments with inline calculations.
+- Fixed test engine errors in specific edge cases.
+- Improved rendering performance.
+- Fixed #undef not always being computed correctly (see example case 20).
+- Correctly handled double minus "-" conditions (see example case 14).
 
 ### Upcoming Features:
 
@@ -11,6 +15,11 @@
 - Fixed-point Analyzer (Q15/Q31)
 - Tolerance model rss and gaussian
 - Table formula support
+
+## [0.3.3] - 06/04/2026
+
+- Added `cppCodeLens.maxItemsPerViewport` and `inlineCodeLens.maxItemsPerViewport` settings (defaulting to 40 and 30 - respectively).
+- Fixed ghost value range limit, applying it only to the actual editor view.
 
 ## [0.3.2] - 06/03/2026
 

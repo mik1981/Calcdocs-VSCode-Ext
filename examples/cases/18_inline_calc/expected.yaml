@@ -1,0 +1,31 @@
+# Case 18 — @var assignment chain
+#
+# Computation trace (all in SI base units internally):
+#   vin   = 24 V
+#   r1    = 10 kΩ  = 10000 Ω
+#   r2    = 22 kΩ  = 22000 Ω
+#   r_par = 10000 * 22000 / (10000 + 22000) = 6875 Ω
+#   i     = 24 / 10000 = 0.0024 A
+#   p     = 24 * 0.0024 = 0.0576 W
+#
+# @test values are in the requested output units:
+#   VIN_V    = 24 V
+#   R1_K     = 10 kohm
+#   RPAR_OHM = 6875 ohm
+#   I_UA     = 2400 µA
+#   P_UW     = 57600 µW
+
+VIN_V:
+  value: 24
+
+R1_K:
+  value: 10
+
+RPAR_OHM:
+  value: 6875
+
+I_UA:
+  value: 2400
+
+P_UW:
+  value: 57600

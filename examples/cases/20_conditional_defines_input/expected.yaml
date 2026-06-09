@@ -1,0 +1,28 @@
+# Case 20 — Conditional defines
+#
+# INACTIVE_SYM lives in a dead branch → must NOT be resolvable.
+# All other symbols come from active branches.
+#
+#   ACTIVE_BASE    = 100
+#   ACTIVE_DOUBLE  = 100 * 2   = 200
+#   CHAIN_VAL      = 20         (SELECTOR==2 branch wins)
+#   TEMP_SYM       = 55         (#undef + redefine inside active branch)
+#   COMPOUND       = 200+20+55  = 275
+
+INACTIVE_SYM:
+  value: error
+
+ACTIVE_BASE:
+  value: 100
+
+ACTIVE_DOUBLE:
+  value: 200
+
+CHAIN_VAL:
+  value: 20
+
+TEMP_SYM:
+  value: 55
+
+COMPOUND:
+  value: 275

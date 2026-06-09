@@ -3,7 +3,7 @@ import * as vscode from "vscode";
 import { collectCppCodeLensItems } from "./cppCodeLensItems";
 import { shouldRenderGhostInsteadOfCodeLens } from "./ghostPolicy";
 import { CalcDocsState } from "./state";
-import { evaluateInlineCalcs } from "./inlineCalc";
+import { evaluateInlineCalcs, isTrivialAssignExpression } from "./inlineCalc";
 
 // Languages that receive inline-calc ghost decorations (=calc / @assign).
 const INLINE_CALC_GHOST_LANGUAGES = new Set(["c", "cpp", "plaintext", "yaml"]);
@@ -132,12 +132,7 @@ export class GhostValueProvider {
         }
 
         // Assegnamento con valore numerico puro: il ghost è ridondante
-        if (
-          result.kind === "assign" &&
-          /^-?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?\s*(?:[A-Za-z%][A-Za-z0-9_%/^*.-]*)?$/.test(
-            result.expression.trim()
-          )
-        ) {
+        if (result.kind === "assign" && isTrivialAssignExpression(result.expression)) {
           continue;
         }
 

@@ -109,6 +109,11 @@ export function detectExpressionNumericFormat(expr: string): NumericDisplayForma
   if (BINARY_LITERAL_DETECT_RX.test(expr)) {
     return 'binary';
   }
+  // Ternary expressions produce a numeric result even when the
+  // condition uses relational operators — avoid boolean display.
+  if (expr.includes('?')) {
+    return 'decimal';
+  }
   if (LOGICAL_OP_DETECT_RX.test(expr) || RELATIONAL_OP_DETECT_RX.test(expr)) {
     return 'boolean';
   }
@@ -1207,6 +1212,10 @@ function simplifyNumericFragments(expr: string, context: EvaluationContext): str
   return output;
 }
 
+function numericSubstitution(value: number): string {
+  return value < 0 ? `(${value})` : String(value);
+}
+
 function expandFunctionLikeMacrosInExpression(
   expr: string,
   functionDefines: Map<string, FunctionMacroDefinition>,
@@ -1315,8 +1324,10 @@ function expandFunctionLikeMacrosInExpression(
         }
 
         if (symbolValues.has(identifier)) {
-          return String(symbolValues.get(identifier));
+          const v = symbolValues.get(identifier)!;
+          return numericSubstitution(v);
         }
+
 
         if (RESERVED_IDENTIFIERS.has(identifier) || isFunctionCallToken(identifier, meta, functionDefines)) {
           return identifier;
@@ -1338,7 +1349,7 @@ function expandFunctionLikeMacrosInExpression(
           return identifier;
         }
 
-        return String(value);
+        return numericSubstitution(value);//String(value);
       });
     });
 
@@ -1844,9 +1855,12 @@ export function safeEval(expr: string, context: EvaluationContext = {}): number 
   const fn = new Function(...scopeKeys, `"use strict"; return (${conditionExpr});`);
   let value = fn(...scopeValues);
 
+  const IS_TERNARY_EXPR = /[?]/.test(expr);
   const IS_BOOLEAN_EXPR =
-    LOGICAL_OP_DETECT_RX.test(expr) ||
-    RELATIONAL_OP_DETECT_RX.test(expr);
+    !IS_TERNARY_EXPR && (
+      LOGICAL_OP_DETECT_RX.test(expr) ||
+      RELATIONAL_OP_DETECT_RX.test(expr)
+    );
 
   if (typeof value === "boolean") {
     value = value ? 1 : 0;
@@ -2236,7 +2250,7 @@ export function resolveSymbol(
 
       expanded = expanded.replace(
         new RegExp(`\\b${token}\\b`, "g"),
-        String(resolvedToken)
+        numericSubstitution(resolvedToken)//String(resolvedToken)
       );
     }
 
@@ -2301,7 +2315,7 @@ export function expandExpression(
     }
 
     const unit = symbolUnits.get(token);
-    return unit ? `${value}[${unit}]` : String(value);
+    return unit ? `${value}[${unit}]` : numericSubstitution(value);//String(value);
   });
 }
 
@@ -2533,8 +2547,10 @@ export function buildCompositeExpressionPreview(
 
     if (symbolValues.has(token)) {
       const val = symbolValues.get(token);
-      return String(val);
+      if (val == null) return token;
+      return numericSubstitution(val);
     }
+
 
     const value = resolveSymbol(
       token,
@@ -2548,7 +2564,7 @@ export function buildCompositeExpressionPreview(
       defineConditions
     );
     if (value != null) {
-      return String(value);
+      return numericSubstitution(value);//String(value);
     }
 
     return token;
@@ -2596,7 +2612,7 @@ export function buildCompositeExpressionPreview(
       // console.log(`  >> Replacing "${token}" with "${value}"`);
       simplifiedExpanded = replaceIdentifiersOutsideStrings(
         simplifiedExpanded,
-        (t) => (t === token ? String(value) : t)
+        (t) => (t === token ? numericSubstitution(value)/*String(value)*/ : t)
       );
       // console.log(`  >> After replacement:`, simplifiedExpanded);
     }
