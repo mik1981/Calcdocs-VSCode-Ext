@@ -337,6 +337,51 @@ button, input, select { font: inherit; color: inherit; }
 .tab-panel { display: none; padding: 14px 18px 28px; max-width: 1000px; }
 .tab-panel.active { display: block; }
 
+/* ─── Distribution histogram ───────────────────────────────────────────────── */
+.dist-hist-container {
+  margin: 16px 0;
+  padding: 12px;
+  border: 1px solid var(--vscode-widget-border);
+  border-radius: var(--radius);
+  background: var(--vscode-editor-inactiveSelectionBackground);
+}
+.dist-hist-title {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--vscode-foreground);
+  margin: 0 0 10px;
+}
+.dist-hist-svg {
+  width: 100%;
+  height: 120px;
+  display: block;
+}
+.dist-hist-bar {
+  fill: var(--vscode-editor-selectionBackground);
+  stroke: var(--vscode-focusBorder);
+  stroke-width: 1px;
+}
+.dist-hist-bar:hover {
+  fill: var(--vscode-editor-inactiveSelectionBackground);
+  opacity: 0.8;
+}
+.dist-hist-line {
+  fill: none;
+  stroke-width: 2px;
+}
+.dist-hist-line.mean {
+  stroke: var(--vscode-editor-foreground);
+  stroke-dasharray: 4,2;
+}
+.dist-hist-line.conf {
+  stroke: rgba(255, 200, 0, 0.7);
+  stroke-dasharray: 3,3;
+}
+.dist-hist-label {
+  font-size: 0.70rem;
+  fill: var(--vscode-descriptionForeground);
+}
+
 /* ─── Empty / error states ──────────────────────────────────────────────────── */
 .empty-state {
   color: var(--vscode-descriptionForeground);
@@ -935,6 +980,7 @@ pre.codeblock {
     <div class="tab-bar" id="tab-bar">
       <button class="tab-btn active" data-tab="tree">Dependency Tree</button>
       <button class="tab-btn" data-tab="steps">Evaluation</button>
+      <button class="tab-btn" data-tab="distribution">Distribution</button>
       <button class="tab-btn" data-tab="source">Source</button>
     </div>
 
@@ -944,6 +990,9 @@ pre.codeblock {
         <div class="empty-state">No formula selected.</div>
       </div>
       <div class="tab-panel" id="tab-steps">
+        <div class="empty-state">No formula selected.</div>
+      </div>
+      <div class="tab-panel" id="tab-distribution">
         <div class="empty-state">No formula selected.</div>
       </div>
       <div class="tab-panel" id="tab-source">
@@ -1539,15 +1588,320 @@ function attachInputHandlers() {
   });
 }
 
+/* ─── Distribution histogram helpers ─────────────────────────────────────── */
+function _distPrng() {
+  var s = 0xdeadbeef >>> 0;
+  var sm = function() { s=(s+0x9e3779b9)>>>0; var z=s; z=Math.imul(z^(z>>>16),0x85ebca6b)>>>0; z=Math.imul(z^(z>>>13),0xc2b2ae35)>>>0; return (z^(z>>>16))>>>0; };
+  var pa=sm(),pb=sm(),pc=sm(),pd=sm();
+  var rotl=function(x,k){ return ((x<<k)|(x>>>(32-k)))>>>0; };
+  return function(){ var t=(pb<<9)>>>0; var r=Math.imul(rotl(Math.imul(pb,5)>>>0,7),9)>>>0; pc^=pa;pd^=pb;pb^=pc;pa^=pd;pc^=t;pd=rotl(pd,11); return r/0x100000000; };
+}
+
+function _distSamples(method, min, max, mu, sigma, N) {
+  var prng = _distPrng();
+  var samples = [];
+  var useGauss = (method === 'rss') || (method === 'monte_carlo' && sigma && isFinite(sigma) && sigma > 0);
+  if (useGauss) {
+    for (var i = 0; i < N - 1; i += 2) {
+      var u1 = Math.max(prng(), 1e-15), u2 = prng();
+      var r2 = Math.sqrt(-2 * Math.log(u1)), th = 2 * Math.PI * u2;
+      samples.push(mu + r2 * Math.cos(th) * sigma, mu + r2 * Math.sin(th) * sigma);
+    }
+    if (N % 2 === 1) { var u1b=Math.max(prng(),1e-15),u2b=prng(),rb=Math.sqrt(-2*Math.log(u1b)); samples.push(mu+rb*Math.cos(2*Math.PI*u2b)*sigma); }
+  } else {
+    for (var j = 0; j < N; j++) samples.push(min + prng() * (max - min));
+  }
+  return samples;
+}
+
+function _buildDistSVG(counts, maxCnt, lo, hi, mu, confMin, confMax, tall) {
+  var W = 400, H = tall ? 88 : 50;
+  var padL = 6, padR = 6, padT = 10, padB = 14;
+  var plotW = W - padL - padR, plotH = H - padT - padB;
+  var BINS = counts.length;
+  var bw = plotW / BINS;
+  var rects = '';
+  for (var i = 0; i < BINS; i++) {
+    var x = padL + i * bw;
+    var bh = maxCnt > 0 ? (counts[i] / maxCnt) * plotH : 0;
+    var y = padT + (plotH - bh);
+    var mid = lo + (i + 0.5) * (hi - lo) / BINS;
+    var inConf = mid >= confMin && mid <= confMax;
+    var alpha = (0.30 + 0.55 * (counts[i] / (maxCnt || 1))).toFixed(2);
+    var fill = inConf ? ('rgba(99,102,241,' + alpha + ')') : ('rgba(148,163,184,' + alpha + ')');
+    rects += '<rect x="' + x.toFixed(1) + '" y="' + y.toFixed(1) + '" width="' + Math.max(0, bw - 1.5).toFixed(1) + '" height="' + Math.max(0, bh).toFixed(1) + '" rx="1.5" fill="' + fill + '"/>';
+  }
+  var meanLine = '';
+  if (isFinite(mu)) {
+    var mx = padL + Math.max(0, Math.min(1, (mu - lo) / (hi - lo))) * plotW;
+    meanLine = '<line x1="' + mx.toFixed(1) + '" y1="' + padT + '" x2="' + mx.toFixed(1) + '" y2="' + (padT + plotH) + '" stroke="rgba(99,102,241,0.85)" stroke-width="1.5" stroke-dasharray="3,2"/>';
+    meanLine += '<text x="' + mx.toFixed(1) + '" y="' + (padT - 2) + '" font-size="7" fill="rgba(99,102,241,0.85)" text-anchor="middle">μ</text>';
+  }
+  var mkBound = function(val) {
+    var bx = padL + Math.max(0, Math.min(1, (val - lo) / (hi - lo))) * plotW;
+    return '<line x1="' + bx.toFixed(1) + '" y1="' + padT + '" x2="' + bx.toFixed(1) + '" y2="' + (padT + plotH) + '" stroke="rgba(245,158,11,0.7)" stroke-width="1" stroke-dasharray="3,2"/>';
+  };
+  var confLines = mkBound(confMin) + mkBound(confMax);
+  var loTxt = '<text x="' + padL + '" y="' + (H - 2) + '" font-size="8" fill="currentColor" opacity="0.38" text-anchor="start">' + lo.toFixed(4) + '</text>';
+  var hiTxt = '<text x="' + (padL + plotW) + '" y="' + (H - 2) + '" font-size="8" fill="currentColor" opacity="0.38" text-anchor="end">' + hi.toFixed(4) + '</text>';
+  return '<svg width="100%" viewBox="0 0 ' + W + ' ' + H + '" style="display:block;height:' + H + 'px;overflow:visible;">' + rects + confLines + meanLine + loTxt + hiTxt + '</svg>';
+}
+
+function _computeTol(range, value) {
+  if (!range || !isFinite(range.min) || !isFinite(range.max)) return { avgTol: 0, percText: 'N/A' };
+  var ref = isFinite(value) && value !== 0 ? Math.abs(value) : 1;
+  var halfSpan = (range.max - range.min) / 2;
+  var avgTol = halfSpan / ref * 100;
+  return { avgTol, percText: '±' + avgTol.toFixed(2) + '%' };
+}
+
+function _tolClass(pct) {
+  if (pct < 1) return 'low';
+  if (pct < 5) return 'moderate';
+  return 'high';
+}
+
+function renderDistHistogram(range, nominal, isOutput) {
+  if (!range || !isFinite(range.min) || !isFinite(range.max) || range.min === range.max) return '';
+  var method = range.method || 'worst_case';
+  var mu = isFinite(nominal) ? nominal : (isFinite(range.nominalValue) ? range.nominalValue : (range.min + range.max) / 2);
+  var sigma = range.stddev;
+  var dist = range.distribution;
+  var N = isOutput ? 3000 : 1200;
+  var BINS = 16;
+
+  var shapeName, shapeClass;
+  if (method === 'rss') {
+    shapeName = 'Gaussiana (RSS)'; shapeClass = 'shape-gaussian';
+  } else if (method === 'monte_carlo') {
+    shapeName = dist ? 'Monte Carlo' : 'MC approx.'; shapeClass = 'shape-mc-approx';
+  } else if (method === 'worst_case') {
+    shapeName = 'Worst Case (uniforme)'; shapeClass = 'shape-uniform';
+  } else {
+    shapeName = method || 'Uniforme'; shapeClass = 'shape-uniform';
+  }
+  var isApprox = method === 'monte_carlo' && !dist;
+
+  var lo, hi, counts, maxCnt;
+  if (dist && dist.bins16 && dist.bins16.length > 0 && isFinite(dist.min) && isFinite(dist.max) && dist.min !== dist.max) {
+    // Tier 1: real histogram bins from the MC engine
+    lo = dist.min; hi = dist.max;
+    counts = dist.bins16.slice();
+    maxCnt = 1;
+    if (isFinite(dist.mean)) mu = dist.mean;
+    if (isFinite(dist.stddev)) sigma = dist.stddev;
+  } else if (dist && isFinite(dist.min) && isFinite(dist.max) && dist.min !== dist.max) {
+    // Tier 2: reconstruct from percentile knots (CDF interpolation)
+    lo = dist.min; hi = dist.max;
+    var knots = [
+      [dist.min, 0], [dist.p001, 0.001], [dist.p010, 0.010],
+      [dist.p025, 0.025], [dist.p500, 0.500], [dist.p975, 0.975],
+      [dist.p990, 0.990], [dist.p999, 0.999], [dist.max, 1.000]
+    ];
+    var cdfAt = function(x) {
+      if (x <= knots[0][0]) return 0;
+      if (x >= knots[knots.length-1][0]) return 1;
+      for (var k = 1; k < knots.length; k++) {
+        if (x <= knots[k][0]) {
+          var span = knots[k][0] - knots[k-1][0];
+          var t = span > 0 ? (x - knots[k-1][0]) / span : 0;
+          return knots[k-1][1] + t * (knots[k][1] - knots[k-1][1]);
+        }
+      }
+      return 1;
+    };
+    var bwC = (hi - lo) / BINS;
+    counts = [];
+    for (var i2 = 0; i2 < BINS; i2++) {
+      var c0 = cdfAt(lo + i2 * bwC), c1 = cdfAt(lo + (i2 + 1) * bwC);
+      counts.push(Math.max(0, c1 - c0));
+    }
+    maxCnt = Math.max.apply(null, counts);
+    if (isFinite(dist.mean)) mu = dist.mean;
+    if (isFinite(dist.stddev)) sigma = dist.stddev;
+  } else {
+    // Tier 3: synthetic PRNG fallback
+    var samples = _distSamples(method, range.min, range.max, mu, sigma, N);
+    if (!samples.length) return '';
+    lo = Infinity; hi = -Infinity;
+    for (var k2 = 0; k2 < samples.length; k2++) { if (samples[k2] < lo) lo = samples[k2]; if (samples[k2] > hi) hi = samples[k2]; }
+    if (!isFinite(lo) || !isFinite(hi) || lo === hi) return '';
+    var binW = (hi - lo) / BINS;
+    counts = new Array(BINS).fill(0);
+    for (var s2 = 0; s2 < samples.length; s2++) {
+      var idx = Math.min(BINS - 1, Math.floor((samples[s2] - lo) / binW));
+      counts[idx]++;
+    }
+    maxCnt = Math.max.apply(null, counts);
+  }
+
+  var svg = _buildDistSVG(counts, maxCnt, lo, hi, mu, range.min, range.max, isOutput);
+
+  var shapeBadges = '';
+  if (isOutput && dist) {
+    var skew = dist.skewness, kurt = dist.kurtosis;
+    if (isFinite(skew)) {
+      var skewLbl, skewCls;
+      if (Math.abs(skew) < 0.2) { skewLbl = 'γ₁≈01'; skewCls = 'shape-gaussian'; }
+      else if (skew > 0)         { skewLbl = 'γ₁ +' + skew.toFixed(2) + ' ▶ dx'; skewCls = 'shape-mc-approx'; }
+      else                        { skewLbl = 'γ₁ ' + skew.toFixed(2) + ' ◄ sx'; skewCls = 'shape-mc-approx'; }
+      shapeBadges += '<span class="dist-hist-shape-badge ' + skewCls + '" title="Skewness">' + esc(skewLbl) + '</span>';
+    }
+    if (isFinite(kurt)) {
+      var kurtLbl, kurtCls;
+      if (Math.abs(kurt) < 0.5)  { kurtLbl = 'γ₂≈0'; kurtCls = 'shape-gaussian'; }
+      else if (kurt > 0)          { kurtLbl = 'γ₂ +' + kurt.toFixed(2) + ' acuta'; kurtCls = 'shape-uniform'; }
+      else                         { kurtLbl = 'γ₂ ' + kurt.toFixed(2) + ' piatta'; kurtCls = 'shape-uniform'; }
+      shapeBadges += '<span class="dist-hist-shape-badge ' + kurtCls + '" title="Excess kurtosis">' + esc(kurtLbl) + '</span>';
+    }
+  }
+
+  var statsHtml = '';
+  if (isOutput) {
+    var muVal = dist ? dist.mean : mu;
+    var sdVal = dist ? dist.stddev : sigma;
+    var minVal = dist ? dist.min : range.min;
+    var maxVal = dist ? dist.max : range.max;
+    var p25Val = dist && isFinite(dist.p025) ? ('<div class="dist-hist-stat-chip"><span class="dist-hist-stat-lbl">P2.5</span><span class="dist-hist-stat-val">' + fmt(dist.p025) + '</span></div>') : '';
+    var p975Val = dist && isFinite(dist.p975) ? ('<div class="dist-hist-stat-chip"><span class="dist-hist-stat-lbl">P97.5</span><span class="dist-hist-stat-val">' + fmt(dist.p975) + '</span></div>') : '';
+    var nVal = dist ? ('<div class="dist-hist-stat-chip"><span class="dist-hist-stat-lbl">N</span><span class="dist-hist-stat-val">' + dist.samples.toLocaleString('it-IT') + '</span></div>') : '';
+    statsHtml = '<div class="dist-hist-stats">'
+      + (isFinite(muVal) ? '<div class="dist-hist-stat-chip"><span class="dist-hist-stat-lbl">μ</span><span class="dist-hist-stat-val">' + fmt(muVal) + '</span></div>' : '')
+      + (sdVal && isFinite(sdVal) ? '<div class="dist-hist-stat-chip"><span class="dist-hist-stat-lbl">σ</span><span class="dist-hist-stat-val">' + fmt(sdVal) + '</span></div>' : '')
+      + p25Val + p975Val
+      + '<div class="dist-hist-stat-chip"><span class="dist-hist-stat-lbl">min</span><span class="dist-hist-stat-val">' + fmt(minVal) + '</span></div>'
+      + '<div class="dist-hist-stat-chip"><span class="dist-hist-stat-lbl">max</span><span class="dist-hist-stat-val">' + fmt(maxVal) + '</span></div>'
+      + nVal
+      + '</div>';
+  }
+
+  var legendHtml = isOutput
+    ? '<div class="dist-hist-legend">'
+      + '<span class="dist-hist-legend-item"><span class="dist-hist-legend-swatch" style="background:rgba(99,102,241,0.65)"></span>Intervallo di confidenza</span>'
+      + '<span class="dist-hist-legend-item"><span class="dist-hist-legend-swatch" style="background:rgba(148,163,184,0.45)"></span>Fuori dalla banda</span>'
+      + '<span class="dist-hist-legend-item"><svg width="18" height="8" style="vertical-align:middle"><line x1="0" y1="4" x2="18" y2="4" stroke="rgba(99,102,241,0.85)" stroke-width="1.5" stroke-dasharray="3,2"/></svg>&nbsp;μ</span>'
+      + '<span class="dist-hist-legend-item"><svg width="18" height="8" style="vertical-align:middle"><line x1="0" y1="4" x2="18" y2="4" stroke="rgba(245,158,11,0.7)" stroke-width="1" stroke-dasharray="3,2"/></svg>&nbsp;Limite conf.</span>'
+      + '</div>'
+    : '';
+
+  return '<div class="dist-hist-wrap">'
+    + '<div class="dist-hist-head">'
+    + '<span>Andamento distribuzione<span class="dist-hist-shape-badge ' + shapeClass + '">' + esc(shapeName) + '</span>' + shapeBadges + '</span>'
+    + (isApprox ? '<span class="dist-hist-note">approssimazione &mdash; forma reale dipende dagli input</span>' : '')
+    + '</div>'
+    + '<div class="dist-hist-svg-wrap">' + svg + '</div>'
+    + legendHtml + statsHtml
+    + '</div>';
+}
+
+function renderRangeWidget(range, value, _unused) {
+  if (!range || !isFinite(range.min) || !isFinite(range.max)) return '';
+  var ref = isFinite(value) && value !== 0 ? Math.abs(value) : 1;
+  var loP = ((range.min - value) / ref * 100).toFixed(1);
+  var hiP = ((range.max - value) / ref * 100).toFixed(1);
+  return '<div class="range-widget"><span class="range-lo">' + fmt(range.min) + ' (' + loP + '%)</span><span class="range-sep">↔</span><span class="range-hi">' + fmt(range.max) + ' (+' + hiP + '%)</span></div>';
+}
+
+/* ─── Render distribution tab ────────────────────────────────────────────── */
+function renderDistributionPanel(formula, tree) {
+  var panel = document.getElementById('tab-distribution');
+  if (!formula) { panel.innerHTML = '<div class="empty-state">No formula selected.</div>'; return; }
+
+  var ranges = [];
+  var collectRanges = function(node) {
+    var r = (node.range && isFinite(node.range.min)) ? node.range
+          : (node.result && node.result.range && isFinite(node.result.range.min)) ? node.result.range
+          : null;
+    if (r && node.name) {
+      ranges.push({ name: node.name, expression: node.expression || '', value: node.result && node.result.value, range: r, isOutput: node.depth === 0 });
+    }
+    (node.children || []).forEach(collectRanges);
+  };
+  if (tree && tree.name) collectRanges(tree);
+
+  var outputRange = ranges.find(function(r) { return r.isOutput; });
+  var inputRanges = ranges.filter(function(r) { return !r.isOutput && r.range; });
+
+  if (!outputRange && inputRanges.length === 0) {
+    panel.innerHTML = '<div class="empty-state"><p>No tolerance data available.</p><p style="font-size:0.82rem;margin-top:8px;opacity:0.7">Add <code>uncertainty</code> and <code>distribution</code> blocks to inputs and <code>propagation</code> to the formula.</p></div>';
+    return;
+  }
+
+  var methodLabel = outputRange && outputRange.range.method
+    ? (outputRange.range.method === 'monte_carlo' ? 'Monte Carlo'
+       : outputRange.range.method === 'rss' ? 'RSS (Root Sum Square)'
+       : outputRange.range.method === 'worst_case' ? 'Worst Case' : outputRange.range.method)
+    : 'Unknown';
+
+  var methodExplanations = {
+    'worst_case': '<p><strong>Worst Case</strong>: Δ = Σ|sensitivity_i|. Intervallo garantito al 100%. Calcolato come somma lineare delle sensitività.</p>',
+    'rss': '<p><strong>RSS (Root Sum Square)</strong>: σ_output = √Σ(dfdx_i · σ_i)² dove dfdx_i è la derivata numerica centrata. Δ_output = 3 × σ_output.</p>',
+    'monte_carlo': '<p><strong>Monte Carlo</strong>: N campioni generati secondo le distribuzioni degli input, formula valutata per ogni campione. Bounds calcolati come percentili. Default: confidence=95% → [p2.5, p97.5].</p>',
+  };
+
+  var html = '<p class="section-title">Propagation Method: ' + esc(methodLabel) + '</p>';
+  if (outputRange) {
+    html += '<div class="note" style="margin-bottom:14px;">' + (methodExplanations[outputRange.range.method] || '') + '</div>';
+  }
+
+  if (inputRanges.length > 0) {
+    html += '<p class="section-title" style="margin-top:18px">Input Distributions (' + inputRanges.length + ')</p>';
+    html += '<div style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px;">';
+    inputRanges.forEach(function(inp) {
+      var t = _computeTol(inp.range, inp.value);
+      html += '<div class="node-card">'
+        + '<div class="node-toggle-header" style="cursor:default">'
+        + '<span class="node-name-group"><div class="node-name">' + esc(inp.name) + '</div>'
+        + (inp.expression ? '<div class="node-expr-inline">' + esc(inp.expression) + '</div>' : '') + '</span>'
+        + '<span class="node-result-chip">' + esc(fmt(inp.value || 0)) + '</span></div>'
+        + '<div class="node-body">'
+        + renderDistHistogram(inp.range, inp.value || 0, false)
+        + '<div style="display:flex;gap:16px;flex-wrap:wrap;font-size:0.78rem;color:var(--vscode-descriptionForeground);margin-top:4px;">'
+        + '<span>Nominal: <strong>' + esc(fmt(inp.value || 0)) + '</strong></span>'
+        + '<span>Δ ±: <strong>' + esc(t.percText) + '</strong></span>'
+        + '<span>Range: <strong>[' + esc(fmt(inp.range.min)) + ', ' + esc(fmt(inp.range.max)) + ']</strong></span>'
+        + (inp.range.stddev !== undefined ? '<span>σ: <strong>' + esc(fmt(inp.range.stddev)) + '</strong></span>' : '')
+        + '</div></div></div>';
+    });
+    html += '</div>';
+  }
+
+  if (outputRange) {
+    var t = _computeTol(outputRange.range, outputRange.value);
+    var d = outputRange.range;
+    html += '<p class="section-title" style="margin-top:18px">Output Distribution</p>';
+    html += '<div class="node-card depth-0">'
+      + '<div class="node-toggle-header" style="cursor:default">'
+      + '<span class="node-name-group"><div class="node-name">' + esc(outputRange.name) + ' (result)</div>'
+      + '<div class="node-expr-inline">' + esc(outputRange.expression) + '</div></span>'
+      + '<span class="node-result-chip">' + esc(fmt(outputRange.value || 0)) + '</span></div>'
+      + '<div class="node-body">'
+      + renderDistHistogram(outputRange.range, outputRange.value || 0, true)
+      + '<div style="display:flex;gap:16px;flex-wrap:wrap;font-size:0.78rem;color:var(--vscode-descriptionForeground);margin-top:4px;">'
+      + '<span>Nominal: <strong>' + esc(fmt(outputRange.value || 0)) + '</strong></span>'
+      + '<span>Δ ±: <strong>' + esc(t.percText) + '</strong></span>'
+      + '<span>Method: <strong>' + esc(outputRange.range.method || 'N/A') + '</strong></span>'
+      + (d.stddev !== undefined ? '<span>σ: <strong>' + esc(fmt(d.stddev)) + '</strong></span>' : '')
+      + '</div>'
+      + (d.nominalValue !== undefined ? '<div style="font-size:0.78rem;margin-top:6px;"><p>Nominal output = ' + esc(fmt(d.nominalValue)) + '</p>'
+        + (d.stddev !== undefined ? '<p>σ<sub>output</sub> = ' + esc(fmt(d.stddev)) + '</p>' : '')
+        + '<p>Confidence interval: [' + esc(fmt(d.min)) + ', ' + esc(fmt(d.max)) + ']</p></div>' : '')
+      + '</div></div>';
+  }
+
+  panel.innerHTML = html;
+}
+
 /* ─── Main render ─────────────────────────────────────────────────────────── */
 function renderAll() {
-  const formula = selectedFormula();
-  const tree    = currentTree || (formula && formula.tree) || null;
+  var formula = selectedFormula();
+  var tree    = currentTree || (formula && formula.tree) || null;
 
   renderRootHeader(formula, tree);
   renderFormulaList();
   renderTreePanel(formula, tree);
   renderStepsPanel(formula);
+  renderDistributionPanel(formula, tree);
   renderSourcePanel(formula, tree);
 }
 
@@ -1605,6 +1959,162 @@ function collectStepsFromTree(tree) {
   };
   walk(tree);
   return out;
+}
+
+/* ─── Distribution histogram ───────────────────────────────────────────────── */
+function renderDistHistogram(container, dist, range) {
+  if (!dist || !container) return;
+
+  const { min: dmin, max: dmax, mean } = dist;
+  if (!dmin || !dmax || !isFinite(dmin) || !isFinite(dmax)) {
+    container.innerHTML = `<div class="empty-state">No valid distribution data</div>`;
+    return;
+  }
+
+  const lo = range?.min ?? dmin;
+  const hi = range?.max ?? dmax;
+  const mu = mean ?? ((lo + hi) / 2);
+  const isOutput = range?.method !== undefined;
+
+  let counts = [];
+  let maxCnt = 0;
+
+  // Priority 1: use real bins16 if available
+  if (dist.bins16 && Array.isArray(dist.bins16) && dist.bins16.length === 16) {
+    counts = dist.bins16;
+    maxCnt = Math.max(...counts);
+  } 
+  // Priority 2: fallback to CDF interpolation (9 knots)
+  else if (dist.p5 !== undefined && dist.p25 !== undefined && dist.p50 !== undefined && 
+           dist.p75 !== undefined && dist.p95 !== undefined) {
+    const knots = [
+      { x: dmin, y: 0 },
+      { x: dist.p5,  y: 0.05 },
+      { x: dist.p25, y: 0.25 },
+      { x: dist.p50, y: 0.50 },
+      { x: dist.p75, y: 0.75 },
+      { x: dist.p95, y: 0.95 },
+      { x: dmax, y: 1 }
+    ];
+    const interpCdf = (x) => {
+      if (x <= dmin) return 0;
+      if (x >= dmax) return 1;
+      for (let i = 0; i < knots.length - 1; i++) {
+        const k1 = knots[i], k2 = knots[i + 1];
+        if (x >= k1.x && x <= k2.x) {
+          const t = (x - k1.x) / (k2.x - k1.x);
+          return k1.y + t * (k2.y - k1.y);
+        }
+      }
+      return 0.5;
+    };
+    const binWidth = (dmax - dmin) / 16;
+    for (let i = 0; i < 16; i++) {
+      const x1 = dmin + i * binWidth;
+      const x2 = x1 + binWidth;
+      const c = interpCdf(x2) - interpCdf(x1);
+      counts.push(c);
+    }
+    maxCnt = Math.max(...counts);
+  }
+  // Priority 3: synthetic uniform fallback
+  else {
+    counts = new Array(16).fill(1/16);
+    maxCnt = 1/16;
+  }
+
+  // Normalize counts to SVG coordinates
+  const svgW = container.clientWidth || 400;
+  const svgH = 120;
+  const pad = { top: 15, right: 5, bottom: 20, left: 5 };
+  const barW = (svgW - pad.left - pad.right) / 16;
+
+  let svg = `<svg class="dist-hist-svg" viewBox="0 0 ${svgW} ${svgH}">`;
+  
+  // Draw bars
+  counts.forEach((c, i) => {
+    const barH = (c / maxCnt) * (svgH - pad.top - pad.bottom);
+    const x = pad.left + i * barW;
+    const y = svgH - pad.bottom - barH;
+    svg += `<rect class="dist-hist-bar" x="${x + 1}" y="${y}" width="${barW - 2}" height="${barH}" rx="2" />`;
+  });
+
+  // Mean line
+  const meanX = pad.left + ((mu - dmin) / (dmax - dmin)) * (svgW - pad.left - pad.right);
+  svg += `<line class="dist-hist-line mean" x1="${meanX}" y1="${pad.top}" x2="${meanX}" y2="${svgH - pad.bottom}" />`;
+
+  // Confidence interval lines (if output)
+  if (isOutput) {
+    const confMinX = pad.left + ((lo - dmin) / (dmax - dmin)) * (svgW - pad.left - pad.right);
+    const confMaxX = pad.left + ((hi - dmin) / (dmax - dmin)) * (svgW - pad.left - pad.right);
+    svg += `<line class="dist-hist-line conf" x1="${confMinX}" y1="${pad.top}" x2="${confMinX}" y2="${svgH - pad.bottom}" />`;
+    svg += `<line class="dist-hist-line conf" x1="${confMaxX}" y1="${pad.top}" x2="${confMaxX}" y2="${svgH - pad.bottom}" />`;
+  }
+
+  svg += `</svg>`;
+
+  // Add labels
+  const stats = [
+    { label: "Min", value: dmin.toFixed(4) },
+    { label: "Mean", value: mu.toFixed(4) },
+    { label: "Max", value: dmax.toFixed(4) }
+  ];
+  if (isOutput) {
+    stats.splice(1, 0, { label: "Conf", value: `[${lo.toFixed(2)}, ${hi.toFixed(2)}]` });
+  }
+
+  const labelHtml = stats.map(s => 
+    `<span class="dist-hist-label"><b>${s.label}:</b> ${s.value}</span>`
+  ).join(" | ");
+
+  container.innerHTML = `
+    <div class="dist-hist-title">Distribution</div>
+    ${svg}
+    <div style="margin-top:8px;">${labelHtml}</div>
+  `;
+}
+
+function renderDistributionPanel(formula, tree) {
+  const panel = document.getElementById("tab-distribution");
+  if (!panel || !formula || !tree) {
+    if (panel) panel.innerHTML = `<div class="empty-state">Select a formula to view distribution</div>`;
+    return;
+  }
+
+  // Find the selected node in the tree
+  const selectedNode = findNodeByName(tree, formula.name);
+  if (!selectedNode) {
+    panel.innerHTML = `<div class="empty-state">Formula node not found in tree</div>`;
+    return;
+  }
+
+  // Get range from node.range or node.result.range
+  const range = selectedNode.range || selectedNode.result?.range;
+  if (!range || !range.distribution) {
+    panel.innerHTML = `
+      <div class="section-title">Formula Distribution</div>
+      <div class="empty-state">No distribution data available for this formula</div>
+    `;
+    return;
+  }
+
+  panel.innerHTML = `
+    <div class="section-title">Formula Distribution</div>
+    <div class="dist-hist-container" id="dist-hist-main"></div>
+  `;
+
+  renderDistHistogram(document.getElementById("dist-hist-main"), range.distribution, range);
+}
+
+function findNodeByName(node, name) {
+  if (node.name === name) return node;
+  if (node.children) {
+    for (const child of node.children) {
+      const found = findNodeByName(child, name);
+      if (found) return found;
+    }
+  }
+  return null;
 }
 
 /* ─── Message listener ────────────────────────────────────────────────────── */

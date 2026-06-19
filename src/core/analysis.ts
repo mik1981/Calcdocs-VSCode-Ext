@@ -1411,13 +1411,8 @@ function rebuildFormulaIndexWithEngine(
         : undefined;
       entry.toleranceResult = evaluated.range
         ? {
-            min: evaluated.range.min,
-            max: evaluated.range.max,
+            ...evaluated.range,
             source: evaluated.range.source,
-            tol: evaluated.range.tol,
-            nominalValue: evaluated.range.nominalValue,
-            mode: evaluated.range.mode,
-            sigma: evaluated.range.sigma,
           }
         : undefined;
 

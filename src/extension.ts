@@ -48,6 +48,9 @@ import { FormulaRegistry } from "./formulaOutline/formulaRegistry";
 import { registerFormulaCommands } from "./formulaOutline/commands";
 import { registerFormulaOutlineHoverProvider } from "./formulaOutline/hoverProvider";
 import { invalidatePriorityCache } from "./core/ghostPolicy";
+import { GuideWebviewProvider } from "./ui/guideWebviewProvider";
+
+import { initGuideEngineClient } from "./ui/guideEngineClient";
 
 
 function isCppFileEditor(
@@ -120,6 +123,47 @@ let runtimeStatusBar: vscode.StatusBarItem | undefined;
  */
 let resourceMonitor: ExtensionResourceMonitor | undefined;
 let clangdService: ClangdService | undefined;
+
+
+export function registerGuideCommands(context: vscode.ExtensionContext): void {
+  // Comando per aprire la guida interattiva (per .c files e formula*.yaml)
+  context.subscriptions.push(
+    vscode.commands.registerCommand("calcdocs.openGuide", async () => {
+      const editor = vscode.window.activeTextEditor;
+      const fileName = editor?.document.fileName.toLowerCase() ?? "";
+      
+      // Per file .c/.cpp/.h: apre la guida inline calc
+      if (editor && /\.(c|cc|cpp|cxx|h|hpp|hxx)$/.test(fileName)) {
+        await vscode.commands.executeCommand("calcdocs.inlineCalc.openGuide");
+        return;
+      }
+      
+      // Per file formulas*.yaml: apre la guida interattiva completa
+      if (editor && /formula.*\.(yaml|yml)$/.test(fileName)) {
+        GuideWebviewProvider.openAsPanel(context);
+        return;
+      }
+      
+      // Fallback: apre la guida interattiva come pannello
+      GuideWebviewProvider.openAsPanel(context);
+    })
+  );
+
+  // Imposta il context key per lo sdoppiamento dell'icona
+  context.subscriptions.push(
+    vscode.window.onDidChangeActiveTextEditor((editor) => {
+      if (!editor) {
+        vscode.commands.executeCommand("setContext", "calcdocs.formulaFileNames", false);
+        return;
+      }
+      const fileName = editor.document.fileName.toLowerCase();
+      const isFormulaYaml = /formula.*\.(yaml|yml)$/.test(fileName);
+      vscode.commands.executeCommand("setContext", "calcdocs.formulaFileNames", isFormulaYaml);
+      vscode.commands.executeCommand("setContext", "calcdocs.cFileActive", /\.(c|cc|cpp|cxx|h|hpp|hxx)$/.test(fileName));
+    })
+  );
+}
+
 
 /**
  * Punto di ingresso principale dell'estensione VSCode.
@@ -466,6 +510,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   scheduler = new AnalysisScheduler(state, runAnalysisAndRefreshUi);
   scheduler.applyConfiguration(context, config);
   context.subscriptions.push(scheduler);
+
+  // Registra i comandi della guida interattiva
+  registerGuideCommands(context);
 
   // Registra i comandi dell'estensione (toggleEnabled, etc.)
   registerCommands({

@@ -1,110 +1,382 @@
-# Questo file serve a verificare (separatamente e in modo indipendente) i 3 modelli di propagazione:
-# - worst_case
-# - rss
-# - gaussian
+# formulas_model_modes_expected.yaml
 #
-# Nota: il motore applica la modalità indicata su ciascun simbolo "finale" (campo tol_mode/mode).
-# Per i simboli con tol percentuale dichiarata (X), la tolleranza viene poi propagata.
+# File di verifica dei modelli di propagazione tolleranza in CalcDocs.
+#
+# FORMATO: nuovo modello a 3 livelli
+#   uncertainty:  { type: percent|range|absolute|sigma, ... }   → ampiezza incertezza input
+#   distribution: { type: normal|uniform|triangular, ... }      → forma distribuzione input
+#   propagation:  worst_case | rss | monte_carlo                → metodo propagazione output
+#
+# NOTA: il campo legacy "mode:" e "probabilistic:" sono stati RIMOSSI.
+# Erano ignorati dal nuovo parser e causavano risultati non deterministici.
+#
+# PropagationMethod validi: worst_case, rss, monte_carlo
+# NON esiste "gaussian" come propagation method.
+# Il vecchio "mode: gaussian sigma: k" equivale a propagation: rss (sigmaOut=3 fisso).
+#
+# ============================================================================
+# 1. INPUT CON TOLLERANZA (formato moderno)
+# ============================================================================
+# Tutti i simboli sotto hanno nominal=100, uncertainty=±5%
+# La distribution determina come viene calcolata la stddev per RSS/MC.
 
-# ------------------------------
-# INPUT CON TOLLERANZA
-# ------------------------------
 X_TOL:
-  # caso non-lineare: usa un valore nominale abbastanza semplice
   type: const
   value: 100
   unit: count
-  # ±5% sul nominale
-  tol: 5
-  tol_mode: worst_case
+  uncertainty:
+    type: percent
+    value: 5
+  distribution:
+    type: uniform
+  # hw = 100 * 5/100 = 5
+  # uniform → sigma = 5/√3 ≈ 2.887
+  # range dichiarato: [95, 105]
 
 X_RSS:
-  # caso non-lineare: usa un valore nominale abbastanza semplice
+  type: const
+  value: 100
+  unit: count
+  uncertainty:
+    type: percent
+    value: 5
+  distribution:
+    type: normal
+    sigma_level: 2
+  # hw = 5, normal sl=2 → sigma = 5/2 = 2.5
+  # range dichiarato: [95, 105]
+
+X_GAUSS:
+  type: const
+  value: 100
+  unit: count
+  uncertainty:
+    type: percent
+    value: 5
+  distribution:
+    type: normal
+    sigma_level: 2
+  # hw = 5, normal sl=2 → sigma = 2.5
+  # range dichiarato: [95, 105]
+
+# ============================================================================
+# 2. INPUT CON RANGE ASIMMETRICO
+# ============================================================================
+
+X_RANGE_ASYM:
+  type: const
+  value: 100
+  unit: count
+  uncertainty:
+    type: range
+    min: 92
+    max: 108
+  distribution:
+    type: uniform
+  # hw = 8, sigma = 8/√3 ≈ 4.619
+
+# ============================================================================
+# 3. CASI LINEARI: Y = X
+# Verifica worst_case, rss, monte_carlo con singolo input
+# ============================================================================
+# Per funzione lineare f(x) = x:
+#   sensitivity_wc = (f(nom+hw) - f(nom-hw)) / 2 = hw
+#   sensitivity_rss = dfdx × sigma = 1 × sigma
+
+# --- Worst Case ---
+Y_linear_wc:
+  type: expr
+  formula: X_TOL
+  unit: count
+  propagation: worst_case
+  # sensitivity = hw = 5, delta = 5
+  expected:
+    value: 100
+    min: 95
+    max: 105
+
+# --- RSS con input uniform ---
+Y_linear_rss_uniform:
+  type: expr
+  formula: X_TOL
+  unit: count
+  propagation: rss
+  # dfdx=1, sigma=5/√3≈2.887, sensitivity=2.887
+  # stddev_out=2.887, delta=3×2.887=8.660 → [91.34, 108.66]
+  # Nota: per input uniform RSS dà range PIÙ AMPIO del worst_case
+  expected:
+    value: 100
+    min: 91.34
+    max: 108.66
+
+# --- RSS con input normal sigma_level=2 ---
+Y_linear_rss_normal2s:
+  type: expr
+  formula: X_RSS
+  unit: count
+  propagation: rss
+  # dfdx=1, sigma=5/2=2.5, sensitivity=2.5
+  # stddev_out=2.5, delta=3×2.5=7.5 → [92.5, 107.5]
+  expected:
+    value: 100
+    min: 92.5
+    max: 107.5
+
+# ============================================================================
+# 4. CASI NON-LINEARI: Y = X²
+# ============================================================================
+# nominal = 100² = 10000
+# hw_in = 5 → f(105)=11025, f(95)=9025
+
+# --- Worst Case: sensitivity = (11025 - 9025)/2 = 1000 ---
+Y_nonlinear_wc:
+  type: expr
+  formula: X_TOL * X_TOL
+  unit: count
+  propagation: worst_case
+  # f(x)=x²: f(105)=11025, f(95)=9025, f(100)=10000
+  # upEffect = f(105) - f(100) = 1025
+  # downEffect = f(95) - f(100) = -975
+  # worst_case asimmetrico: [10000-975, 10000+1025] = [9025, 11025]
+  expected:
+    value: 10000
+    min: 9025
+    max: 11025
+
+# --- RSS con input uniform ---
+Y_nonlinear_rss_uniform:
+  type: expr
+  formula: X_TOL * X_TOL
+  unit: count
+  propagation: rss
+  # dfdx = (f(105)-f(95))/(2×5) = (11025-9025)/10 = 200
+  # sigma = 5/√3 ≈ 2.887
+  # sensitivity = dfdx × sigma = 200 × 2.887 = 577.35
+  # stddev_out = 577.35, delta = 3 × 577.35 = 1732.05 → [8267.95, 11732.05]
+  expected:
+    value: 10000
+    min: 8268
+    max: 11732
+
+# --- RSS con input normal sigma_level=2 ---
+Y_nonlinear_rss_normal2s:
+  type: expr
+  formula: X_RSS * X_RSS
+  unit: count
+  propagation: rss
+  # dfdx = (f(105)-f(95))/(2×5) = (11025-9025)/10 = 200
+  # sigma = 5/2 = 2.5
+  # sensitivity = 200 × 2.5 = 500
+  # delta = 3 × 500 = 1500 → [8500, 11500]
+  expected:
+    value: 10000
+    min: 8500
+    max: 11500
+
+# ============================================================================
+# 5. CASI A DUE INPUT: Y = X_TOL + X_RSS
+# Verifica che le distribuzioni diverse siano trattate correttamente
+# ============================================================================
+# nominal = 100 + 100 = 200
+
+# --- Worst Case ---
+Y_two_wc:
+  type: expr
+  formula: X_TOL + X_RSS
+  unit: count
+  propagation: worst_case
+  # delta_wc = hw(X_TOL) + hw(X_RSS) = 5 + 5 = 10 → [190, 210]
+  expected:
+    value: 200
+    min: 190
+    max: 210
+
+# --- RSS ---
+Y_two_rss:
+  type: expr
+  formula: X_TOL + X_RSS
+  unit: count
+  propagation: rss
+  # sigma(X_TOL)=5/√3≈2.887, sigma(X_RSS)=5/2=2.5
+  # stddev_out = √(2.887² + 2.5²) = √(8.333 + 6.25) = √14.583 ≈ 3.819
+  # delta = 3 × 3.819 ≈ 11.456 → [188.544, 211.456]
+  expected:
+    value: 200
+    min: 188.5
+    max: 211.5
+
+# ============================================================================
+# 6. SOMMA DI 6 INPUT: tutti i modelli
+# ============================================================================
+# Y_total = X_TOL + X_TOL + X_GAUSS + X_TOL + X_RSS + X_GAUSS
+# (gli input originali X_TOL_PROB ecc. erano equivalenti, ora si usa direttamente)
+#
+# halfWidths (tutti): 5, 5, 5, 5, 5, 5 → tutti ±5
+# stddevs (uniform): 5/√3 ≈ 2.887 (X_TOL ×3)
+# stddevs (normal sl=2): 5/2 = 2.5 (X_RSS, X_GAUSS ×2, ×1)
+#
+# Nota: riscriviamo con simboli autonomi per chiarezza.
+
+A_UNIF_1:
+  type: const
+  value: 100
+  unit: count
+  uncertainty:
+    type: percent
+    value: 5
+  distribution:
+    type: uniform
+
+A_UNIF_2:
+  type: const
+  value: 100
+  unit: count
+  uncertainty:
+    type: percent
+    value: 5
+  distribution:
+    type: uniform
+
+A_NORM_2S_1:
+  type: const
+  value: 100
+  unit: count
+  uncertainty:
+    type: percent
+    value: 5
+  distribution:
+    type: normal
+    sigma_level: 2
+
+A_NORM_2S_2:
+  type: const
+  value: 100
+  unit: count
+  uncertainty:
+    type: percent
+    value: 5
+  distribution:
+    type: normal
+    sigma_level: 2
+
+A_NORM_3S_1:
+  type: const
+  value: 100
+  unit: count
+  uncertainty:
+    type: percent
+    value: 5
+  distribution:
+    type: normal
+    sigma_level: 3
+
+A_NORM_3S_2:
+  type: const
+  value: 100
+  unit: count
+  uncertainty:
+    type: percent
+    value: 5
+  distribution:
+    type: normal
+    sigma_level: 3
+
+Y_total_worst_case:
+  type: expr
+  formula: A_UNIF_1 + A_UNIF_2 + A_NORM_2S_1 + A_NORM_2S_2 + A_NORM_3S_1 + A_NORM_3S_2
+  unit: count
+  propagation: worst_case
+  # delta_wc = hw × 6 = 5 × 6 = 30 → [570, 630]
+  expected:
+    value: 600
+    min: 570
+    max: 630
+
+Y_total_rss:
+  type: expr
+  formula: A_UNIF_1 + A_UNIF_2 + A_NORM_2S_1 + A_NORM_2S_2 + A_NORM_3S_1 + A_NORM_3S_2
+  unit: count
+  propagation: rss
+  # sigma_i: 2.887, 2.887, 2.5, 2.5, 5/3≈1.667, 5/3≈1.667
+  # sum(sigma²) = 8.333+8.333+6.25+6.25+2.778+2.778 = 34.722
+  # stddev_out = √34.722 ≈ 5.892
+  # delta = 3×5.892 ≈ 17.676 → [582.3, 617.7]
+  expected:
+    value: 600
+    min: 582
+    max: 618
+
+# ============================================================================
+# 7. OVERRIDE PER-PARAMETRO
+# ============================================================================
+
+BASE_200:
+  type: const
+  value: 200
+  unit: count
+
+Y_with_override:
+  type: expr
+  formula: BASE_200 * BASE_200
+  unit: count
+  propagation: worst_case
+  parameter_tolerances:
+    BASE_200:
+      uncertainty:
+        type: percent
+        value: 5
+      distribution:
+        type: uniform
+  # BASE_200=200, hw=10, f(x)=x²
+  # f(210)=44100, f(190)=36100, f(200)=40000
+  # upEffect=44100-40000=4100, downEffect=36100-40000=-3900
+  # worst_case asimmetrico: [36100, 44100]
+  expected:
+    value: 40000
+    min: 36100
+    max: 44100
+
+# ============================================================================
+# 8. FORMATO LEGACY — interoperabilità (warning atteso, risultati corretti)
+# ============================================================================
+
+X_LEGACY_TOL:
   type: const
   value: 100
   unit: count
   tol: 5
-  tol_mode: rss
-  sigma: 2
+  # WARN: legacy → uncertainty.percent=5, distribution.uniform
+  # hw=5, range: [95, 105]
 
-X_GAUSS:
-  # caso non-lineare: usa un valore nominale abbastanza semplice
+X_LEGACY_GAUSSIAN:
   type: const
   value: 100
   unit: count
   tol: 5
   tol_mode: gaussian
   sigma: 2
+  # WARN: legacy → uncertainty.percent=5, distribution.normal(sigma_level=2)
+  # hw=5, sigma=2.5, range dichiarato: [95, 105]
 
-# ------------------------------
-# CASO LINEARE: Y = X
-# ------------------------------
-Y_linear:
+Y_legacy_wc:
   type: expr
-  formula: X_TOL
+  formula: X_LEGACY_TOL
   unit: count
-  # expected range con propagazione a partire da X=100 ±5% → [95, 105]
+  propagation: worst_case
+  # X_LEGACY_TOL: uniform, hw=5 → delta=5 → [95, 105]
   expected:
     value: 100
     min: 95
     max: 105
 
-Y_linear_rss:
+Y_legacy_rss:
   type: expr
-  formula: X_RSS
+  formula: X_LEGACY_GAUSSIAN
   unit: count
-  # per formula lineare singola sorgente, RSS coincide con worst_case
+  propagation: rss
+  # X_LEGACY_GAUSSIAN: normal sl=2, hw=5, sigma=2.5
+  # sensitivity=2.5, delta=3×2.5=7.5 → [92.5, 107.5]
   expected:
     value: 100
-    min: 95
-    max: 105
-
-Y_linear_gaussian:
-  type: expr
-  formula: X_GAUSS
-  unit: count
-  # con 1 sorgente: sigmaOut = halfSpan = 5, gaussian usa nsigma = sigma
-  # nsigma* sigmaOut = 2*5 = 10 → [90, 110]
-  expected:
-    value: 100
-    min: 90
-    max: 110
-
-# ------------------------------
-# CASO NON-LINEARE: Y = X^2
-# ------------------------------
-# X range: [95, 105]
-# Y = X^2 → min = 95^2 = 9025, max = 105^2 = 11025, nominal=100^2=10000
-
-Y_nonlinear:
-  type: expr
-  formula: X_TOL * X_TOL
-  unit: count
-  expected:
-    value: 10000
-    min: 9025
-    max: 11025
-
-Y_nonlinear_rss:
-  type: expr
-  formula: X_RSS * X_RSS
-  unit: count
-  # con 1 sorgente: RSS porta a min/max = nominal ± (fPlus-fMinus)/2
-  # fPlus = 105^2 = 11025, fMinus = 95^2 = 9025
-  # halfSpanOut = (11025-9025)/2 = 1000 → [9000, 11000]
-  expected:
-    value: 10000
-    min: 9000
-    max: 11000
-
-Y_nonlinear_gaussian:
-  type: expr
-  formula: X_GAUSS * X_GAUSS
-  unit: count
-  # gaussian usa nsigma = sigma: 2 * sigmaOut dove sigmaOut = sqrt(sumSq) = 1000
-  # → ±2000 → [8000, 12000]
-  expected:
-    value: 10000
-    min: 8000
-    max: 12000
-
+    min: 92.5
+    max: 107.5

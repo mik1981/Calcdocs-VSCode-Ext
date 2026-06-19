@@ -6,6 +6,26 @@ import { TolMode } from "../types/FormulaEntry";
  */
 
 // ─── Dependency tree nodes ───────────────────────────────────────────────────
+/** Subset of OutputDistribution passed through the webview protocol. */
+export interface OutputDistribution {
+  samples: number;
+  mean: number;
+  median: number;
+  stddev: number;
+  min: number;
+  max: number;
+  p001: number;
+  p010: number;
+  p025: number;
+  p500: number;
+  p975: number;
+  p990: number;
+  p999: number;
+  skewness: number;
+  kurtosis: number;
+  /** 16 normalised (0‥1) histogram bin heights computed from real MC samples. */
+  bins16?: number[];
+}
 
 export type FormulaInputNode = {
   name: string;
@@ -45,8 +65,10 @@ export type FormulaTreeNode = {
       min: number;
       max: number;
       source: 'declared' | 'propagated';
-      mode?: 'worst_case' | 'rss' | 'gaussian';
-      sigma?: number;
+      method?: string;
+      nominalValue?: number;
+      stddev?: number;
+      distribution?: OutputDistribution;
     };
   };
   errors?: string[];
@@ -58,8 +80,10 @@ export type FormulaTreeNode = {
     min: number;
     max: number;
     source: 'declared' | 'propagated';
-    mode?: 'worst_case' | 'rss' | 'gaussian';
-    sigma?: number;
+    method?: string;
+    nominalValue?: number;
+    stddev?: number;
+    distribution?: OutputDistribution;
   };
 };
 
@@ -80,6 +104,10 @@ export type FormulaEntry = {
     min: number;
     max: number;
     source: 'declared' | 'propagated';
+    method?: string;
+    nominalValue?: number;
+    stddev?: number;
+    distribution?: OutputDistribution;
   };
 };
 
@@ -96,8 +124,10 @@ export type EvalStep = {
     min: number;
     max: number;
     source: 'declared' | 'propagated';
-    mode?: TolMode;
-    sigma?: number;
+    method?: string;
+    nominalValue?: number;
+    stddev?: number;
+    distribution?: OutputDistribution;
   };
   /**
    * Tolleranze note sui parametri d'ingresso di questa formula.

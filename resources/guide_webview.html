@@ -1,0 +1,719 @@
+<![CDATA[<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Content-Security-Policy"
+  content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-PLACEHOLDER_NONCE';">
+<title>CalcDocs — Guida Interattiva</title>
+<style>
+/* ── Reset & base ─────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --accent:   var(--vscode-focusBorder, #007acc);
+  --bg:       var(--vscode-editor-background, #1e1e1e);
+  --fg:       var(--vscode-editor-foreground, #d4d4d4);
+  --fg-dim:   var(--vscode-descriptionForeground, #888);
+  --border:   var(--vscode-widget-border, #454545);
+  --code-bg:  var(--vscode-textCodeBlock-background, rgba(128,128,128,.12));
+  --pill-h:   rgba(86,156,214,.15);
+  --pill-c:   #569cd6;
+  --radius:   6px;
+  --col-wc:   #e07b53;
+  --col-rss:  #4caf7d;
+  --col-mc:   #9d6de0;
+  --col-uni:  #569cd6;
+  --col-norm: #c88b3a;
+  --col-tri:  #2aabb8;
+}
+
+html, body {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--vscode-font-family, "Segoe UI", system-ui, sans-serif);
+  font-size: var(--vscode-font-size, 13px);
+  line-height: 1.55;
+}
+
+/* ── Layout ───────────────────────────────────────────────────────────────── */
+.layout {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* ── Nav tabs ─────────────────────────────────────────────────────────────── */
+.nav-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  background: var(--vscode-sideBar-background, var(--bg));
+  flex-shrink: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.nav-tabs::-webkit-scrollbar { display: none; }
+
+.nav-tab {
+  padding: 7px 14px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--fg-dim);
+  white-space: nowrap;
+  margin-bottom: -1px;
+  transition: color 120ms, border-color 120ms;
+}
+.nav-tab:hover { color: var(--fg); }
+.nav-tab.active {
+  color: var(--fg);
+  border-bottom-color: var(--accent);
+}
+
+/* ── Content ─────────────────────────────────────────────────────────────── */
+.content {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 20px 18px 36px;
+  max-width: 860px;
+}
+
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+
+/* ── Typography ───────────────────────────────────────────────────────────── */
+h2 {
+  font-size: 1.1rem;
+  font-weight: 700;
+  margin-bottom: 10px;
+  color: var(--fg);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 6px;
+}
+
+h3 {
+  font-size: 0.88rem;
+  font-weight: 700;
+  margin: 18px 0 8px;
+  color: var(--fg);
+}
+
+p { margin-bottom: 10px; color: var(--fg); }
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ── Code ─────────────────────────────────────────────────────────────────── */
+code {
+  font-family: var(--vscode-editor-font-family, Consolas, monospace);
+  font-size: 0.84em;
+  background: var(--code-bg);
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+
+pre.codeblock {
+  font-family: var(--vscode-editor-font-family, Consolas, monospace);
+  font-size: 0.82rem;
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  overflow-x: auto;
+  white-space: pre;
+  margin: 10px 0;
+  line-height: 1.5;
+}
+
+/* ── Pills / badges ───────────────────────────────────────────────────────── */
+.pill {
+  display: inline-block;
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--pill-h);
+  color: var(--pill-c);
+  margin: 2px 2px 2px 0;
+}
+.pill.wc   { background: rgba(224,123,83,.18); color: var(--col-wc); }
+.pill.rss  { background: rgba(76,175,125,.18); color: var(--col-rss); }
+.pill.mc   { background: rgba(157,109,224,.18); color: var(--col-mc); }
+
+/* ── Tables ───────────────────────────────────────────────────────────────── */
+table.guide-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.83rem;
+  margin: 12px 0;
+}
+table.guide-table th {
+  text-align: left;
+  font-weight: 700;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  padding: 5px 10px;
+  color: var(--fg-dim);
+  border-bottom: 1px solid var(--border);
+}
+table.guide-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+table.guide-table tr:last-child td { border-bottom: none; }
+
+/* ── Distribution chart ───────────────────────────────────────────────────── */
+.dist-section {
+  margin: 20px 0;
+}
+.dist-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 14px;
+}
+.dist-controls label {
+  font-size: 0.78rem;
+  color: var(--fg-dim);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.dist-controls input[type=range] {
+  width: 100px;
+  accent-color: var(--accent);
+}
+.dist-controls select {
+  font: inherit;
+  font-size: 0.82rem;
+  background: var(--code-bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 8px;
+}
+
+canvas.dist-canvas {
+  width: 100%;
+  height: 160px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--code-bg);
+  display: block;
+}
+
+.dist-stats {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  font-size: 0.78rem;
+  color: var(--fg-dim);
+}
+.dist-stat-item strong { color: var(--fg); }
+
+/* ── Propagation chart ────────────────────────────────────────────────────── */
+.prop-chart-wrap {
+  position: relative;
+  margin: 16px 0;
+}
+canvas.prop-canvas {
+  width: 100%;
+  height: 220px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--code-bg);
+  display: block;
+}
+
+/* ── Method cards ─────────────────────────────────────────────────────────── */
+.method-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 10px;
+  margin: 14px 0;
+}
+.method-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+}
+.method-card.wc  { border-left: 3px solid var(--col-wc); }
+.method-card.rss { border-left: 3px solid var(--col-rss); }
+.method-card.mc  { border-left: 3px solid var(--col-mc); }
+.method-card-title {
+  font-size: 0.82rem;
+  font-weight: 700;
+  margin-bottom: 5px;
+}
+.method-card p { font-size: 0.78rem; color: var(--fg-dim); margin: 0; }
+
+/* ── Note box ─────────────────────────────────────────────────────────────── */
+.note {
+  background: rgba(86,156,214,.1);
+  border-left: 3px solid var(--accent);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  padding: 8px 12px;
+  margin: 12px 0;
+  font-size: 0.82rem;
+}
+.warn {
+  background: rgba(224,123,83,.1);
+  border-left: 3px solid var(--col-wc);
+}
+
+/* ── Slider row ───────────────────────────────────────────────────────────── */
+.slider-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin: 6px 0;
+  font-size: 0.80rem;
+  flex-wrap: wrap;
+}
+.slider-row label { min-width: 120px; color: var(--fg-dim); }
+.slider-row input[type=range] {
+  flex: 1;
+  min-width: 80px;
+  accent-color: var(--accent);
+}
+.slider-row .val-display {
+  min-width: 50px;
+  text-align: right;
+  font-family: var(--vscode-editor-font-family, Consolas, monospace);
+  color: var(--fg);
+}
+</style>
+</head>
+<body>
+<div class="layout">
+
+<!-- ── Nav tabs ──────────────────────────────────────────────────────────── -->
+<nav class="nav-tabs" id="nav-tabs">
+  <button class="nav-tab active" data-tab="overview">Panoramica</button>
+  <button class="nav-tab" data-tab="yaml">Formato YAML</button>
+  <button class="nav-tab" data-tab="uncertainty">Incertezza</button>
+  <button class="nav-tab" data-tab="propagation">Propagazione</button>
+  <button class="nav-tab" data-tab="montecarlo">Monte Carlo</button>
+  <button class="nav-tab" data-tab="charts">Grafici</button>
+  <button class="nav-tab" data-tab="results">Risultati</button>
+</nav>
+
+<!-- ── Content ───────────────────────────────────────────────────────────── -->
+<div class="content">
+
+<!-- ════════ TAB: Panoramica ════════ -->
+<section class="tab-panel active" id="tab-overview">
+  <h2>Benvenuto in CalcDocs</h2>
+  <p>CalcDocs è un'estensione VS Code per l'analisi di codice C/C++ con supporto a formule matematiche, propagazione dell'incertezza e simulazioni Monte Carlo.</p>
+
+  <h3>Funzionalità principali</h3>
+  <table class="guide-table">
+    <tr><th>Funzione</th><th>Descrizione</th></tr>
+    <tr><td>Ghost values</td><td>Valori calcolati inline nell'editor C/C++</td></tr>
+    <tr><td>CodeLens</td><td>Annotazioni cliccabili sopra i simboli</td></tr>
+    <tr><td>YAML formula engine</td><td>Valutazione di formule con unità e tolleranze</td></tr>
+    <tr><td>Propagazione tolleranza</td><td>Worst Case, RSS, Monte Carlo</td></tr>
+    <tr><td>Webview interattiva</td><td>Albero di dipendenze navigabile con slider</td></tr>
+  </table>
+
+  <h3>Come iniziare</h3>
+  <ol style="padding-left:18px;margin:8px 0;line-height:1.8">
+    <li>Aprire un workspace con file C/C++</li>
+    <li>Creare un file <code>formulas.yaml</code> nella radice del progetto</li>
+    <li>Definire simboli <code>const</code> ed <code>expr</code> con campi <code>uncertainty</code> e <code>propagation</code></li>
+    <li>Aprire la webview interattiva (comando <code>CalcDocs: Open Interactive View</code>)</li>
+  </ol>
+
+  <h3>Struttura file YAML</h3>
+  <pre class="codeblock">MY_VAR:
+  type: const
+  value: 100
+  unit: mm
+  uncertainty:
+    type: percent
+    value: 5        # ±5%
+  distribution:
+    type: normal
+    sigma_level: 3
+
+MY_FORMULA:
+  type: expr
+  formula: MY_VAR * 2
+  unit: mm
+  propagation: rss  # worst_case | rss | monte_carlo</pre>
+</section>
+
+<!-- ════════ TAB: Formato YAML ════════ -->
+<section class="tab-panel" id="tab-yaml">
+  <h2>Formato File Formulas YAML</h2>
+
+  <h3>Tipi di simbolo</h3>
+  <table class="guide-table">
+    <tr><th>type</th><th>Campi principali</th><th>Descrizione</th></tr>
+    <tr><td><code>const</code></td><td><code>value</code>, <code>unit</code></td><td>Costante numerica con unità opzionale</td></tr>
+    <tr><td><code>expr</code></td><td><code>formula</code>, <code>unit</code></td><td>Espressione che dipende da altri simboli</td></tr>
+    <tr><td><code>lookup</code></td><td><code>table</code>, <code>row</code>, <code>valueColumn</code></td><td>Interpolazione da CSV</td></tr>
+  </table>
+
+  <h3>Blocco uncertainty (input)</h3>
+  <pre class="codeblock">uncertainty:
+  type: percent     # percent | range | absolute | sigma
+  value: 5          # per type=percent: percentuale ±N%
+
+uncertainty:
+  type: range
+  min: 95
+  max: 105          # intervallo fisso
+
+uncertainty:
+  type: absolute
+  absolute: 3       # ±3 in unità assolute
+
+uncertainty:
+  type: sigma
+  sigma: 1.5        # ±3σ → halfWidth = 3*1.5 = 4.5</pre>
+
+  <h3>Blocco distribution (input)</h3>
+  <pre class="codeblock">distribution:
+  type: uniform         # distribuzione uniforme (default)
+
+distribution:
+  type: normal
+  sigma_level: 3        # σ = halfWidth / sigma_level (default 3)
+
+distribution:
+  type: triangular
+  mode_value: 100       # valore più probabile</pre>
+
+  <h3>Propagazione output</h3>
+  <pre class="codeblock">propagation: worst_case    # somma dei |sensitivity|
+
+propagation: rss           # sqrt(Σ(dfdx·σ)²) × 3
+
+propagation: monte_carlo
+confidence: 95             # percentile confidence (default 95)
+seed: 42                   # seed PRNG (opzionale, per riproducibilità)
+samples: 50000             # numero campioni (opzionale)</pre>
+
+  <h3>Override per parametro</h3>
+  <pre class="codeblock">MY_FORMULA:
+  type: expr
+  formula: BASE * FACTOR
+  propagation: worst_case
+  parameter_tolerances:
+    BASE:
+      uncertainty:
+        type: percent
+        value: 5
+      distribution:
+        type: uniform</pre>
+
+  <h3>Formato legacy (deprecato)</h3>
+  <div class="note warn">I campi legacy producono warning. Usare il formato moderno.</div>
+  <pre class="codeblock">MY_VAR:
+  type: const
+  value: 100
+  tol: 5              # → uncertainty.percent = 5
+  tol_mode: gaussian  # → distribution.normal
+  sigma: 3            # → distribution.sigma_level = 3</pre>
+</section>
+
+<!-- ════════ TAB: Incertezza ════════ -->
+<section class="tab-panel" id="tab-uncertainty">
+  <h2>Modello di Incertezza degli Input</h2>
+  <p>Ogni input ha due specifiche ortogonali: l'<strong>ampiezza</strong> dell'incertezza e la <strong>forma</strong> della distribuzione probabilistica.</p>
+
+  <h3>Normalizzazione</h3>
+  <p>Tutti i tipi di <code>uncertainty</code> vengono convertiti in <code>NormalizedUncertainty</code>:</p>
+  <pre class="codeblock">{ nominal, lower, upper, halfWidth }
+// halfWidth = (upper - lower) / 2</pre>
+
+  <table class="guide-table">
+    <tr><th>type</th><th>Formula</th><th>halfWidth</th></tr>
+    <tr><td>percent(N)</td><td>lower = nom−|nom|×N/100</td><td>|nom|×N/100</td></tr>
+    <tr><td>range(a,b)</td><td>lower=min(a,b), upper=max(a,b)</td><td>(b−a)/2</td></tr>
+    <tr><td>absolute(d)</td><td>lower=nom−d, upper=nom+d</td><td>d</td></tr>
+    <tr><td>sigma(σ)</td><td>lower=nom−3σ, upper=nom+3σ</td><td>3σ</td></tr>
+  </table>
+
+  <h3>Deviazione standard (per RSS e MC)</h3>
+  <table class="guide-table">
+    <tr><th>distribution</th><th>stddev</th></tr>
+    <tr><td>normal(sigma_level=k)</td><td>halfWidth / k</td></tr>
+    <tr><td>uniform</td><td>halfWidth / √3 ≈ 0.577 × hw</td></tr>
+    <tr><td>triangular</td><td>halfWidth / √6 ≈ 0.408 × hw</td></tr>
+  </table>
+
+  <h3>Visualizzazione interattiva</h3>
+  <p>I grafici interattivi delle distribuzioni vengono calcolati dal motore <strong>computeGuideScenario</strong>, che utilizza le stesse funzioni del motore YAML (normalizeUncertainty, computeStdDev, propagate).</p>
+  <div class="dist-section">
+    <div class="dist-controls">
+      <label>Distribuzione:
+        <select id="dist-type">
+          <option value="uniform">Uniforme</option>
+          <option value="normal" selected>Normale</option>
+          <option value="triangular">Triangolare</option>
+        </select>
+      </label>
+    </div>
+    <div class="slider-row">
+      <label>Formula:
+        <select id="dist-formula">
+          <option value="linear">X (lineare)</option>
+          <option value="square">X²</option>
+        </select>
+      </label>
+    </div>
+    <div class="slider-row">
+      <label>Nominale</label>
+      <input type="range" id="sl-nominal" min="50" max="200" value="100" step="1">
+      <span class="val-display" id="disp-nominal">100</span>
+    </div>
+    <div class="slider-row">
+      <label>Tolleranza (%)</label>
+      <input type="range" id="sl-hw" min="1" max="30" value="10" step="0.5">
+      <span class="val-display" id="disp-hw">10%</span>
+    </div>
+    <div class="slider-row" id="row-sl" style="display:flex">
+      <label>sigma_level</label>
+      <input type="range" id="sl-sigma" min="1" max="5" value="3" step="0.5">
+      <span class="val-display" id="disp-sigma">3</span>
+    </div>
+    <div class="slider-row">
+      <label>Metodo</label>
+      <select id="dist-prop">
+        <option value="worst_case">Worst Case</option>
+        <option value="rss" selected>RSS</option>
+        <option value="monte_carlo">Monte Carlo</option>
+      </select>
+    </div>
+    <canvas class="dist-canvas" id="dist-canvas" width="800" height="160"></canvas>
+    <div class="dist-stats" id="dist-stats"></div>
+  </div>
+</section>
+
+<!-- ════════ TAB: Propagazione ════════ -->
+<section class="tab-panel" id="tab-propagation">
+  <h2>Metodi di Propagazione dell'Incertezza</h2>
+
+  <div class="method-cards">
+    <div class="method-card wc">
+      <div class="method-card-title"><span class="pill wc">Worst Case</span></div>
+      <p>Somma lineare delle sensitività. Intervallo garantito al 100%. Conservativo.</p>
+    </div>
+    <div class="method-card rss">
+      <div class="method-card-title"><span class="pill rss">RSS</span></div>
+      <p>Combinazione quadratica delle stddev. Probabilistico. sigmaOut=3 (fisso).</p>
+    </div>
+    <div class="method-card mc">
+      <div class="method-card-title"><span class="pill mc">Monte Carlo</span></div>
+      <p>Campionamento diretto. Gestisce non-linearità e distribuzioni miste.</p>
+    </div>
+  </div>
+
+  <h3>Worst Case — formula</h3>
+  <pre class="codeblock">per ogni input i:
+  sensitivity_i = (f(nom + hw_i) - f(nom - hw_i)) / 2
+
+Δ_total = Σ |sensitivity_i|
+output  = [nominal − Δ_total, nominal + Δ_total]</pre>
+
+  <h3>RSS — formula</h3>
+  <pre class="codeblock">per ogni input i:
+  dfdx_i       = (f(nom + hw_i) - f(nom - hw_i)) / (2 × hw_i)
+  sensitivity_i = dfdx_i × σ_i    # σ_i = computeStdDev(norm, dist)
+
+σ_output = √Σ(sensitivity_i²)
+Δ        = 3 × σ_output           # sigmaOut = 3 (hardcoded)
+output   = [nominal − Δ, nominal + Δ]</pre>
+
+  <div class="note">
+    <strong>Nota:</strong> per funzione lineare f(x)=x con input normal(sl=3, tol=5%):
+    sensitivity = dfdx × hw/3 = 1 × 5/3. Δ = 3 × 5/3 = 5 → stesso risultato del Worst Case.
+    RSS dà range più ampio del WC solo con input <em>uniform</em> (σ=hw/√3 > hw/3).
+  </div>
+
+  <h3>Confronto risultati (calcolati dal motore)</h3>
+  <table class="guide-table" id="prop-table">
+    <tr><th>Metodo</th><th>Δ (±)</th><th>Range</th><th>Copertura</th></tr>
+    <tr id="row-wc"><td><span class="pill wc">Worst Case</span></td><td>—</td><td>—</td><td>100%</td></tr>
+    <tr id="row-rss"><td><span class="pill rss">RSS</span></td><td>—</td><td>—</td><td>~99.7%</td></tr>
+  </table>
+</section>
+
+<!-- ════════ TAB: Monte Carlo ════════ -->
+<section class="tab-panel" id="tab-montecarlo">
+  <h2>Simulazione Monte Carlo</h2>
+
+  <p>Il Monte Carlo campiona i valori degli input secondo le loro distribuzioni e valuta la formula per ogni campione. L'output è un istogramma della distribuzione risultante.</p>
+
+  <h3>Algoritmo implementato</h3>
+  <pre class="codeblock">PRNG: SplitMix32 (seeding) → xoshiro128** (generazione)
+
+N campioni:
+  ≤ 5 input  → 100 000 campioni
+  ≤ 20 input →  50 000 campioni
+  > 20 input →  10 000 campioni
+
+Distribuzione normale: trasformata Box-Muller
+  z0, z1 ~ N(0,1) da u1, u2 ~ U(0,1)
+  z0 = √(−2·ln(u1)) · cos(2π·u2)
+  z1 = √(−2·ln(u1)) · sin(2π·u2)
+
+Output: output[i] = formula(campione_i)
+output.sort()
+min = percentile(output, tail)       # tail = (100−confidence)/2
+max = percentile(output, 100−tail)   # default: p2.5, p97.5</pre>
+
+  <h3>Simulazione interattiva</h3>
+  <div class="dist-section">
+    <div class="dist-controls">
+      <label>f(X) = <select id="mc-formula">
+        <option value="linear">X (lineare)</option>
+        <option value="square">X² (nonlineare)</option>
+        <option value="sum">X₁ + X₂ (somma)</option>
+        <option value="product">X₁ × X₂ (prodotto)</option>
+      </select></label>
+      <label>Distribuzione X₁: <select id="mc-dist">
+        <option value="uniform">Uniforme</option>
+        <option value="normal" selected>Normale</option>
+        <option value="triangular">Triangolare</option>
+      </select></label>
+    </div>
+    <div class="slider-row">
+      <label>halfWidth (%)</label>
+      <input type="range" id="mc-hw" min="1" max="25" value="5" step="0.5">
+      <span class="val-display" id="mc-hw-disp">5%</span>
+    </div>
+    <div class="slider-row">
+      <label>Confidence (%)</label>
+      <input type="range" id="mc-confidence" min="50" max="99.9" value="95" step="0.1">
+      <span class="val-display" id="mc-confidence-disp">95%</span>
+    </div>
+    <div class="slider-row">
+      <label>Seed</label>
+      <input type="range" id="mc-seed" min="1" max="999" value="42" step="1">
+      <span class="val-display" id="mc-seed-disp">42</span>
+    </div>
+    <canvas class="dist-canvas" id="mc-canvas" width="800" height="180" style="height:180px"></canvas>
+    <div class="dist-stats" id="mc-stats"></div>
+  </div>
+</section>
+
+<!-- ════════ TAB: Grafici distribuzioni ════════ -->
+<section class="tab-panel" id="tab-charts">
+  <h2>Distribuzioni Supportate — Grafici</h2>
+
+  <h3>Confronto distribuzioni (stessa halfWidth)</h3>
+  <p>Con halfWidth fissa, le tre distribuzioni danno la stessa ampiezza [lower, upper] ma diversa stddev:</p>
+  <canvas class="dist-canvas" id="cmp-canvas" width="800" height="200" style="height:200px"></canvas>
+  <div style="display:flex;gap:16px;margin-top:8px;font-size:0.78rem;">
+    <span style="color:var(--col-uni)">■ Uniforme — σ = hw/√3</span>
+    <span style="color:var(--col-norm)">■ Normale — σ = hw/σ_level</span>
+    <span style="color:var(--col-tri)">■ Triangolare — σ = hw/√6</span>
+  </div>
+
+  <div class="slider-row" style="margin-top:12px">
+    <label>halfWidth</label>
+    <input type="range" id="cmp-hw" min="5" max="30" value="10" step="1">
+    <span class="val-display" id="cmp-hw-disp">10</span>
+  </div>
+  <div class="slider-row">
+    <label>sigma_level (normale)</label>
+    <input type="range" id="cmp-sl" min="1" max="5" value="3" step="0.5">
+    <span class="val-display" id="cmp-sl-disp">3</span>
+  </div>
+
+  <table class="guide-table" style="margin-top:14px">
+    <tr><th>Distribuzione</th><th>σ (stddev)</th><th>σ / hw</th><th>RSS Δ (×3σ)</th></tr>
+    <tr id="cmp-row-u"><td>Uniforme</td><td>—</td><td>1/√3 ≈ 0.577</td><td>—</td></tr>
+    <tr id="cmp-row-n"><td>Normale (sl=3)</td><td>—</td><td>1/sl</td><td>—</td></tr>
+    <tr id="cmp-row-t"><td>Triangolare</td><td>—</td><td>1/√6 ≈ 0.408</td><td>—</td></tr>
+  </table>
+</section>
+
+<!-- ════════ TAB: Risultati ════════ -->
+<section class="tab-panel" id="tab-results">
+  <h2>Interpretazione dei Risultati</h2>
+
+  <h3>Campi di risultato</h3>
+  <table class="guide-table">
+    <tr><th>Campo</th><th>Tipo</th><th>Descrizione</th></tr>
+    <tr><td><code>value</code></td><td>number</td><td>Valore nominale calcolato</td></tr>
+    <tr><td><code>range.min / max</code></td><td>number</td><td>Bounds dell'intervallo di incertezza</td></tr>
+    <tr><td><code>range.method</code></td><td>string</td><td>Metodo usato: worst_case | rss | monte_carlo</td></tr>
+    <tr><td><code>range.stddev</code></td><td>number?</td><td>Deviazione standard output (RSS e MC)</td></tr>
+    <tr><td><code>range.distribution</code></td><td>object?</td><td>Statistiche distribuzione (solo MC)</td></tr>
+    <tr><td><code>range.source</code></td><td>string</td><td>declared (input) | propagated (output)</td></tr>
+  </table>
+
+  <h3>Visualizzazione tolleranza</h3>
+  <p>Nella webview interattiva ogni simbolo mostra:</p>
+  <ul style="padding-left:18px;line-height:1.9">
+    <li><strong>Barra min/max</strong> con marcatore sul valore nominale</li>
+    <li><strong>Percentuale</strong>: ±N% o +A% / −B% (asimmetrica)</li>
+    <li><strong>Tag metodo</strong>: WC | RSS | MC</li>
+    <li><strong>Fonte</strong>: declared (input) | propagated (formula)</li>
+  </ul>
+
+  <h3>Classi tolleranza</h3>
+  <table class="guide-table">
+    <tr><th>Classe</th><th>Soglia</th><th>Significato</th></tr>
+    <tr><td>tight</td><td>< 1%</td><td>Tolleranza stretta</td></tr>
+    <tr><td>moderate</td><td>1% – 5%</td><td>Tolleranza moderata</td></tr>
+    <tr><td>loose</td><td>> 5%</td><td>Tolleranza ampia</td></tr>
+  </table>
+
+  <h3>Distribuzione in input</h3>
+  <p>Ogni input può avere una distribuzione associata. Quando la propagazione usa un metodo deterministico (WC/RSS), il grafico mostra la PDF teorica dell'input. Con Monte Carlo viene disegnato l'istogramma della distribuzione finale.</p>
+  <div class="note">
+    <strong>Fallback distribuzione uniforme:</strong> Se la distribuzione non è specificata, il motore assume una distribuzione <strong>uniforme</strong> come default. Questo garantisce che la propagazione sia sempre calcolabile, ma può sovrastimare l'incertezza per input che seguono altre distribuzioni.
+  </div>
+</section>
+
+</div><!-- .content -->
+</div><!-- .layout -->
+
+<script nonce="PLACEHOLDER_NONCE">
+// Bind del client-side model (calcoli reali dal motore TS)
+// initGuideEngineClient viene esposto dal bundle compilato
+try {
+  if (typeof initGuideEngineClient === 'function') {
+    initGuideEngineClient();
+  }
+} catch {
+  // fallback silenzioso
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Navigazione tab
+// ═══════════════════════════════════════════════════════════════════════════
+document.querySelectorAll('.nav-tab').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const id = btn.dataset.tab;
+    document.querySelectorAll('.nav-tab').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('tab-' + id).classList.add('active');
+  });
+});
+</script>
+</body>
+</html>]]>

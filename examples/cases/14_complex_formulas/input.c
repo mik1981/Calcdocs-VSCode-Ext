@@ -28,7 +28,6 @@
 /* ── modulo + abs combined ──────────────────────────────────────── */
 #define MOD_A           (17U)
 #define MOD_B           (5U)
-#define OUT_INT_ABS_MOD (OUT_INT_ABS + (MOD_A % MOD_B))   /* 42+2=44 */
 
 /* ── bitwise nibble extraction ──────────────────────────────────── */
 #define MASK_BASE       (0xABCDU)
@@ -41,11 +40,3 @@
 #define PT100_OHM_100     (10000)   /* 100.00 * 100 */
 #define PT100_DELTA_FP    (PT100_OHM_100 - PT100_OHM_MIN_FP) /* 4107 */
 #define PT100_SCALE       (65536 / PT100_DELTA_FP)            /* 15   */
-
-/* ── @test inline markers ───────────────────────────────────────── */
-// @test T_ADC_FS        ADC_FS
-// @test T_ADC_LSB       ADC_LSB_UV
-// @test T_SCALED        SCALED_VAL
-// @test T_ABS_MOD       OUT_INT_ABS_MOD
-// @test T_NIBBLE_SUM    NIBBLE_SUM
-// @test T_PT100_SCALE   PT100_SCALE

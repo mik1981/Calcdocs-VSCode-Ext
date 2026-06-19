@@ -22,6 +22,7 @@ import * as path from "path";
 import * as yaml from "js-yaml";
 import { describe, expect, it } from "vitest";
 
+
 import {
   collectDefinesAndConsts,
   parseCppSymbolDefinition,
@@ -36,6 +37,7 @@ import {
   DIMENSIONLESS,
   type DimensionVector,
 } from "../../src/core/inlineCalc";
+
 import {
   buildCompositeExpressionPreview,
   createSymbolResolutionStats,
@@ -66,6 +68,7 @@ const REL_TOLERANCE = 1e-6;
 
 type ExpectedEntry =
   | { kind: "number"; value: number }
+  | { kind: "range"; min: number; max: number; unit?: string }
   | { kind: "error" }
   | { kind: "expanded"; value: string };
 
@@ -104,6 +107,7 @@ type CaseEvaluation = {
   functionCallExpansions: Map<string, string[]>;
   symbolValues: Map<string, number>;
   symbolUnits: Map<string, string>;
+  yamlSymbols?: Map<string, any>;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -157,13 +161,30 @@ function listCaseDirectories(rootDir: string): string[] {
 function parseExpected(raw: unknown): ExpectedEntry {
   if (typeof raw === "object" && raw !== null && !Array.isArray(raw)) {
     const entry = raw as Record<string, unknown>;
+
     if (typeof entry.expanded === "string" && entry.expanded.trim().length > 0) {
       return { kind: "expanded", value: normalizeText(entry.expanded) };
     }
+
+    // expected.yaml: { value: "error" }
     if (entry.value === "error") return { kind: "error" };
+
+    // expected.yaml: { min: N, max: M, unit?: "..." }
+    const hasMin = entry.min !== undefined;
+    const hasMax = entry.max !== undefined;
+    if (hasMin || hasMax) {
+      const min = Number(entry.min);
+      const max = Number(entry.max);
+      if (Number.isFinite(min) && Number.isFinite(max)) {
+        const unit = typeof entry.unit === "string" ? entry.unit : undefined;
+        return { kind: "range", min, max, unit };
+      }
+    }
+
     const numericValue = Number(entry.value);
     if (Number.isFinite(numericValue)) return { kind: "number", value: numericValue };
   }
+
   throw new Error(`Unsupported expected entry: ${JSON.stringify(raw)}`);
 }
 
@@ -643,20 +664,75 @@ async function evaluateCase(caseDir: string): Promise<CaseEvaluation> {
   const sourceFiles = caseFiles.filter((f) => TESTABLE_SOURCE_RX.test(f));
   const collected = await collectDefinesAndConsts(caseFiles, caseDir, { resolveIncludes: true });
   await augmentCollectedSymbolsForTests(sourceFiles, collected);
-  const symbolValues = seedSymbolValues(collected.defines, collected.functionDefines, collected.consts, collected.defineConditions);
+
+  const symbolValues = seedSymbolValues(
+    collected.defines,
+    collected.functionDefines,
+    collected.consts,
+    collected.defineConditions
+  );
+
   const symbolUnits = new Map<string, string>(collected.units);
-  const state = createInlineState(symbolValues, symbolUnits, collected.defines, collected.functionDefines, collected.defineConditions);
+
+  // ── YAML formulas integration (surgical) ──────────────────────────────
+  // If a case provides formulas.yaml, evaluate it and use its numeric
+  // results as the symbolValues source of truth (overriding C defines).
+  const formulasPath = path.join(caseDir, "formulas.yaml");
+  if (fs.existsSync(formulasPath)) {
+    const formulasRoot = await loadYamlFile(formulasPath);
+
+    const { evaluateYamlDocument } = await import("../../src/engine/yamlEngine");
+    const { loadAdjacentCsvTables } = await import("../../src/core/csvTables");
+    const csvTables = await loadAdjacentCsvTables(formulasPath);
+
+    const yamlResult = evaluateYamlDocument(formulasRoot, {
+      rawText: fs.readFileSync(formulasPath, "utf8"),
+      yamlPath: formulasPath,
+      externalValues: symbolValues,
+      externalUnits: symbolUnits,
+      csvTables,
+    });
+
+    for (const [name, sym] of yamlResult.symbols) {
+      if (typeof sym.value === "number" && Number.isFinite(sym.value)) {
+        // Override: ensures expected entries derived from YAML are tested.
+        symbolValues.set(name, sym.value);
+      }
+      if (sym.outputUnit) {
+        symbolUnits.set(name, sym.outputUnit);
+      }
+    }
+  }
+
+
+  const state = createInlineState(
+    symbolValues,
+    symbolUnits,
+    collected.defines,
+    collected.functionDefines,
+    collected.defineConditions
+  );
+
   const inlineCollection = await collectInlineResults(sourceFiles, state);
+
   return {
     collected,
     expected,
     inlineResults: inlineCollection.resultsById,
     testCommands: inlineCollection.commandsById,
-    functionCallExpansions: await collectFunctionCallExpansions(sourceFiles, collected.defines, collected.functionDefines, collected.defineConditions, symbolValues, symbolUnits),
+    functionCallExpansions: await collectFunctionCallExpansions(
+      sourceFiles,
+      collected.defines,
+      collected.functionDefines,
+      collected.defineConditions,
+      symbolValues,
+      symbolUnits
+    ),
     symbolValues,
     symbolUnits,
   };
 }
+
 
 function valuesMatch(actual: number, expected: number): boolean {
   const tolerance = REL_TOLERANCE * Math.max(1, Math.abs(expected));

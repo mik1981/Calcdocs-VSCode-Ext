@@ -1,7 +1,19 @@
-import * as vscode from "vscode";
-
 import { CalcDocsState } from "./state";
 import { LogLevel } from "../utils/output";
+
+// vscode viene importato in modo lazy per evitare crash nei test
+// quando l'alias vitest non risolve le importazioni transitive
+let _vscode: typeof import("vscode") | undefined;
+function getVscode(): typeof import("vscode") | undefined {
+  if (_vscode === undefined) {
+    try {
+      _vscode = require("vscode");
+    } catch {
+      _vscode = undefined;
+    }
+  }
+  return _vscode;
+}
 
 /**
  * Modalità di visualizzazione dello stato delle risorse nella status bar.
@@ -259,13 +271,45 @@ function normalizePositiveInt(value: number, fallback: number): number {
   return Math.max(1, Math.floor(value));
 }
 
+/** Ritorna la configurazione di default quando vscode non è disponibile (es. test) */
+function getDefaultConfig(): CalcDocsConfig {
+  return {
+    enabled: true,
+    scanInterval: 0,
+    ignoredDirs: [],
+    enableCppProviders: true,
+    resourceStatusMode: "always",
+    resourceCpuThreshold: 70,
+    thousandsSeparator: "space",
+    internalDebugMode: "off" as LogLevel,
+    cppCacheMaxEntries: 24,
+    useClangd: true,
+    inlineGhostEnable: true,
+    inlineCalcEnableCodeLens: true,
+    inlineCalcEnableHover: true,
+    inlineCalcDiagnosticsLevel: "warnings",
+    uiInvasiveness: "standard",
+    formulaHeader: { outputPath: "macro_generate.h", includeResolvedValues: true },
+    cppCodeLens: { enabled: true, maxItemsPerViewport: 40, showAmbiguity: true, showCastOverflow: true, showMismatch: true, showOpenFormula: true, showResolvedValue: true, showExpandedPreview: true },
+    cppHover: { enabled: true, maxConditionalDefinitions: 8, maxInDocumentDefinitions: 6, showConditionalDefinitions: true, showInDocumentDefinitions: true, showCastOverflow: true, showInheritedAmbiguity: true, showFormulaSection: true, showKnownValue: true, showLiveRegisterDecoder: true },
+    inlineCodeLens: { enabled: true, maxItemsPerViewport: 30 },
+    inlineHover: { enabled: true, showDimension: true, showWarnings: true, showErrors: true },
+    inlineDiagnostics: { level: "warnings" },
+  };
+}
+
 /**
  * Legge le impostazioni dell'estensione da "calcdocs.*" e normalizza i valori di default.
  * 
  * @returns Oggetto di configurazione con i valori attuali
  */
 export function getConfig(): CalcDocsConfig {
-  const cfg = vscode.workspace.getConfiguration("calcdocs");
+  // Quando vscode non è disponibile (es. test), restituisci configurazione di default
+  const v = getVscode();
+  if (!v || !v.workspace) {
+    return getDefaultConfig();
+  }
+  const cfg = v.workspace.getConfiguration("calcdocs");
   
   // Leggi l'intervallo di scansione
   const scanInterval = Number(cfg.get<number>("scanInterval", 0));
@@ -683,7 +727,9 @@ export function isIgnoredFsPath(state: CalcDocsState, fsPath: string): boolean {
  * @param uri - URI da controllare
  * @returns True se l'URI deve essere ignorato
  */
-export function isIgnoredUri(state: CalcDocsState, uri: vscode.Uri): boolean {
+export function isIgnoredUri(state: CalcDocsState, uri: any): boolean {
+  // Usiamo any qui perché vscode.Uri non è disponibile quando getVscode() restituisce undefined
+  // Questo metodo è chiamato solo a runtime dentro VS Code, quindi uri è sempre valido
   return isIgnoredFsPath(state, uri.fsPath);
 }
 

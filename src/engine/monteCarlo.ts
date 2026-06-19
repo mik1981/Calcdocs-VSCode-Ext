@@ -1,279 +1,298 @@
-/**
- * Monte Carlo uncertainty propagation engine for CalcDocs.
- *
- * Generates N samples for each input variable according to its declared
- * distribution, evaluates the formula on the full sample vector
- * (vectorised via typed arrays for speed), then computes output statistics.
- *
- * Three distributions are supported:
- *   - Rectangular  : defined by min/max or nominal ± tol%
- *   - Triangular   : defined by min/max/mode  (peak of the triangle)
- *   - Gaussian     : defined by value (mean) and sigma (std-dev)
- */
+import type { PropagationMethod, PropagationResult, OutputDistribution, DistributionSpec } from "../types/toleranceModel";
+import { computeStdDev, normalizeUncertainty, recommendedSamples } from "../types/toleranceModel";
+import { buildMcSampleSpec } from "./tolerance";
+import type { McSampleSpec } from "./tolerance";
 
-import type { TolMode } from "../types/FormulaEntry";
 
-// ─── Public types ─────────────────────────────────────────────────────────────
-
-export type McDistribution =
-  | { kind: "rectangular"; min: number; max: number }
-  | { kind: "triangular";  min: number; max: number; mode: number }
-  | { kind: "gaussian";    mean: number; sigma: number };
-
-export type McInput = {
-  name: string;
-  distribution: McDistribution;
-};
-
-export type McResult = {
-  /** Sample mean of the output */
-  mean: number;
-  /** Sample standard deviation */
-  stdDev: number;
-  /** Empirical minimum */
-  min: number;
-  /** Empirical maximum */
-  max: number;
-  /** 2.5th percentile  (≈ μ − 2σ for Gaussian) */
-  p025: number;
-  /** 97.5th percentile (≈ μ + 2σ for Gaussian) */
-  p975: number;
-  /** Number of samples that were evaluated */
-  nSamples: number;
-  /** Number of samples that produced non-finite results (discarded) */
-  nDiscarded: number;
-};
-
-export type McOptions = {
-  /** Number of Monte Carlo samples (default: 10 000) */
-  nSamples?: number;
-  /** Random seed for reproducibility (optional, uses Math.random if absent) */
-  seed?: number;
-};
-
-// ─── Internal PRNG (xoshiro128** – fast, seedable) ────────────────────────────
-
-type Prng = () => number;   // returns [0, 1)
-
+// ── PRNG: xoshiro128** ────────────────────────────────────────────────────────
+type Prng = () => number;
 function buildPrng(seed?: number): Prng {
-  // xoshiro128** state (4 × uint32)
-  let s0 = (seed ?? Date.now()) >>> 0;
-  let s1 = (s0 ^ 0xdeadbeef) >>> 0;
-  let s2 = (s1 ^ 0xcafebabe) >>> 0;
-  let s3 = (s2 ^ 0x12345678) >>> 0;
-
-  const rotl = (x: number, k: number) =>
-    ((x << k) | (x >>> (32 - k))) >>> 0;
-
+  let s = (seed ?? Date.now()) >>> 0;
+  const sm = (): number => {
+    s = (s + 0x9e3779b9) >>> 0;
+    let z = s;
+    z = Math.imul(z ^ (z >>> 16), 0x85ebca6b) >>> 0;
+    z = Math.imul(z ^ (z >>> 13), 0xc2b2ae35) >>> 0;
+    return (z ^ (z >>> 16)) >>> 0;
+  };
+  let a = sm(), b = sm(), c = sm(), d = sm();
+  const rotl = (x: number, k: number) => ((x << k) | (x >>> (32 - k))) >>> 0;
   return () => {
-    const result = (Math.imul(rotl(Math.imul(s1, 5) >>> 0, 7), 9) >>> 0) / 0x100000000;
-    const t = (s1 << 9) >>> 0;
-    s2 ^= s0; s3 ^= s1; s1 ^= s2; s0 ^= s3;
-    s2 ^= t;
-    s3 = rotl(s3, 11);
-    return result;
+    const t = (b << 9) >>> 0;
+    const result = Math.imul(rotl(Math.imul(b, 5) >>> 0, 7), 9) >>> 0;
+    c ^= a; d ^= b; b ^= c; a ^= d; c ^= t; d = rotl(d, 11);
+    return result / 0x100000000;
   };
 }
 
-// ─── Sample generators ────────────────────────────────────────────────────────
-
-/** Box-Muller transform: two uniform → two independent standard normals */
+// ── Box-Muller ────────────────────────────────────────────────────────────────
 function gaussianPair(u1: number, u2: number): [number, number] {
-  const r = Math.sqrt(-2 * Math.log(Math.max(u1, 1e-300)));
-  const θ = 2 * Math.PI * u2;
-  return [r * Math.cos(θ), r * Math.sin(θ)];
+  const r = Math.sqrt(-2 * Math.log(Math.max(u1, 1e-15)));
+  const theta = 2 * Math.PI * u2;
+  return [r * Math.cos(theta), r * Math.sin(theta)];
 }
 
-/**
- * Fill a Float64Array with N samples drawn from `dist`.
- * The function uses the supplied PRNG and writes directly into `out`
- * (avoiding allocations inside the hot loop).
- */
-function fillSamples(
-  dist: McDistribution,
-  out: Float64Array,
-  rng: Prng
-): void {
+// ── Sampling ──────────────────────────────────────────────────────────────────
+function fillSamples(out: Float64Array, spec: McSampleSpec, prng: Prng): void {
   const n = out.length;
-
-  switch (dist.kind) {
-    case "rectangular": {
-      const span = dist.max - dist.min;
-      for (let i = 0; i < n; i++) {
-        out[i] = dist.min + rng() * span;
+  const { lower, upper, nominal, distribution, stdDev } = spec;
+  switch (distribution) {
+    case "uniform":
+      for (let i = 0; i < n; i++) out[i] = lower + prng() * (upper - lower);
+      return;
+    case "normal": {
+      const mu = (lower + upper) / 2;
+      for (let i = 0; i < n - 1; i += 2) {
+        const [z0, z1] = gaussianPair(prng(), prng());
+        out[i] = mu + z0 * stdDev; out[i + 1] = mu + z1 * stdDev;
       }
-      break;
+      if (n % 2 === 1) { const [z0] = gaussianPair(prng(), prng()); out[n-1] = mu + z0 * stdDev; }
+      return;
     }
-
     case "triangular": {
-      // Inverse CDF for triangular distribution
-      const { min: a, max: b, mode: c } = dist;
-      const span = b - a;
-      const Fc = (c - a) / span;   // CDF at mode
+      const range = upper - lower;
+      if (range <= 0) { out.fill(nominal); return; }
+      const fc = (nominal - lower) / range;
       for (let i = 0; i < n; i++) {
-        const u = rng();
-        if (u < Fc) {
-          out[i] = a + Math.sqrt(u * span * (c - a));
-        } else {
-          out[i] = b - Math.sqrt((1 - u) * span * (b - c));
-        }
+        const u = prng();
+        out[i] = u < fc
+          ? lower + Math.sqrt(u * range * (nominal - lower))
+          : upper - Math.sqrt((1 - u) * range * (upper - nominal));
       }
-      break;
-    }
-
-    case "gaussian": {
-      // Box-Muller, two samples per iteration
-      const { mean, sigma } = dist;
-      let i = 0;
-      while (i < n - 1) {
-        const [z0, z1] = gaussianPair(rng(), rng());
-        out[i++] = mean + sigma * z0;
-        out[i++] = mean + sigma * z1;
-      }
-      // Tail sample if n is odd
-      if (i < n) {
-        const [z0] = gaussianPair(rng(), rng());
-        out[i] = mean + sigma * z0;
-      }
-      break;
+      return;
     }
   }
 }
 
-// ─── Percentile helper ────────────────────────────────────────────────────────
+// ── Statistiche ───────────────────────────────────────────────────────────────
+function pct(sorted: Float64Array, p: number): number {
+  if (!sorted.length) return NaN;
+  const idx = Math.max(0, Math.min(sorted.length - 1, (p / 100) * (sorted.length - 1)));
+  const lo = Math.floor(idx), hi = Math.ceil(idx);
+  return lo === hi ? sorted[lo] : sorted[lo] + (idx - lo) * (sorted[hi] - sorted[lo]);
+}
 
-/** Linear interpolation percentile on a *sorted* array */
-function percentile(sorted: Float64Array, p: number): number {
+const HIST_BINS = 16;
+
+export function computeOutputDistribution(sorted: Float64Array): OutputDistribution {
   const n = sorted.length;
-  if (n === 0) return NaN;
-  const idx = p * (n - 1);
-  const lo = Math.floor(idx);
-  const hi = Math.min(lo + 1, n - 1);
-  return sorted[lo] + (idx - lo) * (sorted[hi] - sorted[lo]);
-}
+  let sum = 0; for (let i = 0; i < n; i++) sum += sorted[i];
+  const mean = sum / n;
+  let v2 = 0, s3 = 0, k4 = 0;
+  for (let i = 0; i < n; i++) { const d = sorted[i] - mean; v2 += d*d; s3 += d*d*d; k4 += d*d*d*d; }
+  const stddev = Math.sqrt(v2 / n);
 
-// ─── Public API ───────────────────────────────────────────────────────────────
-
-/**
- * Run a Monte Carlo propagation.
- *
- * @param inputs    Array of named inputs with their distributions.
- * @param evaluate  Function that takes a map `{ [name]: sampledValue }` and
- *                  returns the scalar output.  It is called **once per sample**
- *                  in a tight loop, so keep it lightweight.
- * @param options   nSamples (default 10 000) and optional seed.
- */
-export function runMonteCarlo(
-  inputs: McInput[],
-  evaluate: (values: Record<string, number>) => number,
-  options: McOptions = {}
-): McResult {
-  const nSamples = Math.max(100, options.nSamples ?? 10_000);
-  const rng = buildPrng(options.seed);
-
-  // Pre-allocate one Float64Array per input
-  const sampleArrays = inputs.map((inp) => {
-    const arr = new Float64Array(nSamples);
-    fillSamples(inp.distribution, arr, rng);
-    return arr;
-  });
-
-  // Output buffer
-  const outputSamples = new Float64Array(nSamples);
-  const pointValues: Record<string, number> = {};
-
-  let sum = 0;
-  let sum2 = 0;
-  let validCount = 0;
-  let discarded = 0;
-
-  for (let i = 0; i < nSamples; i++) {
-    // Populate the evaluation point
-    for (let j = 0; j < inputs.length; j++) {
-      pointValues[inputs[j].name] = sampleArrays[j][i];
+  // Compute real histogram bins from sorted samples
+  const lo = sorted[0], hi = sorted[n - 1];
+  const bins16 = new Array<number>(HIST_BINS).fill(0);
+  if (hi > lo) {
+    const bw = (hi - lo) / HIST_BINS;
+    for (let i = 0; i < n; i++) {
+      const idx = Math.min(HIST_BINS - 1, Math.floor((sorted[i] - lo) / bw));
+      bins16[idx]++;
     }
-
-    const y = evaluate(pointValues);
-
-    if (!Number.isFinite(y)) {
-      discarded++;
-      outputSamples[i] = NaN;
-      continue;
+    const maxBin = Math.max(...bins16);
+    if (maxBin > 0) {
+      for (let i = 0; i < HIST_BINS; i++) bins16[i] /= maxBin; // normalize 0..1
     }
-
-    outputSamples[i] = y;
-    sum += y;
-    sum2 += y * y;
-    validCount++;
+  } else {
+    bins16[HIST_BINS >> 1] = 1; // degenerate: single spike at centre
   }
-
-  if (validCount === 0) {
-    return {
-      mean: NaN, stdDev: NaN, min: NaN, max: NaN,
-      p025: NaN, p975: NaN,
-      nSamples, nDiscarded: discarded,
-    };
-  }
-
-  const mean = sum / validCount;
-  const variance = sum2 / validCount - mean * mean;
-  const stdDev = Math.sqrt(Math.max(0, variance));
-
-  // Collect valid samples for min/max/percentiles
-  const valid = new Float64Array(validCount);
-  let k = 0;
-  for (let i = 0; i < nSamples; i++) {
-    const v = outputSamples[i];
-    if (Number.isFinite(v)) valid[k++] = v;
-  }
-  valid.sort();    // TypedArray.sort() is in-place and fast
 
   return {
-    mean,
-    stdDev,
-    min: valid[0],
-    max: valid[validCount - 1],
-    p025: percentile(valid, 0.025),
-    p975: percentile(valid, 0.975),
-    nSamples,
-    nDiscarded: discarded,
+    samples: n, mean, median: pct(sorted, 50), stddev,
+    min: sorted[0], max: sorted[n - 1],
+    p001: pct(sorted, 0.1), p010: pct(sorted, 1), p025: pct(sorted, 2.5),
+    p500: pct(sorted, 50),
+    p975: pct(sorted, 97.5), p990: pct(sorted, 99), p999: pct(sorted, 99.9),
+    skewness: stddev > 0 ? (s3 / n) / stddev ** 3 : 0,
+    kurtosis: stddev > 0 ? (k4 / n) / stddev ** 4 - 3 : 0,
+    bins16,
   };
 }
 
-// ─── Helpers for CalcDocs integration ────────────────────────────────────────
+// ── Interfacce ────────────────────────────────────────────────────────────────
+export interface McOptions { samples?: number; seed?: number; confidence?: number; }
 
-/**
- * Build a McDistribution from CalcDocs tolerance metadata.
- *
- * @param tolMode  The declared TolMode ("worst_case" treated as rectangular)
- * @param min      Lower bound (absolute)
- * @param max      Upper bound (absolute)
- * @param nominal  Nominal value (used as mode for triangular / mean for Gaussian)
- * @param sigma    Number of sigmas for Gaussian (default 3)
- */
-export function distributionFromTolerance(
-  tolMode: TolMode | undefined,
-  min: number,
-  max: number,
-  nominal?: number,
-  sigma?: number
-): McDistribution {
-  const mode = nominal ?? (min + max) / 2;
+export interface RssSensitivityInput { name: string; sensitivity: number; stdDev: number; }
+export interface WcSensitivityInput  { name: string; sensitivity: number; upEffect: number; downEffect: number; }
 
-  switch (tolMode) {
-    case "gaussian": {
-      // Treat min/max as ±(sigma)σ bounds
-      const s = sigma ?? 3;
-      const stdDevEst = (max - min) / (2 * s);
-      return { kind: "gaussian", mean: mode, sigma: stdDevEst };
-    }
-    case "rss":
-      // RSS typically implies rectangular inputs → Gaussian output via CLT.
-      // For the *input* distribution we use rectangular here.
-      return { kind: "rectangular", min, max };
-
-    default:
-      // worst_case or undefined → rectangular (uniform)
-      return { kind: "rectangular", min, max };
-  }
+export interface UnifiedInput {
+  name: string;
+  nominal: number;
+  uncertainty: import("../types/toleranceModel").UncertaintySpec;
+  distribution: DistributionSpec;
 }
+
+// ── Monte Carlo ───────────────────────────────────────────────────────────────
+export function runMonteCarlo(
+  inputs: McSampleSpec[],
+  evaluate: (values: Record<string, number>) => number,
+  options: McOptions = {},
+): PropagationResult {
+  const N          = options.samples  ?? recommendedSamples(inputs.length);
+  const confidence = options.confidence ?? 95;
+  const tail       = (100 - confidence) / 2;
+  const prng       = buildPrng(options.seed);
+  const arrays     = inputs.map(inp => { const a = new Float64Array(N); fillSamples(a, inp, prng); return a; });
+  const output     = new Float64Array(N);
+  const scratch: Record<string, number> = {};
+  for (let i = 0; i < N; i++) {
+    for (let j = 0; j < inputs.length; j++) scratch[inputs[j].name] = arrays[j][i];
+    output[i] = evaluate(scratch);
+  }
+  output.sort();
+  const dist = computeOutputDistribution(output);
+  return {
+    method: "monte_carlo",
+    min: pct(output, tail), max: pct(output, 100 - tail),
+    nominalValue: dist.mean, stddev: dist.stddev,
+    distribution: dist,
+    contributingInputs: inputs.map(i => i.name),
+  };
+}
+
+// ── RSS ───────────────────────────────────────────────────────────────────────
+export function runRss(inputs: RssSensitivityInput[], nominal: number, sigmaOut = 3): PropagationResult {
+  let sumSq = 0;
+  for (const inp of inputs) sumSq += inp.sensitivity ** 2;
+  const stddev = Math.sqrt(sumSq);
+  const delta  = sigmaOut * stddev;
+  return { method: "rss", min: nominal - delta, max: nominal + delta, nominalValue: nominal, stddev, contributingInputs: inputs.map(i => i.name) };
+}
+
+// ── Worst-case (asymmetric) ───────────────────────────────────────────────────
+// Calcola il vero intervallo worst-case valutando ogni input ai suoi estremi.
+// Per funzioni non lineari, l'effetto in su e in giù può essere diverso.
+// Il dispatcher calcola per ogni input:
+//   upEffect   = f(nom_i + hw_i) − f(nominal)   → contributo verso l'alto
+//   downEffect = f(nom_i - hw_i) − f(nominal)   → contributo verso il basso
+// L'intervallo finale è [nominal + Σ downEffect, nominal + Σ upEffect]
+export function runWorstCase(inputs: WcSensitivityInput[], nominal: number): PropagationResult {
+  let totUp = 0;
+  let totDown = 0;
+
+  for (const inp of inputs) {
+    // Trova il reale contributo minimo (più basso) e massimo (più alto) tra i due scenari
+    totDown += Math.min(inp.upEffect, inp.downEffect);
+    totUp   += Math.max(inp.upEffect, inp.downEffect);
+  }
+
+  return { 
+    method: "worst_case", 
+    min: nominal + totDown, 
+    max: nominal + totUp, 
+    nominalValue: nominal, 
+    contributingInputs: inputs.map(i => i.name), 
+    stddev: (totUp - totDown) / 6 
+  };
+}
+
+// ── Dispatcher ────────────────────────────────────────────────────────────────
+export function propagate(
+  inputs: UnifiedInput[],
+  evaluate: (values: Record<string, number>) => number,
+  nominalOutput: number,
+  method: PropagationMethod,
+  options: McOptions = {},
+): PropagationResult {
+  if (inputs.length === 0) return { method, min: nominalOutput, max: nominalOutput, nominalValue: nominalOutput, contributingInputs: [] };
+
+  if (method === "monte_carlo") {
+    const specs: McSampleSpec[] = [];
+    for (const inp of inputs) {
+      const norm = normalizeUncertainty(inp.uncertainty, inp.nominal);
+      if (!norm) continue;
+      const dk = inp.distribution.type === "normal" ? "normal" : inp.distribution.type === "triangular" ? "triangular" : "uniform";
+      specs.push({ name: inp.name, nominal: inp.nominal, lower: norm.lower, upper: norm.upper, distribution: dk, sigmaLevel: inp.distribution.type === "normal" ? (inp.distribution.sigma_level ?? 3) : 1, stdDev: computeStdDev(norm, inp.distribution) });
+    }
+    return runMonteCarlo(specs, evaluate, options);
+  }
+
+  const nominals: Record<string, number> = {};
+  const hws:  Record<string, number> = {};
+  const sds:  Record<string, number> = {};
+  for (const inp of inputs) {
+    nominals[inp.name] = inp.nominal;
+    const norm = normalizeUncertainty(inp.uncertainty, inp.nominal);
+    hws[inp.name] = norm?.halfWidth ?? 0;
+    sds[inp.name] = norm ? computeStdDev(norm, inp.distribution) : 0;
+  }
+
+  if (method === "rss") {
+    const rssInputs = inputs.map(inp => {
+      const hw = hws[inp.name];
+      if (hw <= 0) return { name: inp.name, sensitivity: 0, stdDev: 0 };
+      const vP = { ...nominals, [inp.name]: inp.nominal + hw };
+      const vM = { ...nominals, [inp.name]: inp.nominal - hw };
+      const dfdx = (evaluate(vP) - evaluate(vM)) / (2 * hw);
+      return { name: inp.name, sensitivity: dfdx * sds[inp.name], stdDev: sds[inp.name] };
+    });
+    return runRss(rssInputs, nominalOutput, 3);
+  }
+
+  const wcInputs = inputs.map(inp => {
+    const hw = hws[inp.name];
+    if (hw <= 0) return { name: inp.name, sensitivity: 0, upEffect: 0, downEffect: 0 };
+    const vP = { ...nominals, [inp.name]: inp.nominal + hw };
+    const vM = { ...nominals, [inp.name]: inp.nominal - hw };
+    const effectUp   = evaluate(vP) - nominalOutput;
+    const effectDown = evaluate(vM) - nominalOutput;
+    const sensitivity = (effectUp - effectDown) / 2;
+    return { name: inp.name, sensitivity, upEffect: effectUp, downEffect: effectDown };
+  });
+  return runWorstCase(wcInputs, nominalOutput);
+}
+
+export function generateSamplesForInput(
+  nominal: number,
+  uncertainty: import("../types/toleranceModel").UncertaintySpec,
+  distribution: import("../types/toleranceModel").DistributionSpec,
+  samplesCount: number,
+  seed?: number
+): Float64Array {
+  const prng = buildPrng(seed);
+  const spec = buildMcSampleSpec("input", nominal, uncertainty, distribution);
+  const out = new Float64Array(samplesCount);
+  if (spec) {
+    fillSamples(out, spec, prng);
+  } else {
+    out.fill(nominal);
+  }
+  return out;
+}
+
+export function resultFromSamples(
+  samples: Float64Array,
+  method: PropagationMethod,
+  nominal: number,
+  confidence = 95
+): PropagationResult {
+  const sorted = samples.slice().sort();
+  const dist = computeOutputDistribution(sorted);
+  const tail = (100 - confidence) / 2;
+
+  let min = dist.min;
+  let max = dist.max;
+
+  if (method === "rss") {
+    const delta = 3 * dist.stddev;
+    min = dist.mean - delta;
+    max = dist.mean + delta;
+  } else if (method === "monte_carlo") {
+    min = pct(sorted, tail);
+    max = pct(sorted, 100 - tail);
+  } // worst_case uses dist.min and dist.max
+
+  return {
+    method,
+    min,
+    max,
+    nominalValue: dist.mean,
+    stddev: dist.stddev,
+    distribution: dist,
+    contributingInputs: [],
+  };
+}
+
+export type { McSampleSpec as McInput };

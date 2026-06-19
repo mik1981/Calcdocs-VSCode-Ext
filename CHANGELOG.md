@@ -1,13 +1,8 @@
 # Changelog
 
-## [0.3.4] - 06/xx/2026
+## [0.3.5] - 06/xx/2026
 
-- Fixed flicker on the last CodeLens value viewed.
-- Fixed useless CodeLens showing on pure assignments with inline calculations.
-- Fixed test engine errors in specific edge cases.
-- Improved rendering performance.
-- Fixed #undef not always being computed correctly (see example case 20).
-- Correctly handled double minus "-" conditions (see example case 14).
+- Evaluate YAML formulas in examples integration tests (with CSV loading) to validate `formula*.yaml` symbols (e.g. case 14_complex_formulas)
 
 ### Upcoming Features:
 
@@ -15,6 +10,15 @@
 - Fixed-point Analyzer (Q15/Q31)
 - Tolerance model rss and gaussian
 - Table formula support
+
+## [0.3.4] - 06/09/2026
+
+- Fixed flicker on the last CodeLens value viewed.
+- Fixed useless CodeLens showing on pure assignments with inline calculations.
+- Fixed test engine errors in specific edge cases.
+- Improved rendering performance.
+- Fixed #undef not always being computed correctly (see example case 20).
+- Correctly handled double minus "-" conditions (see example case 14).
 
 ## [0.3.3] - 06/04/2026
 

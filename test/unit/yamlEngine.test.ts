@@ -7,7 +7,7 @@ function evaluate(root: Record<string, unknown>) {
     .map((key) => `${key}:`)
     .join("\n");
 
-  return evaluateYamlDocument(root, { rawText });
+    return evaluateYamlDocument(root, { rawText });
 }
 
 describe("yaml formula engine", () => {
@@ -36,11 +36,11 @@ describe("yaml formula engine", () => {
     );
   });
 
-  it("propagates declared min/max/tol ranges through formula outputs", () => {
+  it("propagates declared min/max/tol ranges through formula outputs with explicit worst_case", () => {
     const result = evaluate({
       VIN: { value: 10, unit: "V", tol: 10 },
       CURRENT: { value: 2, unit: "A", min: 1, max: 3 },
-      POWER: { formula: "VIN * CURRENT", unit: "W" },
+      POWER: { formula: "VIN * CURRENT", unit: "W", propagation: "worst_case" },
     });
 
     expect(result.symbols.get("VIN")?.range).toMatchObject({
@@ -48,11 +48,21 @@ describe("yaml formula engine", () => {
       max: 11,
       source: "declared",
     });
-    expect(result.symbols.get("POWER")?.range).toMatchObject({
-      min: 9,
-      max: 33,
-      source: "propagated",
+    expect(result.symbols.get("CURRENT")?.range).toMatchObject({
+      min: 1,
+      max: 3,
+      source: "declared",
     });
+
+    const power = result.symbols.get("POWER");
+    expect(power?.range).toBeDefined();
+    expect(power?.range?.source).toBe("propagated");
+    // Per Y = Vin * Iout, worst_case (percentile 0/100 of MC samples):
+    //   VIN: nominal=10, range = [9, 11]
+    //   CURRENT: nominal=2, range = [1, 3]
+    //   true bounds = [9 * 1, 11 * 3] = [9, 33]
+    expect(power?.range?.min).toBeCloseTo(9, 0);
+    expect(power?.range?.max).toBeCloseTo(33, 0);
   });
 
   it("keeps affine units attached to raw YAML values without offset conversion", () => {

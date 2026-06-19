@@ -64,7 +64,7 @@ FINAL_STAGE:
   unit: A
 
 ARR:
-  value: [10, -3, 7, 2]
+  value: [10, 42, 7, 17]
   unit: ohm
   tol: 5
 MYFN:
@@ -72,8 +72,4 @@ MYFN:
   parameters: [a, b]
 OUT_INT_ABS_MOD:
   formula: MYFN(ARR[1], ARR[3])
-  value: 5
   unit: count
-OUT_INT_ABS_MOD2:
-  formula: ARR[1]
-

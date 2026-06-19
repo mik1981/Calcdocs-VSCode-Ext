@@ -2,7 +2,7 @@
   "name": "calcdocs-vscode-extension",
   "displayName": "CalcDocs - C/C++ Constants & Formula Evaluator",
   "description": "%extension.description%",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "publisher": "convergo-dev",
   "repository": {
     "type": "git",
@@ -395,7 +395,7 @@
       {
         "command": "calcdocs.inlineCalc.openGuide",
         "title": "%command.inlineCalc.openGuide.title%",
-        "icon": "$(question)"
+        "icon": "resources/guide_icon.svg"
       },
       {
         "command": "calcdocs.openInteractiveView",
@@ -405,6 +405,11 @@
       {
         "command": "calcdocs.formulas.foldAll",
         "title": "%command.formulas.foldAll%"
+      },
+      {
+        "command": "calcdocs.openGuide",
+        "title": "CalcDocs: Open Interactive Guide",
+        "icon": "resources/guide_icon.svg"
       }
     ],
     "menus": {
@@ -423,7 +428,12 @@
         },
         {
           "command": "calcdocs.inlineCalc.openGuide",
-          "when": "view == calcdocs.inlineCalcResults",
+          "when": "view == calcdocs.inlineCalcResults && resourceExtname =~ /\\.(c|cc|cpp|cxx|h|hpp|hxx)$/",
+          "group": "navigation@10"
+        },
+        {
+          "command": "calcdocs.openGuide",
+          "when": "view == calcdocs.inlineCalcResults && resourceExtname =~ /\\.(yaml|yml)$/ && formulaFileNames",
           "group": "navigation@10"
         }
       ]
@@ -480,7 +490,7 @@
     "watch": "node esbuild.js --watch",
     "vscode:prepublish": "npm run build",
     "package": "vsce package --no-dependencies",
-    "compile": "tsc -p .",
+    "compile": "tsc -p . && time /t",
     "test": "vitest run --config vitest.config.ts",
     "test:run": "vitest run --config vitest.config.ts",
     "compile:verify": "npm run compile && npm run test:run",

@@ -3,7 +3,7 @@ export const FORMULA_LABEL_VALUES = [
   "table_lookup",
 ] as const
 
-export type TolMode = "worst_case" | "rss" | "gaussian";
+export type TolMode = "worst_case" | "rss" | "gaussian" | "monte_carlo";
 
 export type FormulaLabel = (typeof FORMULA_LABEL_VALUES)[number]
 
@@ -19,23 +19,10 @@ export type FormulaEntry = {
   valueYaml?: number
   valueYamlList?: number[]
   parameters?: string[]
-  tolerance?: {
-    min?: number
-    max?: number
-    tol?: number
-    mode?: TolMode
-    sigma?: number
-    parameters: Record<string, { min?: number; max?: number; tol?: number; mode?: TolMode; sigma?: number }>
-  }
-  toleranceResult?: {
-    min: number
-    max: number
-    source: "declared" | "propagated"
-    tol?: number
-    nominalValue?: number
-    mode?: TolMode
-    sigma?: number
-  }
+  tolerance?: import("../core/formulaYaml").FormulaToleranceSpec
+  toleranceResult?: (import("../types/toleranceModel").PropagationResult & {
+    source: "declared" | "propagated";
+  }) | undefined;
   expanded?: string
   resolvedDependencies?: string[]
   valueCalc?: number | null

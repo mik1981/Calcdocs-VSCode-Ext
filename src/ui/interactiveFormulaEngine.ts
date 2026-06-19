@@ -3,6 +3,7 @@ import type {
   FormulaEntry as CoreFormulaEntry,
   TolMode
 } from "../types/FormulaEntry";
+import type { FormulaToleranceSpec } from "../core/formulaYaml";
 import {
   parseExpression,
   type ExpressionNode,
@@ -29,7 +30,15 @@ import type {
   FormulaInputNode,
   FormulaTreeNode,
 } from "./webview-types";
-import { runMonteCarlo, distributionFromTolerance, type McInput } from "../engine/monteCarlo";
+import { runMonteCarlo, propagate, generateSamplesForInput, resultFromSamples, computeOutputDistribution, type UnifiedInput } from "../engine/monteCarlo";
+import {
+  normalizeUncertainty,
+  computeStdDev,
+  type PropagationResult,
+  type PropagationMethod,
+  type OutputDistribution,
+} from "../types/toleranceModel";
+import type { McSampleSpec } from "../engine/tolerance";
 
 export const MAX_INTERACTIVE_DEPTH = 5;
 
@@ -63,7 +72,7 @@ export type InteractiveEvaluationResult = {
 type BuildTreeOptions = {
   evaluation?: InteractiveEvaluationResult;
   overrides?: Record<string, number>;
-  liveRanges?: Map<string, { min: number; max: number; source: "propagated"; mode?: TolMode; sigma?: number } | undefined>;
+  liveRanges?: Map<string, { min: number; max: number; source: "propagated" | "declared"; method?: string; nominalValue?: number; stddev?: number; distribution?: OutputDistribution } | undefined>;
 };
 
 const BUILTIN_IDENTIFIERS = new Set([
@@ -106,61 +115,44 @@ function addUnique(target: string[], message: string): void {
 }
 
 /**
+ * Helper che ricava il tol percentuale da FormulaToleranceSpec (formato nuovo).
+ */
+function getInputTolPercent(spec: FormulaToleranceSpec | undefined): number | undefined {
+  if (spec?.input?.uncertainty.type === "percent") return spec.input.uncertainty.value;
+  return undefined;
+}
+
+/**
  * Returns an up-to-date range for `name`, recomputing absolute bounds when
  * the stored tolerance is percentage-based (`tol`) and a fresh `currentValue`
  * is available.  For explicit min/max or propagated ranges the stored values
  * are returned unchanged.
  */
 function liveRange(
-  toleranceResult: CoreFormulaEntry['toleranceResult'] | undefined,
+  toleranceResult: PropagationResult & { source: 'declared' | 'propagated' } | undefined,
   currentValue: number | undefined
-): { min: number; max: number; source: 'declared' | 'propagated'; mode?: 'worst_case' | 'rss' | 'gaussian'; sigma?: number } | undefined {
+): PropagationResult & { source: 'declared' | 'propagated' } | undefined {
   if (!toleranceResult) return undefined;
 
-  // Use `as any` so extra fields work even if the TS type lags behind.
-  const tr = toleranceResult as any;
-
-  // ── Case 1: root-level tol (e.g. `tol: 5` on the formula itself) ──────────
-  // Recompute exact ±tol% bounds from the live output value.
-  if (tr.tol !== undefined && isFiniteNumber(currentValue)) {
-    const delta = Math.abs(currentValue) * Math.abs(tr.tol) / 100;
-    return {
-      min: currentValue - delta,
-      max: currentValue + delta,
-      source: 'declared',
-      mode: tr.mode,
-      sigma: tr.sigma,
-    };
-  }
-
-  // ── Case 2: propagated range (from dependency parameter tolerances) ────────
+  // ── Case 1: Propagated range ────────────────────────────────────────────────
   // Scale min/max proportionally with the new output value, using the nominal
   // value stored at analysis time as the reference.
   if (
     toleranceResult.source === 'propagated' &&
-    isFiniteNumber(tr.nominalValue) &&
-    tr.nominalValue !== 0 &&
+    isFiniteNumber(toleranceResult.nominalValue) &&
+    toleranceResult.nominalValue !== 0 &&
     isFiniteNumber(currentValue)
   ) {
-    const scale = currentValue / tr.nominalValue;
+    const scale = currentValue / toleranceResult.nominalValue;
     return {
+      ...toleranceResult,
       min: toleranceResult.min * scale,
       max: toleranceResult.max * scale,
-      source: 'propagated',
-      mode: tr.mode,
-      sigma: tr.sigma,
     };
   }
 
-  // ── Case 3: explicit min/max (absolute bounds) ────────────────────────────
-  // Do not rescale — these are fixed acceptance limits, not relative tolerances.
-  return {
-    min: toleranceResult.min,
-    max: toleranceResult.max,
-    source: toleranceResult.source,
-    mode: tr.mode,
-    sigma: tr.sigma,
-  };
+  // ── Case 2: Declared range ──────────────────────────────────────────────────
+  return toleranceResult;
 }
 
 function collectIdentifiersInOrder(expression: string): string[] {
@@ -383,209 +375,7 @@ export class InteractiveFormulaEngine {
     );
   }
 
-  private computeLiveRange(
-    name: string,
-    values: Record<string, number>,
-    units: Record<string, string>
-  ): { min: number; max: number; source: "propagated"; mode?: TolMode; sigma?: number } | undefined {
 
-    const entry = this.state.formulaIndex.get(name);
-    if (!entry?.formula) return undefined;
-
-    // La formula deve avere tol_mode dichiarato OPPURE avere dipendenze con tolleranza
-    // per avere senso calcolare un range propagato.
-    const tolMode: TolMode  = entry.tolerance?.mode  ?? "worst_case";
-    const tolSigma: number  = entry.tolerance?.sigma  ?? 3;
-
-    // Raccoglie gli input con range dichiarati (dalle dipendenze dirette)
-    const deps = collectIdentifiersInOrder(entry.formula);
-
-    // Costruisce i range degli input partendo dai toleranceResult delle dipendenze
-    // o dai tolerance.parameters dichiarati sulla formula
-    const inputRanges: Array<{ name: string; min: number; max: number }> = [];
-
-    for (const depName of deps) {
-      const depVal  = values[depName];
-      const depEntry = this.state.formulaIndex.get(depName);
-
-      // Priorità 1: override esplicito sul parametro nella tolerance della formula padre
-      const paramTol = entry.tolerance?.parameters?.[depName];
-      if (paramTol) {
-        if (paramTol.min !== undefined && paramTol.max !== undefined) {
-          inputRanges.push({ name: depName, min: paramTol.min, max: paramTol.max });
-          continue;
-        }
-        if (paramTol.tol !== undefined) {
-          const ref = isFiniteNumber(depVal) ? depVal
-            : isFiniteNumber(depEntry?.valueCalc ?? depEntry?.valueYaml)
-              ? (depEntry!.valueCalc ?? depEntry!.valueYaml)!
-              : undefined;
-          if (ref !== undefined) {
-            const delta = Math.abs(ref) * Math.abs(paramTol.tol) / 100;
-            inputRanges.push({ name: depName, min: ref - delta, max: ref + delta });
-            continue;
-          }
-        }
-      }
-
-      // Priorità 2: la dipendenza è una costante con tol dichiarata → usa valore corrente
-      if (depEntry && !depEntry.formula && depEntry.tolerance?.tol !== undefined) {
-        const ref = isFiniteNumber(depVal) ? depVal
-          : isFiniteNumber(depEntry.valueCalc ?? depEntry.valueYaml)
-            ? (depEntry.valueCalc ?? depEntry.valueYaml)!
-            : undefined;
-        if (ref !== undefined) {
-          const delta = Math.abs(ref) * Math.abs(depEntry.tolerance.tol) / 100;
-          inputRanges.push({ name: depName, min: ref - delta, max: ref + delta });
-          continue;
-        }
-      }
-
-      // Priorità 3: la dipendenza ha un toleranceResult dichiarato con min/max assoluti
-      if (depEntry?.toleranceResult) {
-        const tr = depEntry.toleranceResult;
-        if (tr.tol !== undefined) {
-          // range dichiarato percentuale → scala al valore corrente
-          const ref = isFiniteNumber(depVal) ? depVal
-            : isFiniteNumber((tr as any).nominalValue) ? (tr as any).nominalValue
-            : undefined;
-          if (ref !== undefined) {
-            const delta = Math.abs(ref) * Math.abs(tr.tol) / 100;
-            inputRanges.push({ name: depName, min: ref - delta, max: ref + delta });
-            continue;
-          }
-        } else {
-          // range assoluto: scala proporzionalmente se il valore corrente è diverso dal nominale
-          const nominal = (tr as any).nominalValue;
-          if (isFiniteNumber(depVal) && isFiniteNumber(nominal) && nominal !== 0) {
-            const scale = depVal / nominal;
-            inputRanges.push({ name: depName, min: tr.min * scale, max: tr.max * scale });
-          } else {
-            inputRanges.push({ name: depName, min: tr.min, max: tr.max });
-          }
-          continue;
-        }
-      }
-
-      // Priorità 4: la dipendenza è essa stessa una formula con range propagato →
-      // ricorsione un livello (evita ricorsione profonda con un guard)
-      if (depEntry?.formula && depEntry.toleranceResult?.source === "propagated") {
-        const tr = depEntry.toleranceResult;
-        const nominal = (tr as any).nominalValue;
-        if (isFiniteNumber(depVal) && isFiniteNumber(nominal) && nominal !== 0) {
-          const scale = depVal / nominal;
-          inputRanges.push({ name: depName, min: tr.min * scale, max: tr.max * scale });
-        } else {
-          inputRanges.push({ name: depName, min: tr.min, max: tr.max });
-        }
-      }
-      // Se nessuna condizione si applica, la dipendenza non contribuisce alla tolleranza
-    }
-
-    if (inputRanges.length === 0 || inputRanges.length > 12) 
-      return undefined;
-
-    // Funzione di valutazione nel punto dato
-    const evalAtPoint = (overrides: Record<string, number>): number | undefined => {
-      const ctx: EvaluationContext = {
-        resolveIdentifier: (id) => {
-          const v = overrides[id] ?? values[id];
-          if (v === undefined) return undefined;
-          const unit = units[id] ?? this.state.symbolUnits.get(id);
-          const q = unit ? createFormulaDataQuantity(v, unit) : createQuantity(v);
-          return q.ok ? q.value : undefined;
-        },
-        resolveArrayIdentifier: (id) => {
-          const depEntry = this.state.formulaIndex.get(id);
-          if (!depEntry?.valueYamlList) return undefined;
-          const u = getUnit(id, depEntry, this.state);
-          return depEntry.valueYamlList.map(v => {
-            const q = createFormulaDataQuantity(v, u);
-            return q.ok ? q.value : createDimensionlessQuantity(v);
-          });
-        },
-        resolveLookup: this.csvLookup,
-        ignoreUnitCompatibility: true,
-      };
-      const res = evaluateExpressionWithOutputUnit(entry!.formula!, ctx, getUnit(name, entry, this.state));
-      return res.ok ? (res.displayValue ?? toDisplayValue(res.quantity)) : undefined;
-    };
-
-    const nominalOverrides = Object.fromEntries(
-      inputRanges.map(r => [r.name, (r.min + r.max) / 2])
-    );
-    const nominal = evalAtPoint(nominalOverrides) ?? values[name];
-    if (!isFiniteNumber(nominal)) return undefined;
-
-    if (tolMode === "worst_case") {
-      const allValues: number[] = [];
-      const n = inputRanges.length;
-      for (let mask = 0; mask < (1 << n); mask++) {
-        const point: Record<string, number> = {};
-        inputRanges.forEach((r, i) => {
-          point[r.name] = (mask & (1 << i)) === 0 ? r.min : r.max;
-        });
-        const v = evalAtPoint(point);
-        if (isFiniteNumber(v)) allValues.push(v);
-      }
-      if (!allValues.length) return undefined;
-      return {
-        min: Math.min(...allValues),
-        max: Math.max(...allValues),
-        source: "propagated",
-        mode: tolMode,
-        sigma: tolSigma,
-      };
-
-    } else {
-      // RSS or Gaussian → Monte Carlo
-      const mcInputs: McInput[] = inputRanges.map(r => ({
-        name: r.name,
-        distribution: distributionFromTolerance(
-          tolMode,
-          r.min, r.max,
-          (r.min + r.max) / 2,
-          tolSigma
-        ),
-      }));
-
-      const mcResult = runMonteCarlo(mcInputs, evalAtPoint as any, { nSamples: 10_000 });
-
-      if (Number.isFinite(mcResult.mean)) {
-        return {
-          min: mcResult.p025,
-          max: mcResult.p975,
-          source: "propagated",
-          mode: tolMode,
-          sigma: tolSigma,
-        };
-      }
-    }
-
-    // RSS / gaussian
-    let sumSq = 0;
-    for (const r of inputRanges) {
-      const halfSpan = (r.max - r.min) / 2;
-      if (halfSpan <= 0) continue;
-      const plus  = { ...nominalOverrides, [r.name]: nominalOverrides[r.name] + halfSpan };
-      const minus = { ...nominalOverrides, [r.name]: nominalOverrides[r.name] - halfSpan };
-      const fPlus  = evalAtPoint(plus);
-      const fMinus = evalAtPoint(minus);
-      if (!isFiniteNumber(fPlus) || !isFiniteNumber(fMinus)) continue;
-      const sens = (fPlus - fMinus) / 2;
-      sumSq += sens * sens;
-    }
-    if (sumSq <= 0) return undefined;
-    const sigmaOut = Math.sqrt(sumSq);
-    const nsigma   = tolMode === "gaussian" ? tolSigma : 1;
-    return {
-      min: nominal - nsigma * sigmaOut,
-      max: nominal + nsigma * sigmaOut,
-      source: "propagated",
-      mode: tolMode,
-      sigma: tolSigma,
-    };
-  }
 
 
   createFormulaEntry(entry: CoreFormulaEntry, options: BuildTreeOptions = {}): FormulaEntry {
@@ -597,7 +387,8 @@ export class InteractiveFormulaEngine {
     // const range: { min: number; max: number; source: "declared" | "propagated" } | undefined = toleranceResult
     //   ? { min: toleranceResult.min, max: toleranceResult.max, source: toleranceResult.source }
     //   : tree.result?.range;
-    const range = liveRange(entry.toleranceResult, value) ?? tree.result?.range;
+    const range = liveRange(entry.toleranceResult, value) as any
+      ?? (tree.result?.range ? { ...tree.result.range, source: tree.result.range.source || 'declared' } : undefined);
 
     return {
       id: entry.key,
@@ -883,7 +674,7 @@ export class InteractiveFormulaEngine {
 
           if (tr.tol !== undefined && typeof currentValue === "number" && Number.isFinite(currentValue)) {
             const delta = Math.abs(currentValue) * Math.abs(tr.tol) / 100;
-            return { min: currentValue - delta, max: currentValue + delta, source: "declared", mode: tr.mode, sigma: tr.sigma };
+            return { min: currentValue - delta, max: currentValue + delta, source: "declared", method: tr.method, stddev: tr.stddev };
           }
 
           if (
@@ -894,10 +685,10 @@ export class InteractiveFormulaEngine {
             Number.isFinite(currentValue)
           ) {
             const scale = currentValue / tr.nominalValue;
-            return { min: tol.min * scale, max: tol.max * scale, source: "propagated", mode: tr.mode, sigma: tr.sigma };
+            return { min: tol.min * scale, max: tol.max * scale, source: "propagated", method: tr.method, nominalValue: tr.nominalValue, stddev: tr.stddev, distribution: tr.distribution };
           }
 
-          return { min: tol.min, max: tol.max, source: tol.source, mode: tr.mode, sigma: tr.sigma };
+          return { min: tol.min, max: tol.max, source: tol.source, method: tr.method, nominalValue: tr.nominalValue, stddev: tr.stddev, distribution: tr.distribution };
         })(),
         // Tolleranze note sui parametri d'ingresso di questa formula.
         // Cerca tolleranze in due modi:
@@ -913,7 +704,8 @@ export class InteractiveFormulaEngine {
             : [];
 
           // Priority map: le tolleranze dichiarate esplicitamente su tolerance.parameters hanno la precedenza
-          const declaredParams = formulaEntry.tolerance?.parameters ?? {};
+          const formulaSpec = formulaEntry.tolerance as FormulaToleranceSpec | undefined;
+          const declaredOverrides = formulaSpec?.parameterOverrides ?? {};
 
           const result: Array<{
             name: string;
@@ -924,8 +716,8 @@ export class InteractiveFormulaEngine {
           }> = [];
 
           for (const depName of depIdentifiers) {
-            // Caso 1: tolleranza dichiarata esplicitamente in tolerance.parameters
-            const paramTol = declaredParams[depName];
+            // Caso 1: tolleranza dichiarata esplicitamente in parameterOverrides
+            const paramTol = declaredOverrides[depName];
             if (paramTol) {
               const entry: {
                 name: string;
@@ -937,9 +729,11 @@ export class InteractiveFormulaEngine {
                 name: depName,
                 source: 'declared',
               };
-              if (paramTol.tol !== undefined) entry.tol = paramTol.tol;
-              if (paramTol.min !== undefined) entry.min = paramTol.min;
-              if (paramTol.max !== undefined) entry.max = paramTol.max;
+              if (paramTol.uncertainty.type === "percent") entry.tol = paramTol.uncertainty.value;
+              if (paramTol.uncertainty.type === "range") {
+                entry.min = paramTol.uncertainty.min;
+                entry.max = paramTol.uncertainty.max;
+              }
               result.push(entry);
               continue;
             }
@@ -989,12 +783,229 @@ export class InteractiveFormulaEngine {
       }
     }
 
-    // Ricalcola i range live per i simboli con tolleranza propagata
-    const liveRanges = new Map<string, ReturnType<typeof this.computeLiveRange>>();
+    // Ricalcola i range live per i simboli con tolleranza propagata via Monte Carlo ricorsivo
+    const liveRanges = new Map<string, { min: number; max: number; source: "propagated" | "declared"; method?: string; nominalValue?: number; stddev?: number; distribution?: OutputDistribution; }>();
+
+    const sampleCache = new Map<string, Float64Array>();
+    const SAMPLES_COUNT = 10000;
+    const uncertaintyCache = new Map<string, boolean>();
+
+    const checkUncertainty = (name: string, visiting = new Set<string>()): boolean => {
+      if (uncertaintyCache.has(name)) return uncertaintyCache.get(name)!;
+      if (visiting.has(name)) return false;
+      visiting.add(name);
+
+      const entry = this.state.formulaIndex.get(name);
+      if (!entry) {
+        visiting.delete(name);
+        return false;
+      }
+      const isConst = !entry.formula;
+      if (isConst) {
+        const has = entry.tolerance?.input !== undefined;
+        uncertaintyCache.set(name, has);
+        visiting.delete(name);
+        return has;
+      } else {
+        const spec = entry.tolerance as FormulaToleranceSpec | undefined;
+        const deps = collectIdentifiersInOrder(entry.formula!);
+        if (spec?.parameterOverrides) {
+          for (const override of Object.values(spec.parameterOverrides)) {
+            if (override.uncertainty) {
+              uncertaintyCache.set(name, true);
+              visiting.delete(name);
+              return true;
+            }
+          }
+        }
+        for (const depName of deps) {
+          if (checkUncertainty(depName, visiting)) {
+            uncertaintyCache.set(name, true);
+            visiting.delete(name);
+            return true;
+          }
+        }
+      }
+      uncertaintyCache.set(name, false);
+      visiting.delete(name);
+      return false;
+    };
+
+    const getOrBuildSamples = (name: string): Float64Array | undefined => {
+      if (sampleCache.has(name)) return sampleCache.get(name);
+
+      const entry = this.state.formulaIndex.get(name);
+      if (!entry) {
+        const fallbackVal = values[name];
+        if (fallbackVal !== undefined) {
+          const arr = new Float64Array(SAMPLES_COUNT);
+          arr.fill(fallbackVal);
+          sampleCache.set(name, arr);
+          return arr;
+        }
+        return undefined;
+      }
+
+      const isConst = !entry.formula;
+      if (isConst) {
+        const val = values[name] ?? getDefaultValue(name, entry, this.state) ?? 0;
+        const spec = entry.tolerance?.input;
+        if (spec) {
+          const arr = generateSamplesForInput(val, spec.uncertainty, spec.distribution, SAMPLES_COUNT);
+          sampleCache.set(name, arr);
+          return arr;
+        } else {
+          const arr = new Float64Array(SAMPLES_COUNT);
+          arr.fill(val);
+          sampleCache.set(name, arr);
+          return arr;
+        }
+      }
+
+      // Formula
+      const val = values[name] ?? 0;
+      if (!checkUncertainty(name)) {
+        const arr = new Float64Array(SAMPLES_COUNT);
+        arr.fill(val);
+        sampleCache.set(name, arr);
+        return arr;
+      }
+
+      const outputSamples = new Float64Array(SAMPLES_COUNT);
+      const deps = collectIdentifiersInOrder(entry.formula!);
+      const spec = entry.tolerance as FormulaToleranceSpec | undefined;
+      const parameterOverrides = spec?.parameterOverrides ?? {};
+
+      const depSampleArrays = new Map<string, Float64Array>();
+      for (const depName of deps) {
+        if (parameterOverrides[depName]?.uncertainty) {
+          const depVal = values[depName] ?? 0;
+          const overrideSpec = parameterOverrides[depName];
+          const arr = generateSamplesForInput(depVal, overrideSpec.uncertainty, overrideSpec.distribution, SAMPLES_COUNT);
+          depSampleArrays.set(depName, arr);
+        } else {
+          const arr = getOrBuildSamples(depName);
+          if (arr) depSampleArrays.set(depName, arr);
+        }
+      }
+
+      for (let i = 0; i < SAMPLES_COUNT; i++) {
+        const sampleCtx: EvaluationContext = {
+          resolveIdentifier: (id) => {
+            if (depSampleArrays.has(id)) {
+              const sVal = depSampleArrays.get(id)![i];
+              const unit = units[id] ?? this.state.symbolUnits.get(id);
+              const q = unit ? createFormulaDataQuantity(sVal, unit) : createQuantity(sVal);
+              return q.ok ? q.value : undefined;
+            }
+            const v = values[id];
+            if (v === undefined) return undefined;
+            const unit = units[id] ?? this.state.symbolUnits.get(id);
+            const q = unit ? createFormulaDataQuantity(v, unit) : createQuantity(v);
+            return q.ok ? q.value : undefined;
+          },
+          resolveArrayIdentifier: (id) => {
+            const depEntry = this.state.formulaIndex.get(id);
+            if (!depEntry?.valueYamlList) return undefined;
+            const u = getUnit(id, depEntry, this.state);
+            return depEntry.valueYamlList.map(v => {
+              const q = createFormulaDataQuantity(v, u);
+              return q.ok ? q.value : createDimensionlessQuantity(v);
+            });
+          },
+          resolveLookup: this.csvLookup,
+          resolveFunctionCall: (functionName, args) => {
+            const fnEntry = this.state.formulaIndex.get(functionName);
+            if (!fnEntry?.formula || !fnEntry.parameters) return undefined;
+            const boundParameters = new Map<string, Quantity>();
+            fnEntry.parameters.forEach((param, idx) => {
+              if (idx < args.length) {
+                boundParameters.set(param, args[idx]);
+              }
+            });
+
+            const fnSampleCtx: EvaluationContext = {
+              resolveIdentifier: (id) => {
+                const bound = boundParameters.get(id);
+                if (bound) return bound;
+                if (depSampleArrays.has(id)) {
+                  const sVal = depSampleArrays.get(id)![i];
+                  const unit = units[id] ?? this.state.symbolUnits.get(id);
+                  const q = unit ? createFormulaDataQuantity(sVal, unit) : createQuantity(sVal);
+                  return q.ok ? q.value : undefined;
+                }
+                const v = values[id];
+                if (v === undefined) return undefined;
+                const unit = units[id] ?? this.state.symbolUnits.get(id);
+                const q = unit ? createFormulaDataQuantity(v, unit) : createQuantity(v);
+                return q.ok ? q.value : undefined;
+              },
+              resolveArrayIdentifier: (id) => {
+                const depEntry = this.state.formulaIndex.get(id);
+                if (!depEntry?.valueYamlList) return undefined;
+                const u = getUnit(id, depEntry, this.state);
+                return depEntry.valueYamlList.map(v => {
+                  const q = createFormulaDataQuantity(v, u);
+                  return q.ok ? q.value : createDimensionlessQuantity(v);
+                });
+              },
+              resolveLookup: this.csvLookup,
+              resolveFunctionCall: (nn, na) => sampleCtx.resolveFunctionCall?.(nn, na),
+              ignoreUnitCompatibility: true,
+            };
+
+            const res = evaluateExpressionWithOutputUnit(fnEntry.formula!, fnSampleCtx, getUnit(functionName, fnEntry, this.state));
+            if (!res.ok) return undefined;
+            return { ok: true, value: res.quantity };
+          },
+          ignoreUnitCompatibility: true,
+        };
+
+        const res = evaluateExpressionWithOutputUnit(entry.formula!, sampleCtx, getUnit(name, entry, this.state));
+        outputSamples[i] = res.ok ? (res.displayValue ?? toDisplayValue(res.quantity)) : NaN;
+      }
+
+      sampleCache.set(name, outputSamples);
+      return outputSamples;
+    };
+
     for (const [name, entry] of this.state.formulaIndex) {
-      if (entry.formula) {
-        const r = this.computeLiveRange(name, values, units);
-        if (r) liveRanges.set(name, r);
+      if (checkUncertainty(name)) {
+        const samples = getOrBuildSamples(name);
+        if (samples) {
+          if (entry.formula) {
+            const spec = entry.tolerance as FormulaToleranceSpec | undefined;
+            const existingResult = entry.toleranceResult;
+            const method: PropagationMethod = (spec?.output?.method) ?? (existingResult as any)?.method ?? "worst_case";
+            const confidence = spec?.output?.confidence ?? 95;
+            const res = resultFromSamples(samples, method, values[name] ?? 0, confidence);
+
+            liveRanges.set(name, {
+              min: res.min,
+              max: res.max,
+              source: "propagated",
+              method: res.method,
+              nominalValue: res.nominalValue,
+              stddev: res.stddev,
+              distribution: res.distribution,
+            });
+          } else {
+            const spec = entry.tolerance?.input;
+            if (spec) {
+              const sorted = samples.slice().sort();
+              const dist = computeOutputDistribution(sorted);
+              const norm = normalizeUncertainty(spec.uncertainty, values[name] ?? 0);
+              liveRanges.set(name, {
+                min: norm?.lower ?? (values[name] ?? 0),
+                max: norm?.upper ?? (values[name] ?? 0),
+                source: "declared",
+                nominalValue: values[name] ?? 0,
+                stddev: norm ? computeStdDev(norm, spec.distribution) : 0,
+                distribution: dist,
+              });
+            }
+          }
+        }
       }
     }
 
@@ -1002,13 +1013,15 @@ export class InteractiveFormulaEngine {
     for (const step of steps) {
       const live = liveRanges.get(step.name);
       if (live) {
-        step.range = {
-          min: live.min,
-          max: live.max,
-          source: live.source,
-          mode: live.mode,
-          sigma: live.sigma,
-        };
+      step.range = {
+        min: live.min,
+        max: live.max,
+        source: live.source,
+        method: live.method,
+        nominalValue: live.nominalValue,
+        stddev: live.stddev,
+        distribution: live.distribution,
+      };
       }
     }
 

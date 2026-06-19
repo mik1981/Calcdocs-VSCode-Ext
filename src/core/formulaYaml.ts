@@ -1,21 +1,354 @@
+/**
+ * formulaYaml.ts
+ * ══════════════════════════════════════════════════════════════════════════════
+ * Parser del formato YAML delle formule CalcDocs.
+ *
+ * Supporta due formati per la tolleranza:
+ *
+ * ── NUOVO (canonico, preferito) ───────────────────────────────────────────────
+ *   resistor:
+ *     value: 100
+ *     uncertainty:
+ *       type: percent
+ *       value: 5
+ *     distribution:
+ *       type: normal
+ *       sigma_level: 3
+ *
+ *   output_formula:
+ *     formula: resistor * current
+ *     propagation: monte_carlo      # worst_case | rss | monte_carlo
+ *     confidence: 95
+ *
+ * ── LEGACY (deprecato, letto ma non scritto) ──────────────────────────────────
+ *   resistor:
+ *     value: 100
+ *     tol: 5
+ *     tol_mode: gaussian
+ *     sigma: 2
+ *
+ * ══════════════════════════════════════════════════════════════════════════════
+ */
+
 import * as yaml from "js-yaml";
+import type {
+  UncertaintySpec,
+  DistributionSpec,
+  PropagationMethod,
+  ValidationIssue,
+} from "../types/toleranceModel";
+import {
+  validateUncertainty,
+  validateDistribution,
+} from "../types/toleranceModel";
 
 export const FORMULA_YAML_FILE_RX = /(^|[\\/])formulas?.*\.ya?ml$/i;
 
-import type { TolMode } from "../types/FormulaEntry";
+// ─── Tipo canonico per la tolleranza di un simbolo ───────────────────────────
 
-export type FormulaToleranceRange = {
+/**
+ * ParsedInputTolerance — tolleranza di un simbolo input (const).
+ * Contiene i tre livelli separati.
+ */
+export interface ParsedInputTolerance {
+  uncertainty: UncertaintySpec;
+  distribution: DistributionSpec;
+  /** Issue di validazione riscontrate durante il parsing. */
+  issues: ValidationIssue[];
+  /** true se derivato dalla conversione del formato legacy. */
+  isLegacy: boolean;
+}
+
+/**
+ * ParsedOutputPropagation — metodo di propagazione per un simbolo output (expr).
+ */
+export interface ParsedOutputPropagation {
+  method: PropagationMethod;
+  confidence?: number;
+  samples?: number;
+  seed?: number;
+}
+
+/**
+ * FormulaToleranceSpec — contenitore completo per un simbolo.
+ * Uno dei due campi (input / output) sarà presente, mai entrambi.
+ */
+export interface FormulaToleranceSpec {
+  /** Presente se il simbolo è un input con incertezza (const). */
+  input?: ParsedInputTolerance;
+
+  /** Presente se il simbolo è un output con propagazione (expr/lookup). */
+  output?: ParsedOutputPropagation;
+
+  /**
+   * Overrides per-parametro: la formula output può specificare una
+   * tolleranza diversa per ogni sua dipendenza.
+   *
+   *   formula:
+   *     formula: R * I
+   *     parameter_tolerances:
+   *       R:
+   *         uncertainty: { type: percent, value: 1 }
+   *         distribution: { type: normal, sigma_level: 3 }
+   */
+  parameterOverrides?: Record<string, ParsedInputTolerance>;
+
+  /** Issue aggregate (input + overrides). */
+  issues: ValidationIssue[];
+}
+
+// ─── Backward-compat: alias per il vecchio FormulaToleranceRange ──────────────
+
+/** @deprecated Usa ParsedInputTolerance */
+export interface FormulaToleranceRange {
   min?: number;
   max?: number;
   tol?: number;
-  mode?: TolMode;
+  mode?: string;
   sigma?: number;
-};
+  source?: string;
+}
 
+// ─── Helpers di parsing ───────────────────────────────────────────────────────
 
-export type FormulaToleranceSpec = FormulaToleranceRange & {
-  parameters: Record<string, FormulaToleranceRange>;
-};
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function toFiniteNumber(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const n = parseFloat(value);
+    if (Number.isFinite(n)) return n;
+  }
+  return undefined;
+}
+
+function toNumericArray(value: unknown): number[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const out: number[] = [];
+  for (const item of value) {
+    const n = toFiniteNumber(item);
+    if (n === undefined) return undefined;
+    out.push(n);
+  }
+  return out;
+}
+
+// ─── Parsing formato NUOVO ────────────────────────────────────────────────────
+
+function parseUncertaintySpec(
+  raw: unknown,
+  symbolName: string
+): { spec: UncertaintySpec; issues: ValidationIssue[] } | undefined {
+  if (!isObjectRecord(raw)) return undefined;
+
+  const issues = validateUncertainty(raw as Record<string, unknown>, symbolName);
+  const type   = raw["type"] as UncertaintySpec["type"] | undefined;
+  if (!type) return { spec: { type: "percent" }, issues }; // sentinel
+
+  const spec: UncertaintySpec = { type };
+  if (raw["value"]    !== undefined) spec.value    = toFiniteNumber(raw["value"]);
+  if (raw["min"]      !== undefined) spec.min      = toFiniteNumber(raw["min"]);
+  if (raw["max"]      !== undefined) spec.max      = toFiniteNumber(raw["max"]);
+  if (raw["absolute"] !== undefined) spec.absolute = toFiniteNumber(raw["absolute"]);
+  if (raw["sigma"]    !== undefined) spec.sigma    = toFiniteNumber(raw["sigma"]);
+
+  return { spec, issues };
+}
+
+function parseDistributionSpec(
+  raw: unknown,
+  symbolName: string
+): { spec: DistributionSpec; issues: ValidationIssue[] } | undefined {
+  if (!isObjectRecord(raw)) return undefined;
+
+  const issues = validateDistribution(raw as Record<string, unknown>, symbolName);
+  const type   = raw["type"] as DistributionSpec["type"] | undefined;
+  if (!type) return { spec: { type: "uniform" }, issues }; // default
+
+  const spec: DistributionSpec = { type };
+  if (raw["sigma_level"] !== undefined) spec.sigma_level = toFiniteNumber(raw["sigma_level"]);
+  if (raw["mode_value"]  !== undefined) spec.mode_value  = toFiniteNumber(raw["mode_value"]);
+
+  return { spec, issues };
+}
+
+function parsePropagationMethod(raw: unknown): PropagationMethod | undefined {
+  if (raw === "worst_case" || raw === "rss" || raw === "monte_carlo") return raw;
+  return undefined;
+}
+
+// ─── Conversione formato LEGACY → nuovo ───────────────────────────────────────
+
+/**
+ * Converte i campi legacy (tol, tol_mode, sigma, probabilistic) nel nuovo formato.
+ * Emette warning per ogni campo deprecato usato.
+ */
+function convertLegacyToleranceToNew(
+  node: Record<string, unknown>,
+  symbolName: string
+): ParsedInputTolerance | undefined {
+  const issues: ValidationIssue[] = [];
+  const hasTol  = node["tol"]      !== undefined;
+  const hasMin  = node["min"]      !== undefined;
+  const hasMax  = node["max"]      !== undefined;
+  const hasProb = isObjectRecord(node["probabilistic"]);
+
+  if (!hasTol && !hasMin && !hasMax && !hasProb) return undefined;
+
+  // Legge il mode dal campo legacy (tol_mode, mode, probabilistic.mode)
+  const rawMode =
+    node["tol_mode"] ??
+    node["mode"]     ??
+    (hasProb ? (node["probabilistic"] as Record<string, unknown>)["mode"] : undefined);
+
+  const rawSigma =
+    node["sigma"] ??
+    (hasProb ? (node["probabilistic"] as Record<string, unknown>)["sigma"] : undefined);
+
+  // Costruisce uncertainty
+  let uncertainty: UncertaintySpec;
+  if (hasTol) {
+    uncertainty = { type: "percent", value: toFiniteNumber(node["tol"]) };
+    issues.push({ severity: "warning", field: "tol",
+      message: `[${symbolName}] Legacy field "tol" – use uncertainty: { type: percent, value: N } instead.` });
+  } else {
+    // min/max espliciti
+    uncertainty = {
+      type: "range",
+      min: toFiniteNumber(node["min"]),
+      max: toFiniteNumber(node["max"]),
+    };
+    issues.push({ severity: "warning", field: "min/max",
+      message: `[${symbolName}] Legacy fields "min"/"max" – use uncertainty: { type: range, min: N, max: N } instead.` });
+  }
+
+  // Costruisce distribution
+  let distribution: DistributionSpec;
+  const mode = typeof rawMode === "string" ? rawMode.toLowerCase() : undefined;
+  if (mode === "gaussian" || mode === "normal") {
+    distribution = {
+      type: "normal",
+      sigma_level: toFiniteNumber(rawSigma) ?? 3,
+    };
+  } else {
+    distribution = { type: "uniform" };
+  }
+
+  if (rawMode !== undefined) {
+    issues.push({ severity: "warning", field: "tol_mode",
+      message: `[${symbolName}] Legacy field "tol_mode"/"mode" – use distribution: { type: ... } on the input and propagation: ... on the output instead.` });
+  }
+
+  return { uncertainty, distribution, issues, isLegacy: true };
+}
+
+// ─── Parser principale della tolleranza ──────────────────────────────────────
+
+/**
+ * Legge la specifica di tolleranza da un nodo YAML.
+ * Gestisce nuovo formato e legacy in modo trasparente.
+ */
+export function parseToleranceSpec(
+  node: Record<string, unknown>,
+  symbolName: string
+): FormulaToleranceSpec | undefined {
+  const issues: ValidationIssue[] = [];
+
+  // ── PROPAGATION (per output / formula) ──
+  const rawProp = node["propagation"];
+  const method  = parsePropagationMethod(rawProp);
+
+  // ── INPUT UNCERTAINTY (per input / const) ── nuovo formato
+  const rawUnc  = node["uncertainty"];
+  const rawDist = node["distribution"];
+
+  const hasNewUncertainty  = isObjectRecord(rawUnc);
+  const hasNewDistribution = isObjectRecord(rawDist);
+
+  // ── Legacy check ──
+  const legacyInput = convertLegacyToleranceToNew(node, symbolName);
+
+  // ── Parameter overrides ──
+  const rawParamTol = node["parameter_tolerances"];
+  const parameterOverrides: Record<string, ParsedInputTolerance> = {};
+  if (isObjectRecord(rawParamTol)) {
+    for (const [paramName, paramRaw] of Object.entries(rawParamTol)) {
+      if (!isObjectRecord(paramRaw)) continue;
+      const paramKey = `${symbolName}.${paramName}`;
+      const pUnc  = parseUncertaintySpec(paramRaw["uncertainty"], paramKey);
+      const pDist = parseDistributionSpec(
+        paramRaw["distribution"] ?? { type: "uniform" },
+        paramKey
+      );
+      if (pUnc) {
+        issues.push(...pUnc.issues);
+        issues.push(...(pDist?.issues ?? []));
+        parameterOverrides[paramName] = {
+          uncertainty:  pUnc.spec,
+          distribution: pDist?.spec ?? { type: "uniform" },
+          issues:       [...pUnc.issues, ...(pDist?.issues ?? [])],
+          isLegacy:     false,
+        };
+      }
+    }
+  }
+
+  // Errore se nuovo e legacy sono mescolati sullo stesso nodo
+  if (hasNewUncertainty && legacyInput) {
+    issues.push({ severity: "error", field: "uncertainty",
+      message: `[${symbolName}] Cannot mix new "uncertainty:" block with legacy "tol"/"min"/"max" fields. Remove the legacy fields.` });
+  }
+
+  const hasAnything = hasNewUncertainty || legacyInput || method !== undefined || Object.keys(parameterOverrides).length > 0;
+  if (!hasAnything) return undefined;
+
+  const result: FormulaToleranceSpec = { issues };
+
+  // Costruisce input spec
+  if (hasNewUncertainty) {
+    const pUnc  = parseUncertaintySpec(rawUnc, symbolName)!;
+    const pDist = parseDistributionSpec(
+      hasNewDistribution ? rawDist : { type: "uniform" },
+      symbolName
+    );
+    if (!hasNewDistribution) {
+      issues.push({ severity: "warning", field: "distribution",
+        message: `[${symbolName}] No "distribution:" block found – defaulting to uniform.` });
+    }
+    issues.push(...pUnc.issues, ...(pDist?.issues ?? []));
+    result.input = {
+      uncertainty:  pUnc.spec,
+      distribution: pDist?.spec ?? { type: "uniform" },
+      issues:       [...pUnc.issues, ...(pDist?.issues ?? [])],
+      isLegacy:     false,
+    };
+  } else if (legacyInput) {
+    issues.push(...legacyInput.issues);
+    result.input = legacyInput;
+  }
+
+  // Costruisce output propagation spec
+  if (method !== undefined) {
+    result.output = {
+      method,
+      confidence: toFiniteNumber(node["confidence"]),
+      samples:    toFiniteNumber(node["samples"]) !== undefined
+                    ? Math.round(toFiniteNumber(node["samples"])!) : undefined,
+      seed:       toFiniteNumber(node["seed"]) !== undefined
+                    ? Math.round(toFiniteNumber(node["seed"])!) : undefined,
+    };
+  }
+
+  if (Object.keys(parameterOverrides).length > 0) {
+    result.parameterOverrides = parameterOverrides;
+  }
+
+  return result;
+}
+
+// ─── Tipi e funzioni pubbliche non cambiate ───────────────────────────────────
 
 export type ParsedFormulaYamlEntry = {
   id: string;
@@ -34,105 +367,36 @@ export type ParsedFormulaYamlEntry = {
   rawNode: Record<string, unknown>;
 };
 
-export type ParsedFormulaYamlDocument = {
-  rawText: string;
-  root: Record<string, unknown>;
-  entries: ParsedFormulaYamlEntry[];
-};
-
 const NUMERIC_WITH_UNIT_RX =
   /^([+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?)\s*([A-Za-z%][A-Za-z0-9_%]*)$/;
 
-function isObjectRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function toFiniteNumber(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    const numeric = Number(trimmed);
-    if (Number.isFinite(numeric)) {
-      return numeric;
-    }
-
-    const withUnit = trimmed.match(NUMERIC_WITH_UNIT_RX);
-    if (withUnit) {
-      return Number(withUnit[1]);
-    }
-  }
-
-  return undefined;
-}
-
-function toNumericArray(value: unknown): number[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-
-  const values: number[] = [];
-  for (const item of value) {
-    const numeric = toFiniteNumber(item);
-    if (numeric === undefined) {
-      return undefined;
-    }
-    values.push(numeric);
-  }
-
-  return values;
-}
-
 export function parseFormulaYamlValue(value: unknown): {
-  value?: number;
-  values?: number[];
-  unitFromValue?: string;
+  value?: number; values?: number[]; unitFromValue?: string;
 } {
   const values = toNumericArray(value);
-  if (values) {
-    return { values };
-  }
-
+  if (values) return { values };
   if (typeof value === "string") {
     const match = value.trim().match(NUMERIC_WITH_UNIT_RX);
-    if (match) {
-      return {
-        value: Number(match[1]),
-        unitFromValue: match[2],
-      };
-    }
+    if (match) return { value: Number(match[1]), unitFromValue: match[2] };
   }
-
-  return {
-    value: toFiniteNumber(value),
-  };
+  return { value: toFiniteNumber(value) };
 }
 
 export function getYamlTopLevelLine(yamlText: string, key: string): number {
   const lines = yamlText.split(/\r?\n/);
   const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const keyRegex = new RegExp(`^\\s*${escapedKey}\\s*:\\s*(#.*)?$`);
-
   return lines.findIndex((line) => keyRegex.test(line));
 }
 
 function getTopLevelKeyLines(lines: string[]): Map<string, number> {
   const result = new Map<string, number>();
-  const keyRx = /^([A-Za-z_][A-Za-z0-9_.-]*)\s*:\s*(?:#.*)?$/;
-
+  const keyRx  = /^([A-Za-z_][A-Za-z0-9_.-]*)\s*:\s*(?:#.*)?$/;
   lines.forEach((line, index) => {
-    if (/^\s/.test(line)) {
-      return;
-    }
-
+    if (/^\s/.test(line)) return;
     const match = line.trim().match(keyRx);
-    if (match) {
-      result.set(match[1], index);
-    }
+    if (match) result.set(match[1], index);
   });
-
   return result;
 }
 
@@ -143,226 +407,39 @@ function getLineEnd(lineStart: number, orderedStarts: number[], lineCount: numbe
 
 function parseExample(node: Record<string, unknown>): Record<string, number> {
   const example: Record<string, number> = {};
-  const rawExample = node.example;
-
-  if (isObjectRecord(rawExample)) {
-    for (const [key, value] of Object.entries(rawExample)) {
-      const numeric = toFiniteNumber(value);
-      if (numeric !== undefined) {
-        example[key] = numeric;
-      }
-    }
-  }
-
   const reserved = new Set([
-    "type",
-    "expr",
-    "formula",
-    "unit",
-    "desc",
-    "description",
-    "value",
-    "values",
-    "steps",
-    "labels",
-    "etichette",
-    "revision",
-    "parameters",
-    "tolerance",
-    "ranges",
-    "min",
-    "max",
-    "tol",
+    "type","expr","formula","unit","desc","description","value","values",
+    "steps","labels","etichette","revision","parameters","tolerance",
+    "ranges","min","max","tol","uncertainty","distribution","propagation",
+    "confidence","samples","seed","parameter_tolerances",
+    "tol_mode","mode","sigma","probabilistic",
   ]);
-
-  for (const [key, value] of Object.entries(node)) {
-    if (reserved.has(key)) {
-      continue;
-    }
-
-    const numeric = toFiniteNumber(value);
-    if (numeric !== undefined) {
-      example[key] = numeric;
+  if (isObjectRecord(node.example)) {
+    for (const [key, value] of Object.entries(node.example)) {
+      const n = toFiniteNumber(value);
+      if (n !== undefined) example[key] = n;
     }
   }
-
+  for (const [key, value] of Object.entries(node)) {
+    if (reserved.has(key)) continue;
+    const n = toFiniteNumber(value);
+    if (n !== undefined) example[key] = n;
+  }
   return example;
 }
 
 function parseParameterNames(raw: unknown): string[] {
   if (typeof raw === "string") {
-    return raw
-      .split(",")
-      .map((part) => part.trim())
-      .filter(Boolean);
+    return raw.split(",").map(p => p.trim()).filter(Boolean);
   }
-
   if (Array.isArray(raw)) {
-    return raw
-      .map((part) => String(part).trim())
-      .filter(Boolean);
+    return raw.map(p => String(p).trim()).filter(Boolean);
   }
-
   if (isObjectRecord(raw)) {
     return Object.keys(raw).filter(Boolean);
   }
-
   return [];
 }
-
-function parseTolMode(raw: unknown): TolMode | undefined {
-  if (raw === "worst_case" || raw === "rss" || raw === "gaussian") {
-    return raw;
-  }
-  return undefined;
-}
-
-function parseRange(raw: unknown): FormulaToleranceRange | undefined {
-  if (!isObjectRecord(raw)) {
-    return undefined;
-  }
-
-  const range: FormulaToleranceRange = {};
-  const min = toFiniteNumber(raw.min);
-  const max = toFiniteNumber(raw.max);
-  const tol = parseTolerancePercent(raw.tol);
-  const mode = parseTolMode(
-    (raw as Record<string, unknown>).mode ?? 
-    (raw as Record<string, unknown>).tol_mode ??
-    (raw as Record<string, unknown>).tolMode
-  );
-  const sigmaRaw = (raw as Record<string, unknown>).sigma;
-  const sigma = typeof sigmaRaw === "number" && Number.isFinite(sigmaRaw) ? sigmaRaw : undefined;
-
-  if (min !== undefined) {
-    range.min = min;
-  }
-  if (max !== undefined) {
-    range.max = max;
-  }
-  if (tol !== undefined) {
-    range.tol = tol;
-  }
-  if (mode !== undefined) {
-    range.mode = mode;
-  }
-  if (sigma !== undefined) {
-    range.sigma = sigma;
-  }
-
-  return (
-    range.min !== undefined ||
-    range.max !== undefined ||
-    range.tol !== undefined ||
-    range.mode !== undefined ||
-    range.sigma !== undefined
-  )
-    ? range
-    : undefined;
-}
-
-
-function parseTolerancePercent(raw: unknown): number | undefined {
-  if (typeof raw === "number" && Number.isFinite(raw)) {
-    return raw;
-  }
-
-  if (typeof raw === "string") {
-    const trimmed = raw.trim().replace(/%$/, "");
-    const value = Number(trimmed);
-    if (Number.isFinite(value)) {
-      return value;
-    }
-  }
-
-  return undefined;
-}
-
-function mergeParameterRanges(
-  target: Record<string, FormulaToleranceRange>,
-  raw: unknown
-): void {
-  if (!isObjectRecord(raw)) {
-    return;
-  }
-
-  for (const [name, value] of Object.entries(raw)) {
-    const range = parseRange(value);
-    if (range) {
-      target[name] = {
-        ...target[name],
-        ...range,
-      };
-    }
-  }
-}
-
-function parseToleranceSpec(node: Record<string, unknown>): FormulaToleranceSpec | undefined {
-  const rootRange: FormulaToleranceRange = {};
-  const parameters: Record<string, FormulaToleranceRange> = {};
-  const explicitTolerance = isObjectRecord(node.tolerance) ? node.tolerance : undefined;
-
-  for (const source of [node, explicitTolerance]) {
-    if (!source) {
-      continue;
-    }
-
-    const min = toFiniteNumber(source.min);
-    const max = toFiniteNumber(source.max);
-    const tol = parseTolerancePercent(source.tol);
-    const mode = parseTolMode(
-      (source as any).mode ?? 
-      (source as any).tol_mode ??
-      (source as any).tolMode
-    );
-
-    const sigmaRaw = (source as Record<string, unknown>).sigma;
-    const sigma = typeof sigmaRaw === "number" && Number.isFinite(sigmaRaw)
-      ? sigmaRaw
-      : undefined;
-
-    if (min !== undefined) {
-      rootRange.min = min;
-    }
-    if (max !== undefined) {
-      rootRange.max = max;
-    }
-    if (tol !== undefined) {
-      rootRange.tol = tol;
-    }
-    if (mode !== undefined) {
-      rootRange.mode = mode;
-    }
-    if (sigma !== undefined) {
-      rootRange.sigma = sigma;
-    }
-  }
-
-  mergeParameterRanges(parameters, node.ranges);
-  mergeParameterRanges(parameters, explicitTolerance?.parameters);
-  mergeParameterRanges(parameters, explicitTolerance?.ranges);
-
-  if (isObjectRecord(node.parameters)) {
-    mergeParameterRanges(parameters, node.parameters);
-  }
-
-  if (
-    rootRange.min === undefined &&
-    rootRange.max === undefined &&
-    rootRange.tol === undefined &&
-    rootRange.mode === undefined &&
-    rootRange.sigma === undefined &&
-    Object.keys(parameters).length === 0
-  ) {
-    return undefined;
-  }
-
-  return {
-    ...rootRange,
-    parameters,
-  };
-}
-
 
 export function normalizeFormulaYamlNode(
   id: string,
@@ -372,58 +449,51 @@ export function normalizeFormulaYamlNode(
 ): ParsedFormulaYamlEntry {
   const rawValue = parseFormulaYamlValue(node.value);
   const expr =
-    (typeof node.expr === "string" ? node.expr : undefined) ??
-    (typeof node.formula === "string" ? node.formula : undefined) ??
-    "";
+    (typeof node.expr    === "string" ? node.expr    : undefined) ??
+    (typeof node.formula === "string" ? node.formula : undefined) ?? "";
   const unit =
     (typeof node.unit === "string" ? node.unit.trim() : undefined) ??
     rawValue.unitFromValue;
   const desc =
-    (typeof node.desc === "string" ? node.desc : undefined) ??
+    (typeof node.desc        === "string" ? node.desc        : undefined) ??
     (typeof node.description === "string" ? node.description : undefined);
   const parameters = parseParameterNames(node.parameters);
-  const lineStart = Math.max(0, getYamlTopLevelLine(yamlText, id));
+  const lineStart  = Math.max(0, getYamlTopLevelLine(yamlText, id));
 
   return {
     id,
     expr,
     desc,
-    example: parseExample(node),
+    example:    parseExample(node),
     unit,
-    value: rawValue.value,
-    values: rawValue.values,
+    value:      rawValue.value,
+    values:     rawValue.values,
     parameters: parameters.length > 0 ? parameters : undefined,
-    tolerance: parseToleranceSpec(node),
+    tolerance:  parseToleranceSpec(node, id),
     lineStart,
-    lineEnd: lineStart,
-    _filePath: filePath,
-    line: lineStart,
-    rawNode: node,
+    lineEnd:    lineStart,
+    _filePath:  filePath,
+    line:       lineStart,
+    rawNode:    node,
   };
 }
 
 export function parseFormulaYamlText(rawText: string, filePath?: string): ParsedFormulaYamlEntry[] {
   const parsedRoot = yaml.load(rawText);
-  if (!isObjectRecord(parsedRoot)) {
-    return [];
-  }
+  if (!isObjectRecord(parsedRoot)) return [];
 
-  const lines = rawText.split(/\r?\n/);
-  const keyLines = getTopLevelKeyLines(lines);
-  const orderedStarts = Array.from(keyLines.values()).sort((left, right) => left - right);
+  const lines        = rawText.split(/\r?\n/);
+  const keyLines     = getTopLevelKeyLines(lines);
+  const orderedStarts = Array.from(keyLines.values()).sort((a, b) => a - b);
   const entries: ParsedFormulaYamlEntry[] = [];
 
   for (const [id, rawNode] of Object.entries(parsedRoot)) {
-    if (!isObjectRecord(rawNode)) {
-      continue;
-    }
-
-    const entry = normalizeFormulaYamlNode(id, rawNode, rawText, filePath);
+    if (!isObjectRecord(rawNode)) continue;
+    const entry     = normalizeFormulaYamlNode(id, rawNode, rawText, filePath);
     const lineStart = keyLines.get(id) ?? entry.lineStart;
     entry.lineStart = lineStart;
-    entry.line = lineStart;
-    entry.lineEnd = getLineEnd(lineStart, orderedStarts, lines.length);
-
+    entry.line      = lineStart;
+    entry.lineEnd   = getLineEnd(lineStart, orderedStarts, lines.length);
     if (entry.expr || entry.value !== undefined || entry.values !== undefined) {
       entries.push(entry);
     }
@@ -439,4 +509,3 @@ export function parseFormulaYamlLines(lines: string[], filePath?: string): Parse
 export function isFormulaYamlFileName(fileName: string): boolean {
   return FORMULA_YAML_FILE_RX.test(fileName);
 }
-
