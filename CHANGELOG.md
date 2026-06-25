@@ -1,14 +1,21 @@
 # Changelog
 
-## [0.3.5] - 06/xx/2026
+## [0.3.5] - 06/25/2026
 
-- Evaluate YAML formulas in examples integration tests (with CSV loading) to validate `formula*.yaml` symbols (e.g. case 14_complex_formulas)
+- Evaluated YAML formulas in integration tests (CSV-driven) to validate `formula*.yaml` symbols (e.g. case_14_complex_formulas)
+- Fixed redundant CodeLens comment for inline calculation assignments
+- Added Monte Carlo recursive sampling engine for end-to-end propagation through formula chains
+- Added support for 16-bin output distribution histograms in the interactive formula viewer
+- Extended OutputDistribution to expose bins16 for accurate histogram rendering
+- Added fallback rendering using CDF interpolation and synthetic sampling when histogram bins are unavailable
+- Updated propagation semantics: mode selection now reports bounds separately from the sampling algorithm
 
 ### Upcoming Features:
 
 - Visual dependency graph
 - Fixed-point Analyzer (Q15/Q31)
-- Tolerance model rss and gaussian
+- Improve webview for tolerance model propagation
+- Interactive WebView-based formula builder to guide non-technical users without requiring raw text editing
 - Table formula support
 
 ## [0.3.4] - 06/09/2026

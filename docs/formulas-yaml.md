@@ -1,165 +1,324 @@
 # Formula YAML Files Guide
 
-`formulas*.yaml` files are the core of CalcDocs' synchronization between firmware specifications (YAML) and C/C++ code. They define named formulas with values, expressions, CSV lookups, and units, which are evaluated in real-time and bridged to your C projects.
+`formulas*.yaml` files are the core of CalcDocs' synchronization between
+firmware specifications and C/C++ code. They define named formulas with values,
+expressions, CSV lookups, units, and — crucially — **tolerance specifications**
+that drive the Monte Carlo uncertainty propagation shown in the Interactive
+Formula Viewer.
 
-## Purpose
+Place `formulas.yaml` (or `formulas-*.yaml`) anywhere in the workspace;
+CalcDocs discovers it automatically.
 
-- **Source of truth** for computed constants/macros used in firmware.
-- **Live synchronization**: Values shown inline in `.c` files via hovers/CodeLens/ghosts without editing C code.
-- **Header export**: Generate `macro_generate.h`-style files with `#define`s for compile-time integration.
+---
 
-Place `formulas.yaml` (or `formulas-*.yaml`) anywhere in workspace; auto-discovered.
+## File structure
 
-## File Structure
+The YAML root is a map where **keys** are symbol IDs and **values** are objects:
 
-YAML root object where **keys** = formula IDs (e.g., `power`), **values** = objects:
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | `const` \| `expr` \| `lookup` | No | Inferred if omitted |
+| `value` | number \| number[] | For `const` | Nominal value or array |
+| `formula` / `expr` | string | For `expr` | Expression. Supports math, `csv()`, other symbol references |
+| `unit` | string | No | Physical unit for display and dimension checks |
+| `parameters` | string[] | No | Makes the formula callable: `F(a, b)` |
+| `steps` | string[] | No | Documentation steps shown in the viewer |
+| `labels` | string[] | No | Tags: `complex_expression`, `table_lookup` |
+| `revision` | string | No | Version string |
+| `uncertainty` | object | No | Level 1: input variation band — see below |
+| `distribution` | object | No | Level 2: shape of input distribution — see below |
+| `propagation` | string | No | Level 3: bound-selection rule on output formulas — see below |
+| `parameter_tolerances` | object | No | Per-dependency tolerance overrides |
+| `confidence` | number | No | Confidence level for `monte_carlo` (default 95) |
+| `samples` | number | No | Sample count (default 10 000) |
+| `seed` | number | No | Fixed PRNG seed for reproducible bounds |
 
-| Field      | Type      | Required? | Example                          | Notes |
-|------------|-----------|-----------|----------------------------------|-------|
-| `value`    | number    | No        | `24`                             | Static fallback constant. Used in header gen if no formula. |
-| `formula`  | string    | No        | `vin * current` or `csv(...)`   | Expression. Supports deps on other keys, math funcs (sin/cos/etc.), `csv()`. |
-| `unit`     | string    | No        | `V`, `W`, `degc`                 | For display/validation/conversion. |
-| `steps`    | string[]  | No        | `['Step1', 'Step2']`             | Explain traces in UI. |
-| `labels`   | string[]  | No        | `['table_lookup']`               | Tags: `complex_expression`, `table_lookup`. |
-| `revision` | string    | No        | `v1.0`                           | Versioning. |
-| `parameters` | string[] / object | No | `[x, offset]` | Makes the formula callable as `FORMULA(arg1, arg2)` with exact arity. |
-| `min` / `max` | number | No | `min: 22` | Absolute variation range for constants or final formula result. |
-| `tol` | number / percent string | No | `tol: 5` or `tol: 5%` | Percent tolerance around the nominal value. |
-| `ranges` | object | No | `ranges: { vin: { min: 22, max: 26 } }` | Per-dependency range overrides for final tolerance propagation. |
+---
 
-### Full Example (from `examples/cases/14_complex_formulas/formulas.yaml`)
+## The three-level tolerance model
 
-```yaml
-ARR:
-  value: [10, -3, 7, 2]
-  tolerance: 5
-MYFN:
-  formula: abs(int(a)) + mod(b, 5)
-  parameters: [a, b]
-OUT_INT_ABS_MOD:
-  formula: MYFN(ARR[1], ARR[3])
-  unit: count
+Uncertainty specification is split across three independent levels that must
+not be mixed on the same field:
+
+```
+Level 1  uncertainty   →  how wide is the input variation band
+Level 2  distribution  →  how the value is distributed inside that band
+Level 3  propagation   →  which bound is reported on the output formula
 ```
 
-## Expressions & Features
+`propagation` belongs on **output formulas** (`type: expr`), never on input
+constants. All three methods use the same real Monte Carlo simulation; they
+differ only in which bound they report.
 
-**Supported Math Functions** (case-insensitive):
-
-| Category | Functions/Constants |
-|----------|---------------------|
-| Trig     | sin, cos, tan, asin, acos, atan, atan2 |
-| Math     | sqrt, abs/ass, int, mod, min, max, pow/power, floor, ceil, round, trunc, log, log10, log2, exp, hypot |
-| Const    | pi, e, deg2rad, rad2deg |
-| Lookup   | csv, table, lookup |
-| Types    | uint8_t, uint16_t, uint32_t, int8_t, int16_t, int32_t, float, double, bool |
-
-**Supported Units** (case-insensitive, for `unit` field/display):
-
-| Physical quantity | Unit of measurement           |
-|-------------------|-------------------------------|
-| Electrical        | mA, A, mV, V, ohm, kohm, mohm |
-| Time              | ms, us, s                     |
-| Length            | m, km                         |
-| Mass              | g, kg                         |
-| Temp              | deg, c, f, k                  |
-| Pressure          | bar, pa, hpa                  |
-| Concentration     | ppm, ppb                      |
-
-- **Dependencies**: `power: vin * current` auto-resolves other keys → `48`.
-**CSV Lookups**: `csv("table.csv", row_key, out_col, [in_col, [mode]])`
-  - **Args**: table (str), row_key (exact/index/num for interp), out_col (name/index), in_col? (name/index for lookup col, default 0), mode? ("none"/"linear"/"nearest", default "none").
-  - Cols: name or 0-index.
-  - **Modes**:
-    | Mode    | Description |
-    |---------|-------------|
-    | `none`/`exact` | Exact row match (default). |
-    | `linear`/`lerp` | Linear interp between nearest rows. |
-    | `nearest`/`closest` | Nearest row value. |
-  - e.g., `csv("ntc_10k.csv","25","res_ohm")` (exact), `csv("ntc.csv","24.9","r","temp","linear")` → interp @24.9°C.
-- **Units**: Validation/conversion (e.g., `2 A * 24 V = 48 W`).
-
-### Tables, Parameters, and Tolerances
+### Level 1 — `uncertainty`
 
 ```yaml
-gain:
-  parameters: [x, offset]
-  formula: x * 2 + offset
+uncertainty:
+  type: percent     # ±N% of the nominal value
+  value: 5
+```
 
-calibration:
-  value: [1, 2, 3.2]
+| `type` | Required fields | Effect |
+|--------|----------------|--------|
+| `percent` | `value` | halfWidth = abs(nominal) × value/100 |
+| `range` | `min`, `max` | halfWidth = (max−min)/2 |
+| `absolute` | `absolute` | halfWidth = absolute |
+| `sigma` | `sigma` | halfWidth = 3×sigma (3σ band) |
 
-selected_gain:
-  formula: gain(calibration[2], 1)
+### Level 2 — `distribution`
 
-vin:
+```yaml
+distribution:
+  type: normal
+  sigma_level: 3    # σ = halfWidth / sigma_level
+```
+
+| `type` | Optional field | σ used by engine |
+|--------|---------------|-----------------|
+| `uniform` | — | halfWidth / √3 |
+| `normal` | `sigma_level` (default 3) | halfWidth / sigma_level |
+| `triangular` | — | halfWidth / √6 |
+
+If `distribution:` is omitted, the engine defaults to `uniform` and emits a
+`WARN` diagnostic.
+
+### Level 3 — `propagation` (on output formulas only)
+
+```yaml
+propagation: worst_case   # or: rss | monte_carlo
+```
+
+| Value | Reported min/max | Coverage |
+|-------|-----------------|---------|
+| `worst_case` | absolute min/max of all MC samples | 100% |
+| `rss` | mean ± 3σ of the output samples | ~99.7% if output ≈ normal |
+| `monte_carlo` | confidence percentiles (default 95%) | configurable |
+
+All three produce **the same underlying histogram** in the Distribution tab.
+The choice of `propagation` only affects the bound markers shown on the chart.
+
+---
+
+## Minimal working example
+
+```yaml
+# Input with declared uncertainty
+VIN:
+  type: const
   value: 24
   unit: V
-  tol: 5
+  uncertainty:
+    type: percent
+    value: 5           # ±5% → samples in [22.8, 25.2]
+  distribution:
+    type: uniform
 
-current:
+CURRENT:
+  type: const
   value: 2
   unit: A
-  min: 1.8
-  max: 2.2
+  uncertainty:
+    type: absolute
+    absolute: 0.1      # ±100 mA
+  distribution:
+    type: normal
+    sigma_level: 3     # σ = 0.1/3 ≈ 33 mA
 
-power:
-  formula: vin * current
+# Output formula with propagation
+POWER:
+  type: expr
+  formula: VIN * CURRENT
   unit: W
+  propagation: worst_case
+  # Distribution tab: shows real MC histogram of power distribution
+  # Reported bounds: absolute min/max of 10 000 simulated samples
 ```
 
-`value` arrays are zero-indexed (`calibration[2]` returns `3.2`). Formula calls must pass exactly the parameters declared in `parameters`.
+---
 
-### Tolerance propagation model (`tol`, `min`/`max`, `ranges`)
+## Full feature reference
 
-CalcDocs can propagate **uncertainty** through your formula dependency graph.
+### Expressions
 
-When a YAML symbol defines a tolerance (`tol` percentage and/or `min`/`max`), CalcDocs computes a numeric `range` (min/max) for that symbol.
+```yaml
+POWER:
+  formula: VIN * CURRENT
+  unit: W
 
-If the symbol is used inside other formulas, the tolerance is propagated along the formula dependency tree.
+EFFICIENCY:
+  formula: POWER / 72          # dimensionless ratio
 
-**Main rule (worst-case propagation):**
-- if a final formula does not declare a tolerance directly, its interval is estimated by combining the extremes (min/max) of its dependencies;
-- for non-linear operators (e.g. divisions, multiplications, functions), the estimate uses the **worst-case** approach: it tries all admissible min/max combinations among the dependencies (bounded by a complexity limit) and then takes:
-  - `min` = the minimum value among all evaluations,
-  - `max` = the maximum value among all evaluations.
+FREQ_KHZ:
+  formula: 1 / (2 * pi * R * C)
+  unit: Hz
 
-**Per-dependency overrides:**
-- `ranges:` lets you restrict (or redefine) the interval of specific dependencies used by the formula (e.g. `ranges: { R1: { tol: 1 } }`).
-- `tolerance.parameters:` lets you assign tolerances to the parameters of a parameterized formula (e.g. `DIVIDER` with `parameters: [V, R1, R2]`).
+LOOKUP_R:
+  formula: csv("ntc_10k.csv", "25", "temperature", "resistance")
+  unit: ohm
+```
 
-This is the same logic used by the test case `examples/cases/15_tolerance_propagation` (propagation through component chains and final min/max results).
+**Supported math** (case-insensitive): `sin cos tan asin acos atan atan2 sqrt
+abs int mod min max pow floor ceil round trunc log log10 log2 exp hypot pi e
+deg2rad rad2deg`
 
-For a UI-focused guide and usage tips, see:
-- [Tolerance propagation & formula ranges](tolerance-and-ranges.md)
+**CSV lookups**: `csv(table, key, out_col [, in_col [, mode]])`
+Modes: `none` (exact), `linear` (interpolate), `nearest`
 
-## Effect on `.c` Files
+### Arrays
 
-- **No direct changes**: C code untouched.
-- **Live Views**:
-  - Hover `#define POWER_MW ...` → shows YAML-resolved `48 // [W]`.
-  - CodeLens: `// CalcDocs: POWER = 48W`
-  - Ghosts: `POWER_MW  ← 48W` inline.
-- **Sync**: YAML changes → instant C previews. Mismatch diagnostics if C redefines.
+```yaml
+RES_ARRAY:
+  value: [100, 220, 330, 470]
+  unit: ohm
+  # Elements accessed as RES_ARRAY[0], RES_ARRAY[1], ...
 
-## Header Generation (`macro_generate.h`)
+ARRAY_SUM:
+  formula: RES_ARRAY[0] + RES_ARRAY[1] + RES_ARRAY[2]
+  unit: ohm
+```
 
-1. Run command **CalcDocs: Generate Formula Header** (Cmd+Shift+P).
-2. Specify path (e.g., `inc/macro_generate.h`).
-3. Output example:
+### Parameterized formulas
+
+```yaml
+DIVIDER:
+  formula: V * R2 / (R1 + R2)
+  parameters: [V, R1, R2]
+
+VOUT:
+  formula: DIVIDER(VIN, 1000, 2000)
+  unit: V
+```
+
+### Per-dependency tolerance overrides
+
+Use `parameter_tolerances:` to assign or override the tolerance of a specific
+dependency for this formula's propagation, without changing the dependency's
+own declaration:
+
+```yaml
+BASE_R:
+  type: const
+  value: 1000
+  unit: ohm
+  # no uncertainty declared here
+
+BRIDGE:
+  type: expr
+  formula: VIN * BASE_R / (BASE_R + 2000)
+  unit: V
+  propagation: monte_carlo
+  confidence: 95
+  parameter_tolerances:
+    BASE_R:
+      uncertainty:
+        type: percent
+        value: 1          # 1% tolerance injected only for this formula
+      distribution:
+        type: normal
+        sigma_level: 3
+```
+
+### Monte Carlo options
+
+```yaml
+RESULT_MC:
+  type: expr
+  formula: VIN * CURRENT
+  unit: W
+  propagation: monte_carlo
+  confidence: 95     # optional, default 95 → p2.5 / p97.5
+  samples: 10000     # optional, default 10 000
+  seed: 42           # optional: fixed seed for reproducible output
+```
+
+---
+
+## What triggers the Distribution tab
+
+The Distribution tab in the Interactive Formula Viewer shows an empirical
+histogram only when **both** conditions are met:
+
+1. At least one input in the formula's dependency chain has `uncertainty:` +
+   `distribution:` (or `parameter_tolerances:` covering a dependency).
+2. The formula itself has `propagation:` declared.
+
+The histogram is pre-computed by the engine from real Monte Carlo samples and
+sent as `histogram.counts[]` (32 bins). The webview renders it directly —
+no reconstruction, no approximation.
+
+**Does NOT trigger the Distribution tab:**
+- Formulas with no `propagation:` (even if inputs have `uncertainty:`)
+- Constants with only top-level `min:`/`max:` (old style, no `uncertainty:` block)
+- Parameterized formulas called with literal arguments and no overrides
+
+---
+
+## Effect on C/C++ files
+
+YAML changes are reflected immediately in the editor:
+
+- **Hover** `#define POWER_W ...` → shows `48.0 // [W] ±5.2%`
+- **CodeLens** → `// CalcDocs: POWER = 48.0 W  [45.6, 50.4]`
+- **Ghost values** → inline `← 48.0 W` annotations
+
+Value mismatches between YAML and C `#define` values produce diagnostic
+warnings in the Problems panel.
+
+---
+
+## Legacy compatibility
+
+The old `tol`, `tol_mode`, `sigma`, `min`/`max`, and `ranges:` fields are
+still accepted. They are converted internally to the three-level model and emit
+`WARN` diagnostics:
+
+```yaml
+# Legacy (accepted with warnings):
+R1:
+  value: 100
+  tol: 5              # WARN → uncertainty: {type: percent, value: 5}
+  tol_mode: gaussian  # WARN → distribution: {type: normal}
+  sigma: 2            # WARN → distribution: {sigma_level: 2}
+```
+
+```yaml
+# Modern equivalent (no warnings):
+R1:
+  type: const
+  value: 100
+  uncertainty:
+    type: percent
+    value: 5
+  distribution:
+    type: normal
+    sigma_level: 2
+```
+
+See `docs/MIGRATION_GUIDE.md` for a complete conversion table.
+
+---
+
+## Header generation
+
+Run **CalcDocs: Generate Formula Header** (⇧⌘P) to produce a `.h` file:
 
 ```c
-// Auto-generated by CalcDocs Formula Outline
+// Auto-generated by CalcDocs
 #pragma once
 
-// Constant: vin [V]
-#define VIN           (24)  // [V]
+// Constant: VIN [V]
+#define VIN   (24)      // [V]
 
-// Formula: power = vin * current
-#define POWER         (48)  // [W]
-
-// CSV lookup precomputed
-#define NTC_R_25      (10000)  // [ohm]
+// Formula: POWER = VIN * CURRENT
+#define POWER (48)      // [W]
 ```
 
-- **Integrate**: `#include "macro_generate.h"` in `.c` for compile-time macros.
-- Handles expansion (uses C symbols), params for unresolved, units as comments.
+---
+
+## See also
+
+- `docs/tolerance-and-ranges.md` — tolerance propagation guide with examples
+- `docs/TOLERANCE_ARCHITECTURE.md` — engine internals and data flow
+- `docs/MIGRATION_GUIDE.md` — converting legacy tolerance fields
+- `examples/formulas_model_modes_expected.yaml` — all propagation modes
+- `examples/formulas_distribution_edge_cases.yaml` — edge cases and improper use

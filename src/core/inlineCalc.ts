@@ -164,7 +164,7 @@ function scaleDimensions(value: DimensionVector, exponent: number): DimensionVec
  */
 export function isTrivialAssignExpression(expression: string): boolean {
   const trimmed = expression.trim();
-  return /^-?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?(?:\s+[A-Za-z%][A-Za-z0-9_%/^*.\-]*)?$/.test(trimmed);
+  return /^-?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?(?:\s*[A-Za-z%][A-Za-z0-9_%/^*.\-]*)?$/.test(trimmed);
 }
 
 export function dimensionsEqual(left: DimensionVector, right: DimensionVector): boolean {

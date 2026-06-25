@@ -1,6 +1,8 @@
 # Inline Calculations
 
-Inline calculations run directly from comments in C/C++ (and YAML comments).
+Inline calculations run directly from comments in C/C++ source files (*.c, *.h, *.cpp, *.hpp).
+
+> **Note:** Inline calculations (`=calc` / `@assign` syntax) are only supported in C/C++ files. YAML files use a separate formula system via `formula*.yaml` files — see [Formulas in YAML](formulas-yaml.md).
 
 ## Syntax
 

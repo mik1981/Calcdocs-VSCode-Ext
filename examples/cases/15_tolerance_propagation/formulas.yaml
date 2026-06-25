@@ -1,173 +1,336 @@
 # ============================================================================
 # Case 15: Tolerance Propagation in Component Chains
 # ============================================================================
-# This case validates tolerance range computation and propagation across chains.
-# It exercises:
-# - tol% on constants and arrays
-# - explicit min/max bounds
-# - overriding dependency ranges using `ranges:`
-# - parameter tolerance for parametrized formulas
-# - tol propagation through intermediate derived values
-# - edge behavior (e.g., zero tol)
+# This case validates tolerance range computation and propagation across chains
+# using the three-level model (uncertainty / distribution / propagation).
 #
-# Each scenario below is separated and annotated to explain what feature it targets.
-
-# Scenarios overview (original description retained for context):
-# This case demonstrates how CalcDocs propagates component tolerances (tol,
-
-# min, max) through formula chains, computing the resulting range on the
-# final computed value.
+# ALL scenarios use real Monte Carlo sampling (N=10 000).
+# "propagation:" on an output formula selects the bound-reporting rule only:
+#   worst_case  → absolute min/max of samples
+#   rss         → mean ± 3σ of output samples
+#   monte_carlo → confidence percentiles (default 95%)
 #
-# Scenarios covered:
-#   1. tol% on a single constant, propagated to a formula using it
-#   2. Multiple constants with tol, combined (worst-case propagation)
-#   3. Explicit min/max bounds on a constant
-#   4. ranges override: overriding dependency tolerance in parent formula
-#   5. Parameterized formula with parameter tolerance
-#   6. Array with tol on each element
-#   7. Mixed: tol + min/max in the same chain
-#   8. Deep chain: tol propagates through intermediate derived values
-#   9. Edge: zero tol (exact values)
+# Migrated from legacy (tol/tol_mode/sigma/ranges) to the explicit format.
 # ============================================================================
 
-# --- Scenario 1: Simple tol% on a resistor ---
-# A resistor of 100 ohm with 5% tolerance → range [95, 105]
-# When used in a formula I = V / R, the range propagates
+# ── Scenario 1: Simple percent tolerance on a resistor ──────────────────────
+# R1 = 100 Ω ±5% → samples uniformly from [95, 105]
+# I = V/R: output distribution depends non-linearly on R
+# For V=5 V, R=100 Ω: I_nominal = 50 mA
+# worst_case: I(V=5, R=95)=52.6 mA, I(V=5, R=105)=47.6 mA → [47.6, 52.6] mA
 SUPPLY_V:
+  type: const
   value: 5
   unit: V
+
 R1:
+  type: const
   value: 100
   unit: ohm
-  tol: 5
+  uncertainty:
+    type: percent
+    value: 5
+  distribution:
+    type: uniform
+
 I_R1:
+  type: expr
   formula: SUPPLY_V / R1
   unit: A
+  propagation: worst_case
+  # Distribution tab: slightly right-skewed (1/R is non-linear)
+  expected:
+    value_approx: 0.050
+    min_approx: 0.0476
+    max_approx: 0.0526
 
-# --- Scenario 2: Multiple tolerance sources combined ---
-# R2 = 220 ohm ±10%, R3 = 330 ohm ±5%
-# Total series resistance R_series = R2 + R3 → worst-case: min= (198+313.5)=511.5, max= (242+346.5)=588.5
+
+# ── Scenario 2: Multiple tolerance sources combined ──────────────────────────
+# R2 = 220 Ω ±10% uniform, R3 = 330 Ω ±5% normal (σ_level=2)
+# R_SERIES = R2 + R3, nominal = 550 Ω
+# worst_case: hw(R2)=22, hw(R3)=16.5 → Δ=38.5 → [511.5, 588.5]
 R2:
+  type: const
   value: 220
   unit: ohm
-  tol: 10
+  uncertainty:
+    type: percent
+    value: 10
+  distribution:
+    type: uniform
+
 R3:
+  type: const
   value: 330
   unit: ohm
-  tol: 5
+  uncertainty:
+    type: percent
+    value: 5
+  distribution:
+    type: normal
+    sigma_level: 2
+
 R_SERIES:
+  type: expr
   formula: R2 + R3
   unit: ohm
-  ranges:
-    R2:
-      tol: 10
-      tol_mode: rss
-      sigma: 3
-    R3:
-      tol: 5
-      tol_mode: gaussian
-      sigma: 2
+  propagation: worst_case
+  # Distribution tab: approximately normal (sum of uniform+normal → near-Gaussian by CLT)
+  expected:
+    value: 550
+    min: 511.5
+    max: 588.5
 
 
-# --- Scenario 3: Explicit min/max bounds (no tol%, just absolute range) ---
-# A current source with explicit bounds
+# ── Scenario 3: Explicit absolute range (no percent) ────────────────────────
+# Current source with datasheet-specified min/max bounds
 CURRENT_SOURCE_A:
-  value: 0.5
+  type: const
+  value: 0.500
   unit: A
-  min: 0.48
-  max: 0.52
+  uncertainty:
+    type: range
+    min: 0.480
+    max: 0.520
+  distribution:
+    type: uniform
+
 POWER_SOURCE_W:
+  type: expr
   formula: SUPPLY_V * CURRENT_SOURCE_A
   unit: W
+  propagation: worst_case
+  # SUPPLY_V has no uncertainty → only CURRENT_SOURCE_A contributes
+  # P_nominal = 5 × 0.5 = 2.5 W, range = [5×0.48, 5×0.52] = [2.4, 2.6]
+  expected:
+    value: 2.5
+    min: 2.4
+    max: 2.6
 
-# --- Scenario 4: ranges override - override tolerance of a dependency ---
-# R1 normally has 5% tol, but in this divider circuit we use a tighter range
+
+# ── Scenario 4: parameter_tolerances override ────────────────────────────────
+# Override tolerance of specific dependencies for this formula's propagation.
+# R1 normally ±5%; in this divider path we use ±1% (tighter spec).
+# R3 specified with absolute range for this path.
 V_DIVIDER_RAW:
+  type: expr
   formula: SUPPLY_V * R3 / (R1 + R3)
   unit: V
-  ranges:
+  propagation: worst_case
+  parameter_tolerances:
     R1:
-      tol: 1
+      uncertainty:
+        type: percent
+        value: 1             # tighter than R1's own ±5%
+      distribution:
+        type: uniform
     R3:
-      min: 320
-      max: 340
+      uncertainty:
+        type: range
+        min: 320
+        max: 340
+      distribution:
+        type: uniform
+  # V_nominal = 5 × 330/(100+330) = 3.837 V
+  # Distribution tab: non-linear function of two varied inputs
 
-# --- Scenario 5: Parameterized formula with parameter tolerance ---
-# A generic voltage divider function
+
+# ── Scenario 5: Parameterized formula with named tolerance-bearing inputs ────
+# The generic DIVIDER formula is called with named symbols that carry
+# their own tolerance declarations.
 DIVIDER:
-  formula: V * R2 / (R1 + R2)
-  parameters: [V, R1, R2]
-  tolerance:
-    parameters:
-      V:
-        tol: 2
-      R1:
-        tol: 1
-      R2:
-        tol: 5
-DIVIDER_OUT:
-  formula: DIVIDER(SUPPLY_V, 1000, 2000)
-  unit: V
+  formula: V * R2_P / (R1_P + R2_P)
+  parameters: [V, R1_P, R2_P]
 
-# --- Scenario 6: Array with tol ---
-# An array of resistor values with tolerance
+DIV_V:
+  type: const
+  value: 5
+  unit: V
+  uncertainty: { type: percent, value: 2 }
+  distribution: { type: uniform }
+
+DIV_R1:
+  type: const
+  value: 1000
+  unit: ohm
+  uncertainty: { type: percent, value: 1 }
+  distribution: { type: normal, sigma_level: 3 }
+
+DIV_R2:
+  type: const
+  value: 2000
+  unit: ohm
+  uncertainty: { type: percent, value: 5 }
+  distribution: { type: uniform }
+
+DIVIDER_OUT:
+  type: expr
+  formula: DIVIDER(DIV_V, DIV_R1, DIV_R2)
+  unit: V
+  propagation: monte_carlo
+  confidence: 95
+  seed: 42
+  # V_nominal = 5 × 2000/(1000+2000) = 3.333 V
+  # Distribution tab: non-linear combination; MC shows true confidence interval
+
+
+# ── Scenario 6: Array with uniform tolerance ─────────────────────────────────
+# Array of resistor values with ±5% tolerance on each element.
+# Note: array tolerance applies a scale factor to each element's samples.
 RES_ARRAY:
+  type: const
   value: [100, 220, 330, 470]
   unit: ohm
-  tol: 5
-# Use individual elements
+  uncertainty:
+    type: percent
+    value: 5
+  distribution:
+    type: uniform
+
 ARRAY_SUM:
+  type: expr
   formula: RES_ARRAY[0] + RES_ARRAY[1] + RES_ARRAY[2]
   unit: ohm
+  propagation: worst_case
+  # nominal = 100+220+330 = 650 Ω
+  # hw_i = element_i × 0.05;  Δ_wc = 5+11+16.5 = 32.5 → [617.5, 682.5]
+  expected:
+    value: 650
+    min_approx: 617.5
+    max_approx: 682.5
 
-# --- Scenario 7: Mixed tol + min/max in the same chain ---
-# Voltage reference with both explicit min/max and dependent formula
+
+# ── Scenario 7: Mixed absolute + percent in the same chain ───────────────────
 VREF:
-  value: 2.5
+  type: const
+  value: 2.500
   unit: V
-  min: 2.48
-  max: 2.52
+  uncertainty:
+    type: range
+    min: 2.480
+    max: 2.520
+  distribution:
+    type: uniform
+
 DIVIDER_RATIO:
-  value: 0.4
-  tol: 2
+  type: const
+  value: 0.400
+  uncertainty:
+    type: percent
+    value: 2
+  distribution:
+    type: uniform
+
 VOUT_REF:
+  type: expr
   formula: VREF * DIVIDER_RATIO
   unit: V
+  propagation: worst_case
+  # V_nominal = 2.5 × 0.4 = 1.0 V
+  # VREF: hw=0.02 V → sensitivity=0.4 → contribution=0.008 V
+  # RATIO: hw=0.008 → sensitivity=2.5 → contribution=0.020 V
+  # Δ_wc = 0.008 + 0.020 = 0.028 V → [0.972, 1.028]
+  expected:
+    value: 1.0
+    min_approx: 0.972
+    max_approx: 1.028
 
-# --- Scenario 8: Deep chain - tol propagates through intermediate derived values ---
-# Stage 1: raw measurement
+
+# ── Scenario 8: Deep chain — tol propagates through intermediate formulas ────
+# Each intermediate formula must have propagation: declared to pass its
+# sample population to the next level. Without propagation: on an intermediate
+# formula, the chain breaks and that stage appears as a fixed scalar.
 RAW_ADC:
+  type: const
   value: 2048
   unit: count
-  tol: 0.5
-# Stage 2: voltage from ADC (V = count * 3.3 / 4095)
+  uncertainty:
+    type: percent
+    value: 0.5
+  distribution:
+    type: uniform
+
 ADC_VOLTAGE:
+  type: expr
   formula: RAW_ADC * 3.3 / 4095
   unit: V
-# Stage 3: amplified that add 1% of tolorance
-K_10_1P: {value: 10, tol: 1}
+  propagation: worst_case   # ← REQUIRED to propagate samples to next stage
+  # V_nominal = 2048 × 3.3/4095 ≈ 1.650 V
+  # hw_adc = 2048×0.005 = 10.24 counts → hw_V = 10.24×3.3/4095 ≈ 0.00825 V
+
+K_GAIN:
+  type: const
+  value: 10
+  uncertainty:
+    type: percent
+    value: 1
+  distribution:
+    type: normal
+    sigma_level: 3
+
 AMPLIFIED_V:
-  formula: ADC_VOLTAGE * K_10_1P
+  type: expr
+  formula: ADC_VOLTAGE * K_GAIN
   unit: V
-# Stage 4: final conversion (current sense, 0.1 ohm shunt)
+  propagation: worst_case   # ← REQUIRED; without this, SENSED_CURRENT sees fixed 16.5 V
+  # V_nominal ≈ 1.650 × 10 = 16.50 V
+
 SENSED_CURRENT:
+  type: expr
   formula: AMPLIFIED_V / 0.1
   unit: A
+  propagation: worst_case
+  # I_nominal = 16.50 / 0.1 = 165.0 A (illustrative scale)
+  # Distribution tab: shows combined uncertainty from ADC + gain
 
-# --- Scenario 9: Zero tol (exact values, no range) ---
+
+# ── Scenario 9: Zero tolerance — exact value, no distribution ────────────────
+# A constant with zero tolerance produces a single-spike histogram.
 EXACT_COEFF:
-  value: 1.23
+  type: const
+  value: 1.230
+  uncertainty:
+    type: percent
+    value: 0              # zero tolerance → all samples = 1.230
+  distribution:
+    type: uniform
+
 EXACT_RESULT:
+  type: expr
   formula: EXACT_COEFF * SUPPLY_V
   unit: V
+  propagation: worst_case
+  # Range: [1.230×5, 1.230×5] = [6.15, 6.15]
+  # Distribution tab: single spike at 6.15
+  # Note: SUPPLY_V has no uncertainty → only EXACT_COEFF contributes (nothing)
+  expected:
+    value: 6.15
+    min: 6.15
+    max: 6.15
 
-# --- Scenario 10: tol on a formula output (re-declared tolerance) ---
-# A measured value with its own declared tolerance independent of dependencies
+
+# ── Scenario 10: Re-declared tolerance on a formula output ──────────────────
+# A measured value with its own declared input tolerance.
+# The formula computes a transformed output; the input has own uncertainty.
 MEASURED_TEMP:
+  type: const
   value: 25.0
   unit: degc
-  tol: 2
+  uncertainty:
+    type: absolute
+    absolute: 2.0           # ±2°C absolute measurement accuracy
+  distribution:
+    type: uniform
+
 COMPENSATED_OUTPUT:
+  type: expr
   formula: MEASURED_TEMP * 1.05 + 0.5
   unit: degc
-  tol: 3
+  propagation: worst_case
+  # T_nominal = 25.0×1.05+0.5 = 26.75°C
+  # sensitivity = 1.05;  hw_in=2.0 → hw_out = 1.05×2.0 = 2.1°C
+  # bounds = [24.65, 28.85]
+  expected:
+    value: 26.75
+    min: 24.65
+    max: 28.85

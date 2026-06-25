@@ -162,8 +162,19 @@ export interface OutputDistribution {
   skewness: number;
   kurtosis: number;
 
-  /** 16 normalised (0‥1) histogram bin heights computed from the real MC samples. */
-  bins16?: number[];
+  /**
+   * Pre-computed histogram derived directly from the Monte Carlo samples.
+   * `counts[i]` = number of samples in bin i.
+   * Bin i spans [lo + i*(hi-lo)/bins, lo + (i+1)*(hi-lo)/bins).
+   * `lo` and `hi` are the actual sample min/max (= dist.min / dist.max).
+   * The webview renders this directly — no CDF reconstruction, no synthetic
+   * samples, no theoretical approximation.
+   */
+  histogram: {
+    counts: number[];   // length = BINS (fixed 32)
+    lo: number;         // = dist.min
+    hi: number;         // = dist.max
+  };
 }
 
 /**

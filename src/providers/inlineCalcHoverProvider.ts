@@ -60,9 +60,6 @@ export function registerInlineCalcHoverProvider(
     { language: "cpp", scheme: "file" },
     { language: "c", scheme: "untitled" },
     { language: "cpp", scheme: "untitled" },
-    { language: "plaintext", scheme: "file" },
-    { language: "yaml", scheme: "file" },
-    { language: "yaml", scheme: "untitled" },
   ];
 
   context.subscriptions.push(

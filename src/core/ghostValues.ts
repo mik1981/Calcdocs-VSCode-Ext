@@ -6,7 +6,7 @@ import { CalcDocsState } from "./state";
 import { evaluateInlineCalcs, isTrivialAssignExpression } from "./inlineCalc";
 
 // Languages that receive inline-calc ghost decorations (=calc / @assign).
-const INLINE_CALC_GHOST_LANGUAGES = new Set(["c", "cpp", "plaintext", "yaml"]);
+const INLINE_CALC_GHOST_LANGUAGES = new Set(["c", "cpp"]);
 
 // Languages for which C/C++ symbol resolution (collectCppCodeLensItems) is run.
 // Extended from just "c" so that .h files identified as "cpp" by VSCode also
@@ -84,8 +84,8 @@ export class GhostValueProvider {
 
     // Guard: ghost is only available for supported languages.
     // CPP_SYMBOL_GHOST_LANGUAGES covers "c" and "cpp" (the latter includes .h
-    // files identified as cpp).  INLINE_CALC_GHOST_LANGUAGES is a superset that
-    // also includes plaintext and yaml, handled in the inline-calc block below.
+    // files identified as cpp).  INLINE_CALC_GHOST_LANGUAGES covers the same set
+    // for inline-calc ghost annotations.
     const hasCppSymbolGhost = CPP_SYMBOL_GHOST_LANGUAGES.has(document.languageId);
     const hasInlineCalcGhost = INLINE_CALC_GHOST_LANGUAGES.has(document.languageId);
 

@@ -1,12 +1,11 @@
 import type { PropagationMethod, PropagationResult, OutputDistribution, DistributionSpec } from "../types/toleranceModel";
 import { computeStdDev, normalizeUncertainty, recommendedSamples } from "../types/toleranceModel";
-import { buildMcSampleSpec } from "./tolerance";
 import type { McSampleSpec } from "./tolerance";
 
 
 // ── PRNG: xoshiro128** ────────────────────────────────────────────────────────
 type Prng = () => number;
-function buildPrng(seed?: number): Prng {
+export function buildPrng(seed?: number): Prng {
   let s = (seed ?? Date.now()) >>> 0;
   const sm = (): number => {
     s = (s + 0x9e3779b9) >>> 0;
@@ -72,42 +71,55 @@ function pct(sorted: Float64Array, p: number): number {
   return lo === hi ? sorted[lo] : sorted[lo] + (idx - lo) * (sorted[hi] - sorted[lo]);
 }
 
-const HIST_BINS = 16;
+/** Number of histogram bins. Fixed so the webview never needs to choose. */
+export const HISTOGRAM_BINS = 32;
 
 export function computeOutputDistribution(sorted: Float64Array): OutputDistribution {
   const n = sorted.length;
+  if (n === 0) {
+    const empty: OutputDistribution = {
+      samples: 0, mean: NaN, median: NaN, stddev: NaN,
+      min: NaN, max: NaN,
+      p001: NaN, p010: NaN, p025: NaN, p500: NaN,
+      p975: NaN, p990: NaN, p999: NaN,
+      skewness: NaN, kurtosis: NaN,
+      histogram: { counts: new Array(HISTOGRAM_BINS).fill(0), lo: NaN, hi: NaN },
+    };
+    return empty;
+  }
+
   let sum = 0; for (let i = 0; i < n; i++) sum += sorted[i];
   const mean = sum / n;
   let v2 = 0, s3 = 0, k4 = 0;
   for (let i = 0; i < n; i++) { const d = sorted[i] - mean; v2 += d*d; s3 += d*d*d; k4 += d*d*d*d; }
   const stddev = Math.sqrt(v2 / n);
 
-  // Compute real histogram bins from sorted samples
-  const lo = sorted[0], hi = sorted[n - 1];
-  const bins16 = new Array<number>(HIST_BINS).fill(0);
-  if (hi > lo) {
-    const bw = (hi - lo) / HIST_BINS;
+  const lo = sorted[0];
+  const hi = sorted[n - 1];
+
+  // Build histogram directly from the sorted sample array.
+  // Using the sorted array lets us do a single linear pass with a pointer.
+  const counts = new Array<number>(HISTOGRAM_BINS).fill(0);
+  if (lo < hi) {
+    const range = hi - lo;
     for (let i = 0; i < n; i++) {
-      const idx = Math.min(HIST_BINS - 1, Math.floor((sorted[i] - lo) / bw));
-      bins16[idx]++;
-    }
-    const maxBin = Math.max(...bins16);
-    if (maxBin > 0) {
-      for (let i = 0; i < HIST_BINS; i++) bins16[i] /= maxBin; // normalize 0..1
+      const bin = Math.min(HISTOGRAM_BINS - 1, Math.floor((sorted[i] - lo) / range * HISTOGRAM_BINS));
+      counts[bin]++;
     }
   } else {
-    bins16[HIST_BINS >> 1] = 1; // degenerate: single spike at centre
+    // All samples identical → single spike in the middle bin
+    counts[Math.floor(HISTOGRAM_BINS / 2)] = n;
   }
 
   return {
     samples: n, mean, median: pct(sorted, 50), stddev,
-    min: sorted[0], max: sorted[n - 1],
+    min: lo, max: hi,
     p001: pct(sorted, 0.1), p010: pct(sorted, 1), p025: pct(sorted, 2.5),
     p500: pct(sorted, 50),
     p975: pct(sorted, 97.5), p990: pct(sorted, 99), p999: pct(sorted, 99.9),
     skewness: stddev > 0 ? (s3 / n) / stddev ** 3 : 0,
     kurtosis: stddev > 0 ? (k4 / n) / stddev ** 4 - 3 : 0,
-    bins16,
+    histogram: { counts, lo, hi },
   };
 }
 
@@ -161,13 +173,13 @@ export function runRss(inputs: RssSensitivityInput[], nominal: number, sigmaOut 
   return { method: "rss", min: nominal - delta, max: nominal + delta, nominalValue: nominal, stddev, contributingInputs: inputs.map(i => i.name) };
 }
 
-// ── Worst-case (asymmetric) ───────────────────────────────────────────────────
-// Calcola il vero intervallo worst-case valutando ogni input ai suoi estremi.
-// Per funzioni non lineari, l'effetto in su e in giù può essere diverso.
-// Il dispatcher calcola per ogni input:
-//   upEffect   = f(nom_i + hw_i) − f(nominal)   → contributo verso l'alto
-//   downEffect = f(nom_i - hw_i) − f(nominal)   → contributo verso il basso
-// L'intervallo finale è [nominal + Σ downEffect, nominal + Σ upEffect]
+
+
+
+
+
+
+
 export function runWorstCase(inputs: WcSensitivityInput[], nominal: number): PropagationResult {
   let totUp = 0;
   let totDown = 0;
@@ -244,55 +256,125 @@ export function propagate(
   return runWorstCase(wcInputs, nominalOutput);
 }
 
-export function generateSamplesForInput(
-  nominal: number,
+export type { McSampleSpec as McInput };
+
+
+/* ════════════════════════════════════════════════════════════════════════
+ * RECURSIVE SAMPLING PROPAGATION
+ *
+ * Model: "worst_case" / "rss" / "monte_carlo" are NOT alternative
+ * propagation algorithms. They only select which percentile bound is
+ * reported for a given node. The actual population is ALWAYS generated
+ * by real sampling (root inputs sampled per their distribution.type,
+ * then every formula in the dependency chain is evaluated sample-by-
+ * sample). This guarantees that a formula consuming another formula's
+ * output inherits its true empirical shape instead of being flattened
+ * to a synthetic uniform approximation.
+ * ════════════════════════════════════════════════════════════════════════ */
+
+export const DEFAULT_MC_SAMPLES = 10_000;
+
+/** Generates the root sample population for a single input with declared uncertainty + distribution. */
+export function generateRootSamples(
   uncertainty: import("../types/toleranceModel").UncertaintySpec,
-  distribution: import("../types/toleranceModel").DistributionSpec,
-  samplesCount: number,
-  seed?: number
-): Float64Array {
-  const prng = buildPrng(seed);
-  const spec = buildMcSampleSpec("input", nominal, uncertainty, distribution);
-  const out = new Float64Array(samplesCount);
-  if (spec) {
-    fillSamples(out, spec, prng);
-  } else {
-    out.fill(nominal);
-  }
+  distribution: DistributionSpec,
+  nominal: number,
+  n: number,
+  prng: Prng
+): Float64Array | undefined {
+  const norm = normalizeUncertainty(uncertainty, nominal);
+  if (!norm) return undefined;
+  const dk: McSampleSpec["distribution"] =
+    distribution.type === "normal" ? "normal" :
+    distribution.type === "triangular" ? "triangular" : "uniform";
+  const spec: McSampleSpec = {
+    name: "", nominal,
+    lower: norm.lower, upper: norm.upper,
+    distribution: dk,
+    sigmaLevel: distribution.type === "normal" ? (distribution.sigma_level ?? 3) : 1,
+    stdDev: computeStdDev(norm, distribution),
+  };
+  const out = new Float64Array(n);
+  fillSamples(out, spec, prng);
   return out;
 }
 
+/**
+ * Evaluates a formula sample-by-sample using already-generated sample arrays
+ * for each dependency (which may themselves be root samples OR the output
+ * samples of another already-propagated formula — the function does not
+ * care which, it only consumes Float64Array populations).
+ *
+ * `evaluateOne(sampleValues)` must evaluate the formula for a single set of
+ * scalar dependency values (index i across all input arrays) and return a
+ * number, or NaN if evaluation failed for that sample.
+ */
+export function propagateFromSamples(
+  inputSamples: Record<string, Float64Array>,
+  evaluateOne: (values: Record<string, number>) => number,
+  n: number
+): Float64Array {
+  const names = Object.keys(inputSamples);
+  const output = new Float64Array(n);
+  const scratch: Record<string, number> = {};
+  for (let i = 0; i < n; i++) {
+    for (const name of names) scratch[name] = inputSamples[name][i];
+    const v = evaluateOne(scratch);
+    output[i] = Number.isFinite(v) ? v : NaN;
+  }
+  return output;
+}
+
+/**
+ * Builds a PropagationResult from a real output sample population.
+ * `method` only selects which bound is reported as min/max:
+ *  - worst_case  -> absolute extremes of the sampled population (percentile 0/100)
+ *  - rss         -> mean ± 3*stddev computed on the REAL samples (not analytic)
+ *  - monte_carlo -> confidence-level percentiles (default 95% -> 2.5/97.5)
+ * In every case `distribution` carries the full empirical OutputDistribution,
+ * so downstream consumers (UI, or a parent formula re-sampling this node)
+ * always have the true shape available.
+ */
 export function resultFromSamples(
-  samples: Float64Array,
+  rawOutput: Float64Array,
   method: PropagationMethod,
-  nominal: number,
+  contributingInputs: string[],
   confidence = 95
 ): PropagationResult {
-  const sorted = samples.slice().sort();
+  
+  let validCount = 0;
+  for (let i = 0; i < rawOutput.length; i++) if (Number.isFinite(rawOutput[i])) validCount++;
+  let clean: Float64Array;
+  if (validCount === rawOutput.length) {
+    clean = rawOutput;
+  } else {
+    clean = new Float64Array(validCount);
+    let j = 0;
+    for (let i = 0; i < rawOutput.length; i++) if (Number.isFinite(rawOutput[i])) clean[j++] = rawOutput[i];
+  }
+  const sorted = clean.slice().sort();
   const dist = computeOutputDistribution(sorted);
-  const tail = (100 - confidence) / 2;
 
-  let min = dist.min;
-  let max = dist.max;
-
-  if (method === "rss") {
+  let min: number, max: number;
+  if (method === "worst_case") {
+    min = dist.min;
+    max = dist.max;
+  } else if (method === "rss") {
     const delta = 3 * dist.stddev;
     min = dist.mean - delta;
     max = dist.mean + delta;
-  } else if (method === "monte_carlo") {
+  } else {
+    const tail = (100 - confidence) / 2;
     min = pct(sorted, tail);
     max = pct(sorted, 100 - tail);
   } // worst_case uses dist.min and dist.max
 
   return {
     method,
-    min,
-    max,
+    min, max,
     nominalValue: dist.mean,
     stddev: dist.stddev,
     distribution: dist,
-    contributingInputs: [],
+    contributingInputs,
   };
 }
-
-export type { McSampleSpec as McInput };

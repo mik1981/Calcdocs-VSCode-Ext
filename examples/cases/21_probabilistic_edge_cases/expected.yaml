@@ -1,0 +1,43 @@
+# Case 21 — Probabilistic edge cases
+# Questo expected.yaml definisce i risultati attesi per i simboli
+# presenti in: formulas_complex.yaml e formulas_simple.yaml.
+#
+# NOTA: per Monte Carlo il motore produce tipicamente un intervallo
+# [min,max] (soglie di tolleranza/quantili interne al test harness).
+
+A:
+  value: 100
+  unit: count
+
+B:
+  value: 100
+  unit: count
+
+SUM_UNIFORM:
+  value: 200
+  unit: count
+
+SQUARE_UNIFORM:
+  value: 10000
+  unit: count
+
+C:
+  value: 100
+  unit: count
+
+D:
+  value: 100
+  unit: count
+
+MIXED_DIST:
+  value: 300
+  unit: count
+
+E:
+  value: 0.1
+  unit: count
+
+DIVISION_NEAR_ZERO:
+  value: 36.787944117144235
+  unit: count
+

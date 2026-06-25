@@ -30,7 +30,12 @@ import type {
   FormulaInputNode,
   FormulaTreeNode,
 } from "./webview-types";
-import { runMonteCarlo, propagate, generateSamplesForInput, resultFromSamples, computeOutputDistribution, type UnifiedInput } from "../engine/monteCarlo";
+import {
+  runMonteCarlo, propagate, type UnifiedInput,
+  generateRootSamples, propagateFromSamples, resultFromSamples,
+  computeOutputDistribution,
+  buildPrng, DEFAULT_MC_SAMPLES,
+} from "../engine/monteCarlo";
 import {
   normalizeUncertainty,
   computeStdDev,
@@ -367,6 +372,10 @@ function formatResolvedExpression(
 
 export class InteractiveFormulaEngine {
   private readonly csvLookup: EvaluationContext["resolveLookup"];
+  
+  // Cache for within-evaluation sample arrays. Reset at the start of each evaluate() call
+  // so that changing a slider re-generates populations with updated nominal values.
+  private sampleCache = new Map<string, Float64Array>();
 
   constructor(private readonly state: CalcDocsState) {
     this.csvLookup = createCsvLookupResolver(
@@ -375,7 +384,173 @@ export class InteractiveFormulaEngine {
     );
   }
 
+  /**
+   * Recursively builds (or retrieves from cache) the sample population for `name`.
+   *  - const with uncertainty+distribution → generates root samples via generateRootSamples()
+   *  - formula with at least one sampled dependency → evaluates expression N times,
+   *    each time using the i-th element from each dependency's Float64Array,
+   *    so the TRUE empirical shape of intermediate formulas flows through naturally.
+   *
+   * `currentValues` are the live scalar values (from the current evaluate() call),
+   * used as nominals for root-sample generation and as fallback for constants without
+   * uncertainty. `currentUnits` provides unit context for Quantity construction.
+   */
+  private getOrBuildSamples(
+    name: string,
+    currentValues: Record<string, number>,
+    currentUnits: Record<string, string>,
+    n: number,
+    prng: ReturnType<typeof buildPrng>,
+    inProgress: Set<string>
+  ): Float64Array | undefined {
+    if (this.sampleCache.has(name)) return this.sampleCache.get(name);
+    if (inProgress.has(name)) return undefined; // cycle guard
 
+    const entry = this.state.formulaIndex.get(name);
+    if (!entry) return undefined;
+
+    inProgress.add(name);
+    try {
+      // ── LEAF / CONSTANT ─────────────────────────────────────────────────
+      if (!entry.formula) {
+        const tolInput = entry.tolerance?.input;
+        if (!tolInput) return undefined;
+        const nominal = currentValues[name] ?? getDefaultValue(name, entry, this.state) ?? 0;
+        const arr = generateRootSamples(tolInput.uncertainty, tolInput.distribution, nominal, n, prng);
+        if (arr) this.sampleCache.set(name, arr);
+        return arr ?? undefined;
+      }
+
+      // ── FORMULA ─────────────────────────────────────────────────────────
+      const spec = entry.tolerance as FormulaToleranceSpec | undefined;
+      const deps = collectIdentifiersInOrder(entry.formula);
+
+      const depSamples: Record<string, Float64Array> = {};
+      let hasAny = false;
+
+      // Direct tolerance declared on the dependency (const with uncertainty:)
+      // OR the dependency is itself a formula whose samples we can get recursively.
+      for (const depName of deps) {
+        const depEntry = this.state.formulaIndex.get(depName);
+        if (!depEntry) continue;
+
+        // parameter_tolerances override for this specific dep
+        const override = spec?.parameterOverrides?.[depName];
+        if (override) {
+          const nominal = currentValues[depName] ?? getDefaultValue(depName, depEntry, this.state) ?? 0;
+          const arr = generateRootSamples(override.uncertainty, override.distribution, nominal, n, prng);
+          if (arr) { depSamples[depName] = arr; hasAny = true; }
+          continue;
+        }
+
+        // Recursive: get the dep's own population (may be root samples or propagated)
+        const arr = this.getOrBuildSamples(depName, currentValues, currentUnits, n, prng, inProgress);
+        if (arr) { depSamples[depName] = arr; hasAny = true; }
+      }
+
+      if (!hasAny) return undefined;
+
+      // Evaluate the formula N times, one per sample index
+      const evalOne = (sampleValues: Record<string, number>): number => {
+        const overrideMap = new Map<string, Quantity>();
+        for (const [n2, val] of Object.entries(sampleValues)) {
+          const unit = currentUnits[n2] ?? this.state.symbolUnits.get(n2);
+          const q = unit ? createFormulaDataQuantity(val, unit) : createQuantity(val);
+          if (q.ok) overrideMap.set(n2, q.value);
+        }
+        const ctx: EvaluationContext = {
+          resolveIdentifier: (id) => {
+            const ov = overrideMap.get(id);
+            if (ov) return ov;
+            // fallback: current scalar value for deps without samples
+            const v = currentValues[id];
+            if (v !== undefined) {
+              const unit = currentUnits[id] ?? this.state.symbolUnits.get(id);
+              const q = unit ? createFormulaDataQuantity(v, unit) : createQuantity(v);
+              return q.ok ? q.value : undefined;
+            }
+            return undefined;
+          },
+          resolveArrayIdentifier: (id) => {
+            const depEntry = this.state.formulaIndex.get(id);
+            if (!depEntry?.valueYamlList) return undefined;
+            const u = getUnit(id, depEntry, this.state);
+            return depEntry.valueYamlList.map(v => {
+              const q = createFormulaDataQuantity(v, u);
+              return q.ok ? q.value : createDimensionlessQuantity(v);
+            });
+          },
+          resolveLookup: this.csvLookup,
+          ignoreUnitCompatibility: true,
+        };
+        const res = evaluateExpressionWithOutputUnit(entry.formula!, ctx, getUnit(name, entry, this.state));
+        return res.ok ? (res.displayValue ?? toDisplayValue(res.quantity)) : NaN;
+      };
+
+      const output = propagateFromSamples(depSamples, evalOne, n);
+      this.sampleCache.set(name, output);
+      return output;
+    } finally {
+      inProgress.delete(name);
+    }
+  }
+
+  private computeLiveRange(
+    name: string,
+    values: Record<string, number>,
+    units: Record<string, string>
+  ): { min: number; max: number; source: "propagated" | "declared"; method?: string; nominalValue?: number; stddev?: number; distribution?: OutputDistribution; } | undefined {
+    const entry = this.state.formulaIndex.get(name);
+    if (!entry?.formula) return undefined;
+
+    const spec = entry.tolerance as FormulaToleranceSpec | undefined;
+
+    // ── quick path: formula has NO propagation spec declared and NO dep has uncertainty
+    //    → check for own declared input tolerance (e.g. a const being used as formula-like)
+    if (!spec?.output) {
+      const ownTolPct = getInputTolPercent(spec);
+      if (ownTolPct !== undefined && isFiniteNumber(values[name])) {
+        const val = values[name]!;
+        const delta = Math.abs(val) * Math.abs(ownTolPct) / 100;
+        return { min: val - delta, max: val + delta, source: "declared" };
+      }
+      // No declared propagation: use pre-computed toleranceResult if available
+      // (do not degrade to uniform — return undefined so liveRange() falls back to toleranceResult)
+      return undefined;
+    }
+
+    const method: PropagationMethod =
+      spec.output.method ??
+      (this.state.formulaIndex.get(name)?.toleranceResult as any)?.method ??
+      "worst_case";
+    const n = spec.output.samples ?? DEFAULT_MC_SAMPLES;
+    const confidence = spec.output.confidence ?? 95;
+
+    // Build sample populations for all dependencies recursively using the
+    // same shared cache and prng so correlated deps reuse their population.
+    const prng = buildPrng(spec.output.seed);
+    const inProgress = new Set<string>();
+
+    const output = this.getOrBuildSamples(name, values, units, n, prng, inProgress);
+    if (!output) return undefined;
+
+    const propResult = resultFromSamples(
+      output,
+      method,
+      collectIdentifiersInOrder(entry.formula),
+      confidence
+    );
+
+    return {
+      min: propResult.min,
+      max: propResult.max,
+      source: "propagated",
+      method: propResult.method,
+      nominalValue: propResult.nominalValue,
+      stddev: propResult.stddev,
+      distribution: propResult.distribution,
+    };
+  }
 
 
   createFormulaEntry(entry: CoreFormulaEntry, options: BuildTreeOptions = {}): FormulaEntry {
@@ -383,12 +558,20 @@ export class InteractiveFormulaEngine {
     const tree = this.buildTree(entry.key, [], 0, options);
     const value = options.evaluation?.values[entry.key] ?? getDefaultValue(entry.key, entry, this.state);
     const rawYaml = getRawYamlBlock(entry, this.state);
-    // const toleranceResult = entry.toleranceResult;
-    // const range: { min: number; max: number; source: "declared" | "propagated" } | undefined = toleranceResult
-    //   ? { min: toleranceResult.min, max: toleranceResult.max, source: toleranceResult.source }
-    //   : tree.result?.range;
-    const range = liveRange(entry.toleranceResult, value) as any
+
+    // Use liveRange from evaluation result if available (post-slider),
+    // otherwise fall back to the static toleranceResult from yamlEngine
+    // (which already has distribution.histogram if propagation: is declared).
+    const liveR = options.liveRanges?.get(entry.key)
+      ?? liveRange(entry.toleranceResult, value) as any
       ?? (tree.result?.range ? { ...tree.result.range, source: tree.result.range.source || 'declared' } : undefined);
+
+    // Propagate the range into the tree root node so renderDistributionPanel
+    // finds it via collectRanges(tree) regardless of which branch produced it.
+    if (liveR && tree) {
+      (tree as any).range = liveR;
+      if (tree.result) (tree.result as any).range = liveR;
+    }
 
     return {
       id: entry.key,
@@ -399,7 +582,7 @@ export class InteractiveFormulaEngine {
       tree,
       rawYaml,
       value,
-      range,
+      range: liveR,
       errors: options.evaluation?.errors[entry.key] ?? entry.evaluationErrors,
       warnings: options.evaluation?.warnings[entry.key] ?? entry.evaluationWarnings,
       line: entry._line !== undefined ? entry._line + 1 : undefined,
@@ -412,6 +595,10 @@ export class InteractiveFormulaEngine {
     overrides: Record<string, number>,
     changedId?: string
   ): InteractiveEvaluationResult {
+    // Reset sample cache: each evaluate() call may have different slider values
+    // (overrides), so populations must be regenerated with updated nominals.
+    this.sampleCache = new Map<string, Float64Array>();
+
     const values: Record<string, number> = {};
     const units: Record<string, string> = {};
     const errors: Record<string, string[]> = {};
@@ -650,7 +837,7 @@ export class InteractiveFormulaEngine {
         if (!isSuppressedInteractiveError(evaluated.error)) {
           result.errors.push(evaluated.error);
         }
-        //
+        
         return record(result);
       }
 
@@ -783,233 +970,40 @@ export class InteractiveFormulaEngine {
       }
     }
 
-    // Ricalcola i range live per i simboli con tolleranza propagata via Monte Carlo ricorsivo
-    const liveRanges = new Map<string, { min: number; max: number; source: "propagated" | "declared"; method?: string; nominalValue?: number; stddev?: number; distribution?: OutputDistribution; }>();
-
-    const sampleCache = new Map<string, Float64Array>();
-    const SAMPLES_COUNT = 10000;
-    const uncertaintyCache = new Map<string, boolean>();
-
-    const checkUncertainty = (name: string, visiting = new Set<string>()): boolean => {
-      if (uncertaintyCache.has(name)) return uncertaintyCache.get(name)!;
-      if (visiting.has(name)) return false;
-      visiting.add(name);
-
-      const entry = this.state.formulaIndex.get(name);
-      if (!entry) {
-        visiting.delete(name);
-        return false;
-      }
-      const isConst = !entry.formula;
-      if (isConst) {
-        const has = entry.tolerance?.input !== undefined;
-        uncertaintyCache.set(name, has);
-        visiting.delete(name);
-        return has;
-      } else {
-        const spec = entry.tolerance as FormulaToleranceSpec | undefined;
-        const deps = collectIdentifiersInOrder(entry.formula!);
-        if (spec?.parameterOverrides) {
-          for (const override of Object.values(spec.parameterOverrides)) {
-            if (override.uncertainty) {
-              uncertaintyCache.set(name, true);
-              visiting.delete(name);
-              return true;
-            }
-          }
-        }
-        for (const depName of deps) {
-          if (checkUncertainty(depName, visiting)) {
-            uncertaintyCache.set(name, true);
-            visiting.delete(name);
-            return true;
-          }
-        }
-      }
-      uncertaintyCache.set(name, false);
-      visiting.delete(name);
-      return false;
-    };
-
-    const getOrBuildSamples = (name: string): Float64Array | undefined => {
-      if (sampleCache.has(name)) return sampleCache.get(name);
-
-      const entry = this.state.formulaIndex.get(name);
-      if (!entry) {
-        const fallbackVal = values[name];
-        if (fallbackVal !== undefined) {
-          const arr = new Float64Array(SAMPLES_COUNT);
-          arr.fill(fallbackVal);
-          sampleCache.set(name, arr);
-          return arr;
-        }
-        return undefined;
-      }
-
-      const isConst = !entry.formula;
-      if (isConst) {
-        const val = values[name] ?? getDefaultValue(name, entry, this.state) ?? 0;
-        const spec = entry.tolerance?.input;
-        if (spec) {
-          const arr = generateSamplesForInput(val, spec.uncertainty, spec.distribution, SAMPLES_COUNT);
-          sampleCache.set(name, arr);
-          return arr;
-        } else {
-          const arr = new Float64Array(SAMPLES_COUNT);
-          arr.fill(val);
-          sampleCache.set(name, arr);
-          return arr;
-        }
-      }
-
-      // Formula
-      const val = values[name] ?? 0;
-      if (!checkUncertainty(name)) {
-        const arr = new Float64Array(SAMPLES_COUNT);
-        arr.fill(val);
-        sampleCache.set(name, arr);
-        return arr;
-      }
-
-      const outputSamples = new Float64Array(SAMPLES_COUNT);
-      const deps = collectIdentifiersInOrder(entry.formula!);
-      const spec = entry.tolerance as FormulaToleranceSpec | undefined;
-      const parameterOverrides = spec?.parameterOverrides ?? {};
-
-      const depSampleArrays = new Map<string, Float64Array>();
-      for (const depName of deps) {
-        if (parameterOverrides[depName]?.uncertainty) {
-          const depVal = values[depName] ?? 0;
-          const overrideSpec = parameterOverrides[depName];
-          const arr = generateSamplesForInput(depVal, overrideSpec.uncertainty, overrideSpec.distribution, SAMPLES_COUNT);
-          depSampleArrays.set(depName, arr);
-        } else {
-          const arr = getOrBuildSamples(depName);
-          if (arr) depSampleArrays.set(depName, arr);
-        }
-      }
-
-      for (let i = 0; i < SAMPLES_COUNT; i++) {
-        const sampleCtx: EvaluationContext = {
-          resolveIdentifier: (id) => {
-            if (depSampleArrays.has(id)) {
-              const sVal = depSampleArrays.get(id)![i];
-              const unit = units[id] ?? this.state.symbolUnits.get(id);
-              const q = unit ? createFormulaDataQuantity(sVal, unit) : createQuantity(sVal);
-              return q.ok ? q.value : undefined;
-            }
-            const v = values[id];
-            if (v === undefined) return undefined;
-            const unit = units[id] ?? this.state.symbolUnits.get(id);
-            const q = unit ? createFormulaDataQuantity(v, unit) : createQuantity(v);
-            return q.ok ? q.value : undefined;
-          },
-          resolveArrayIdentifier: (id) => {
-            const depEntry = this.state.formulaIndex.get(id);
-            if (!depEntry?.valueYamlList) return undefined;
-            const u = getUnit(id, depEntry, this.state);
-            return depEntry.valueYamlList.map(v => {
-              const q = createFormulaDataQuantity(v, u);
-              return q.ok ? q.value : createDimensionlessQuantity(v);
-            });
-          },
-          resolveLookup: this.csvLookup,
-          resolveFunctionCall: (functionName, args) => {
-            const fnEntry = this.state.formulaIndex.get(functionName);
-            if (!fnEntry?.formula || !fnEntry.parameters) return undefined;
-            const boundParameters = new Map<string, Quantity>();
-            fnEntry.parameters.forEach((param, idx) => {
-              if (idx < args.length) {
-                boundParameters.set(param, args[idx]);
-              }
-            });
-
-            const fnSampleCtx: EvaluationContext = {
-              resolveIdentifier: (id) => {
-                const bound = boundParameters.get(id);
-                if (bound) return bound;
-                if (depSampleArrays.has(id)) {
-                  const sVal = depSampleArrays.get(id)![i];
-                  const unit = units[id] ?? this.state.symbolUnits.get(id);
-                  const q = unit ? createFormulaDataQuantity(sVal, unit) : createQuantity(sVal);
-                  return q.ok ? q.value : undefined;
-                }
-                const v = values[id];
-                if (v === undefined) return undefined;
-                const unit = units[id] ?? this.state.symbolUnits.get(id);
-                const q = unit ? createFormulaDataQuantity(v, unit) : createQuantity(v);
-                return q.ok ? q.value : undefined;
-              },
-              resolveArrayIdentifier: (id) => {
-                const depEntry = this.state.formulaIndex.get(id);
-                if (!depEntry?.valueYamlList) return undefined;
-                const u = getUnit(id, depEntry, this.state);
-                return depEntry.valueYamlList.map(v => {
-                  const q = createFormulaDataQuantity(v, u);
-                  return q.ok ? q.value : createDimensionlessQuantity(v);
-                });
-              },
-              resolveLookup: this.csvLookup,
-              resolveFunctionCall: (nn, na) => sampleCtx.resolveFunctionCall?.(nn, na),
-              ignoreUnitCompatibility: true,
-            };
-
-            const res = evaluateExpressionWithOutputUnit(fnEntry.formula!, fnSampleCtx, getUnit(functionName, fnEntry, this.state));
-            if (!res.ok) return undefined;
-            return { ok: true, value: res.quantity };
-          },
-          ignoreUnitCompatibility: true,
-        };
-
-        const res = evaluateExpressionWithOutputUnit(entry.formula!, sampleCtx, getUnit(name, entry, this.state));
-        outputSamples[i] = res.ok ? (res.displayValue ?? toDisplayValue(res.quantity)) : NaN;
-      }
-
-      sampleCache.set(name, outputSamples);
-      return outputSamples;
-    };
-
+    // Build live ranges for all formula nodes (recursive MC propagation)
+    const liveRanges = new Map<string, ReturnType<typeof this.computeLiveRange>>();
     for (const [name, entry] of this.state.formulaIndex) {
-      if (checkUncertainty(name)) {
-        const samples = getOrBuildSamples(name);
-        if (samples) {
-          if (entry.formula) {
-            const spec = entry.tolerance as FormulaToleranceSpec | undefined;
-            const existingResult = entry.toleranceResult;
-            const method: PropagationMethod = (spec?.output?.method) ?? (existingResult as any)?.method ?? "worst_case";
-            const confidence = spec?.output?.confidence ?? 95;
-            const res = resultFromSamples(samples, method, values[name] ?? 0, confidence);
-
-            liveRanges.set(name, {
-              min: res.min,
-              max: res.max,
-              source: "propagated",
-              method: res.method,
-              nominalValue: res.nominalValue,
-              stddev: res.stddev,
-              distribution: res.distribution,
-            });
-          } else {
-            const spec = entry.tolerance?.input;
-            if (spec) {
-              const sorted = samples.slice().sort();
-              const dist = computeOutputDistribution(sorted);
-              const norm = normalizeUncertainty(spec.uncertainty, values[name] ?? 0);
-              liveRanges.set(name, {
-                min: norm?.lower ?? (values[name] ?? 0),
-                max: norm?.upper ?? (values[name] ?? 0),
-                source: "declared",
-                nominalValue: values[name] ?? 0,
-                stddev: norm ? computeStdDev(norm, spec.distribution) : 0,
-                distribution: dist,
-              });
-            }
-          }
-        }
+      if (entry.formula) {
+        // Formula nodes: full recursive MC propagation
+        const r = this.computeLiveRange(name, values, units);
+        if (r) liveRanges.set(name, r);
+      } else if (entry.tolerance?.input) {
+        // Const nodes with declared uncertainty: generate root samples
+        // using the CURRENT value (which may differ from static nominal if
+        // the user has overridden a dependent slider).
+        const currentVal = values[name] ?? getDefaultValue(name, entry, this.state);
+        if (!isFiniteNumber(currentVal)) continue;
+        const tolInput = entry.tolerance.input;
+        const norm = normalizeUncertainty(tolInput.uncertainty, currentVal);
+        if (!norm) continue;
+        const prng = buildPrng(undefined);
+        const arr = generateRootSamples(tolInput.uncertainty, tolInput.distribution, currentVal, DEFAULT_MC_SAMPLES, prng);
+        if (!arr) continue;
+        const sorted = arr.slice().sort() as Float64Array;
+        const dist = computeOutputDistribution(sorted);
+        liveRanges.set(name, {
+          min: norm.lower,
+          max: norm.upper,
+          source: "declared" as const,
+          method: "worst_case",
+          nominalValue: currentVal,
+          stddev: computeStdDev(norm, tolInput.distribution),
+          distribution: dist,
+        });
       }
     }
 
-    // Aggiorna il range negli step con i valori live calcolati
+    
     for (const step of steps) {
       const live = liveRanges.get(step.name);
       if (live) {
@@ -1194,13 +1188,13 @@ export class InteractiveFormulaEngine {
       children.push(this.buildTree(dependency, nextPath, depth + 1, options));
     }
 
-    // Propagate tolerance range from entry to tree node
-    // const toleranceResult = entry?.toleranceResult;
-    // const entryRange = toleranceResult
-    //   ? { min: toleranceResult.min, max: toleranceResult.max, source: toleranceResult.source as "declared" | "propagated" }
-    //   : undefined;
+    
+    
+    
+    
+    
 
-    // const entryRange = liveRange(entry?.toleranceResult, resultValue);
+    
     const entryRange =
       options.liveRanges?.get(name) ??
       liveRange(entry?.toleranceResult, resultValue);

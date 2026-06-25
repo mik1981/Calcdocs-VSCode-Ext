@@ -674,11 +674,18 @@ async function evaluateCase(caseDir: string): Promise<CaseEvaluation> {
 
   const symbolUnits = new Map<string, string>(collected.units);
 
-  // ── YAML formulas integration (surgical) ──────────────────────────────
-  // If a case provides formulas.yaml, evaluate it and use its numeric
-  // results as the symbolValues source of truth (overriding C defines).
-  const formulasPath = path.join(caseDir, "formulas.yaml");
-  if (fs.existsSync(formulasPath)) {
+  // ── YAML formulas integration ─────────────────────────────────────────
+  // Read ALL formula*.yaml files in the case directory (e.g. formulas.yaml,
+  // formulas_simple.yaml, formulas_complex.yaml) and evaluate each one.
+  // Results are merged into symbolValues (later files override earlier ones
+  // for the same symbol).
+  const formulaFiles = fs
+    .readdirSync(caseDir)
+    .filter((f) => /^formula.*\.yaml$/i.test(f))
+    .sort();
+
+  for (const formulaFile of formulaFiles) {
+    const formulasPath = path.join(caseDir, formulaFile);
     const formulasRoot = await loadYamlFile(formulasPath);
 
     const { evaluateYamlDocument } = await import("../../src/engine/yamlEngine");

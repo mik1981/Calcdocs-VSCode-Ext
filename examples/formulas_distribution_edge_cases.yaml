@@ -1,0 +1,493 @@
+# formulas_distribution_edge_cases.yaml
+# ══════════════════════════════════════════════════════════════════════════════
+# Edge cases and improper usage patterns for CalcDocs tolerance propagation.
+#
+# PURPOSE: Document what the engine does (and warns about) in each corner case.
+#          Use this file to verify diagnostic messages and UI behaviour.
+#
+# Each group is annotated with:
+#   BEHAVIOUR  — what the engine produces
+#   UI         — what the Distribution tab shows
+#   WARN/ERR   — diagnostic messages expected
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# GROUP A — VALIDATION ERRORS
+# Fields that are structurally illegal in the three-level model.
+# Expected: ERR diagnostic, symbol range = undefined, Distribution tab empty.
+# ════════════════════════════════════════════════════════════════════════════
+
+# A1. 'sigma' not allowed when uncertainty.type = percent
+#     ERR: "Field 'sigma' is not allowed when type=percent"
+X_INVALID_PERCENT_SIGMA:
+  type: const
+  value: 100
+  unit: count
+  uncertainty:
+    type: percent
+    value: 5
+    sigma: 2              # ← ILLEGAL
+
+# A2. 'value' not allowed when uncertainty.type = range
+#     ERR: "Field 'value' is not allowed when type=range"
+X_INVALID_RANGE_VALUE:
+  type: const
+  value: 100
+  unit: count
+  uncertainty:
+    type: range
+    min: 95
+    max: 105
+    value: 5              # ← ILLEGAL
+
+# A3. uncertainty.type = percent without 'value'
+#     ERR: "uncertainty.value is required when type=percent"
+X_PERCENT_MISSING_VALUE:
+  type: const
+  value: 100
+  unit: count
+  uncertainty:
+    type: percent         # ← missing 'value' field
+  distribution:
+    type: uniform
+
+# A4. uncertainty.type = range with only one bound
+#     ERR: "uncertainty.min and uncertainty.max are both required when type=range"
+X_RANGE_MISSING_MAX:
+  type: const
+  value: 100
+  unit: count
+  uncertainty:
+    type: range
+    min: 90               # ← max is missing
+  distribution:
+    type: uniform
+
+# A5. Mixing new uncertainty block with legacy tol field
+#     ERR: "Cannot mix new 'uncertainty:' block with legacy 'tol'/'min'/'max' fields"
+X_MIXED_NEW_AND_LEGACY:
+  type: const
+  value: 100
+  unit: count
+  uncertainty:
+    type: percent
+    value: 5
+  tol: 5                  # ← ILLEGAL: cannot mix with uncertainty block
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# GROUP B — WARNINGS (accepted but deprecated)
+# Legacy fields are converted internally with WARN diagnostics.
+# Distribution tab works correctly after conversion.
+# ════════════════════════════════════════════════════════════════════════════
+
+# B1. Legacy 'tol' alone → percent + uniform
+#     WARN: "Legacy field 'tol' – use uncertainty: { type: percent, value: N }"
+#     BEHAVIOUR: treated as percent ±5%, uniform distribution
+#     UI: flat histogram [95, 105]
+X_LEGACY_TOL_ONLY:
+  type: const
+  value: 100
+  unit: count
+  tol: 5
+
+# B2. Legacy 'tol' + 'tol_mode: gaussian' + 'sigma' → percent + normal
+#     WARN: three separate legacy field warnings
+#     BEHAVIOUR: percent ±5%, normal σ_level=2
+#     UI: bell-shaped histogram
+X_LEGACY_GAUSSIAN:
+  type: const
+  value: 100
+  unit: count
+  tol: 5
+  tol_mode: gaussian
+  sigma: 2
+
+# B3. Legacy 'min'/'max' at the top level (not inside uncertainty block)
+#     WARN: "Legacy fields 'min'/'max' – use uncertainty: { type: range, min: N, max: N }"
+#     BEHAVIOUR: treated as uniform distribution [92, 108]
+#     UI: flat histogram
+X_LEGACY_MINMAX:
+  type: const
+  value: 100
+  unit: count
+  min: 92
+  max: 108
+
+# B4. distribution: block without a paired uncertainty: block
+#     WARN: no uncertainty declared → distribution is ignored, no samples generated
+#     UI: Distribution tab empty (no histogram)
+X_DISTRIBUTION_WITHOUT_UNCERTAINTY:
+  type: const
+  value: 100
+  unit: count
+  distribution:
+    type: normal
+    sigma_level: 3
+
+# B5. uncertainty: without distribution: → defaults to uniform + WARN
+#     WARN: "No 'distribution:' block found – defaulting to uniform"
+#     BEHAVIOUR: treated as uniform
+#     UI: flat histogram
+X_UNCERTAINTY_WITHOUT_DISTRIBUTION:
+  type: const
+  value: 100
+  unit: count
+  uncertainty:
+    type: percent
+    value: 5
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# GROUP C — PROPAGATION WITHOUT INPUTS
+# Formula with propagation: but no dependency has uncertainty.
+# Expected: range is undefined, Distribution tab is empty.
+# ════════════════════════════════════════════════════════════════════════════
+
+# C1. Formula with propagation: but input has no uncertainty
+#     BEHAVIOUR: no samples generated, toleranceResult = undefined
+#     UI: no range widget, Distribution tab shows "No tolerance data available"
+BARE_INPUT:
+  type: const
+  value: 100
+  unit: count
+  # no uncertainty, no distribution
+
+Y_propagation_no_inputs:
+  type: expr
+  formula: BARE_INPUT * 2
+  unit: count
+  propagation: worst_case   # ← declared but ineffective
+  # BEHAVIOUR: BARE_INPUT has no samples → no output population
+  # UI: Distribution tab empty
+
+# C2. Override declared but the formula has no propagation: field
+#     BEHAVIOUR: parameter_tolerances is parsed and stored, but no range is computed
+#     UI: Distribution tab empty (no propagation method declared)
+NO_PROP_CONST:
+  type: const
+  value: 100
+  unit: count
+
+Y_override_without_propagation:
+  type: expr
+  formula: NO_PROP_CONST * NO_PROP_CONST
+  unit: count
+  # propagation: is MISSING — so no range is ever computed even though
+  # parameter_tolerances is declared below
+  parameter_tolerances:
+    NO_PROP_CONST:
+      uncertainty: { type: percent, value: 5 }
+      distribution: { type: uniform }
+  # FIX: add  propagation: worst_case  (or rss / monte_carlo)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# GROUP D — CHAIN PROPAGATION GAPS
+# When an intermediate formula has no propagation: declared, its samples
+# are not computed and it appears as a fixed scalar to the formula above.
+# ════════════════════════════════════════════════════════════════════════════
+
+# D1. Broken chain: B has no propagation, C consumes B
+#     BEHAVIOUR: C sees B as a fixed scalar (B's range is undefined)
+#                C's Distribution tab shows A's contribution only if
+#                A is a direct dependency of C — which it is NOT here
+ROOT_A:
+  type: const
+  value: 100
+  unit: count
+  uncertainty: { type: percent, value: 5 }
+  distribution: { type: uniform }
+
+B_NO_PROP:
+  type: expr
+  formula: ROOT_A * 2
+  unit: count
+  # no propagation: → B's sample population is NOT computed
+  # B appears as a fixed value 200 to any formula that uses it
+
+C_SEES_FIXED_B:
+  type: expr
+  formula: B_NO_PROP + ROOT_A
+  unit: count
+  propagation: worst_case
+  # ROOT_A contributes its samples (hw=5)
+  # B_NO_PROP contributes NOTHING (no population) → treated as scalar 200
+  # Result: range = [200+95, 200+105] = [295, 305] instead of [285, 315]
+  # UI: Distribution tab shows only ROOT_A's contribution
+  note: "B_NO_PROP is treated as a fixed 200. Add propagation: to B_NO_PROP to fix."
+
+# D2. Fixed chain (correct): add propagation to every intermediate formula
+B_WITH_PROP:
+  type: expr
+  formula: ROOT_A * 2
+  unit: count
+  propagation: worst_case   # ← now B's population is computed
+  # B's samples = 2 × ROOT_A samples → [190, 210]
+
+C_SEES_PROPAGATED_B:
+  type: expr
+  formula: B_WITH_PROP + ROOT_A
+  unit: count
+  propagation: worst_case
+  # Both B_WITH_PROP and ROOT_A contribute their real populations
+  # B samples: [190, 210] (from ROOT_A × 2)
+  # A samples: [95, 105]
+  # Total: [285, 315]
+  # UI: Distribution tab shows both contributions, real histogram
+  expected:
+    value: 300
+    min: 285
+    max: 315
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# GROUP E — PROPAGATION METHOD vs DISTRIBUTION SHAPE MISMATCH
+# Cases where the choice of propagation method gives misleading bounds
+# relative to the true distribution shape.
+# ════════════════════════════════════════════════════════════════════════════
+
+# E1. rss on a uniform input → bounds WIDER than worst_case
+#     This is mathematically correct but often surprising.
+#     For uniform: 3σ = 3 × (hw/√3) = hw × √3 ≈ 1.732 × hw > hw
+#     → rss reports a wider bound than worst_case for uniform inputs
+UNIFORM_WIDE:
+  type: const
+  value: 100
+  unit: count
+  uncertainty: { type: percent, value: 5 }
+  distribution: { type: uniform }
+
+Y_rss_wider_than_wc:
+  type: expr
+  formula: UNIFORM_WIDE
+  unit: count
+  propagation: rss
+  # σ = 5/√3 ≈ 2.887;  3σ ≈ 8.66 → bounds ≈ [91.3, 108.7]
+  # worst_case would give [95, 105] — NARROWER than rss
+  # INTERPRETATION: for uniform inputs, rss overestimates because 3σ
+  #                 exceeds the actual physical halfwidth
+  # UI: flat histogram but bound markers at 91.3 / 108.7 (outside the histogram)
+  expected:
+    note: "rss bounds [91.3, 108.7] are outside the actual sample range [95, 105]"
+    min_approx: 91.3
+    max_approx: 108.7
+
+# E2. rss on a highly non-linear formula → misleading symmetric bounds
+#     X² is positively skewed. rss assumes symmetric ± 3σ bounds.
+NONLINEAR_BASE:
+  type: const
+  value: 100
+  unit: count
+  uncertainty: { type: percent, value: 10 }
+  distribution: { type: uniform }
+
+Y_rss_misleading_nonlinear:
+  type: expr
+  formula: NONLINEAR_BASE * NONLINEAR_BASE
+  unit: count
+  propagation: rss
+  # True output: skewed right (f(90)=8100, f(110)=12100, asymmetric)
+  # rss reports mean ± 3σ which is SYMMETRIC around mean
+  # This misrepresents the true asymmetric distribution
+  # UI: real histogram shows skew; rss bound markers appear symmetric
+  expected:
+    note: "Use worst_case or monte_carlo for non-linear formulas to get asymmetric bounds"
+
+# E3. monte_carlo at high confidence on narrow normal input
+#     p2.5/p97.5 of a Gaussian N(100, 1.667) ≈ [96.73, 103.27]
+#     This is NARROWER than worst_case [95, 105] — both are valid, different guarantees
+NARROW_NORMAL:
+  type: const
+  value: 100
+  unit: count
+  uncertainty: { type: percent, value: 5 }
+  distribution: { type: normal, sigma_level: 3 }
+
+Y_mc_narrower_than_wc:
+  type: expr
+  formula: NARROW_NORMAL
+  unit: count
+  propagation: monte_carlo
+  confidence: 95
+  seed: 42
+  # p2.5 ≈ 96.73, p97.5 ≈ 103.27 (inside [95, 105])
+  # worst_case would give [95, 105] — 100% coverage
+  # monte_carlo 95% gives narrower bounds — 5% of samples fall outside
+  expected:
+    min_approx: 96.7
+    max_approx: 103.3
+    note: "MC 95% bounds are inside the full [95,105] range — 5% of samples are excluded"
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# GROUP F — DEGENERATE / EXTREME VALUES
+# ════════════════════════════════════════════════════════════════════════════
+
+# F1. Zero tolerance — all samples identical
+#     BEHAVIOUR: histogram has single spike at the middle bin, σ=0
+#     UI: histogram with one tall bar, all bound markers at the same value
+X_ZERO_TOL:
+  type: const
+  value: 100
+  unit: count
+  uncertainty: { type: percent, value: 0 }
+  distribution: { type: uniform }
+
+Y_zero_tol_formula:
+  type: expr
+  formula: X_ZERO_TOL * 2
+  unit: count
+  propagation: worst_case
+  # All samples = 200, range [200, 200]
+  expected:
+    value: 200
+    min: 200
+    max: 200
+    note: "Zero tolerance: histogram shows single spike, bounds are identical"
+
+# F2. Negative nominal value
+#     BEHAVIOUR: percent uncertainty still produces symmetric band around negative nominal
+#     X = −100, ±5% → [−105, −95] (both negative)
+X_NEGATIVE:
+  type: const
+  value: -100
+  unit: count
+  uncertainty: { type: percent, value: 5 }
+  distribution: { type: uniform }
+
+Y_negative_nominal:
+  type: expr
+  formula: X_NEGATIVE
+  unit: count
+  propagation: worst_case
+  expected:
+    value: -100
+    min: -105
+    max: -95
+
+# F3. Very large tolerance (>100%)
+#     BEHAVIOUR: range can cross zero; bounds may be reversed if not handled
+#     X = 10, ±200% → [−10, 30]
+X_HUGE_TOL:
+  type: const
+  value: 10
+  unit: count
+  uncertainty: { type: percent, value: 200 }
+  distribution: { type: uniform }
+
+Y_huge_tol:
+  type: expr
+  formula: X_HUGE_TOL
+  unit: count
+  propagation: worst_case
+  expected:
+    value: 10
+    min: -10
+    max: 30
+    note: "Large tolerance crossing zero: uniform samples from [-10, 30] correctly"
+
+# F4. Nominal value = 0 with percent tolerance
+#     BEHAVIOUR: ±N% of 0 = ±0 → zero-width range regardless of N
+#     All samples = 0, histogram single spike
+X_ZERO_NOMINAL_PERCENT:
+  type: const
+  value: 0
+  unit: count
+  uncertainty: { type: percent, value: 5 }
+  distribution: { type: uniform }
+
+Y_zero_nominal_percent:
+  type: expr
+  formula: X_ZERO_NOMINAL_PERCENT + 1
+  unit: count
+  propagation: worst_case
+  expected:
+    value: 1
+    min: 1
+    max: 1
+    note: "percent on nominal=0 gives zero range. Use type:absolute or type:range instead."
+
+# F4b. Correct alternative for zero-nominal with uncertainty
+X_ZERO_NOMINAL_ABSOLUTE:
+  type: const
+  value: 0
+  unit: count
+  uncertainty: { type: absolute, absolute: 0.1 }   # ±0.1 regardless of nominal
+  distribution: { type: uniform }
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# GROUP G — IMPROPER / UNSUPPORTED PATTERNS
+# These are usage patterns that look plausible but do not work as expected.
+# ════════════════════════════════════════════════════════════════════════════
+
+# G1. propagation on a const node (not a formula)
+#     BEHAVIOUR: propagation is parsed but ignored — it only has effect on
+#     'expr' (formula) nodes. A const node never has output propagation.
+#     UI: Distribution tab shows the input histogram (from uncertainty + distribution),
+#         NOT an output propagation. The 'propagation:' field is silently ignored.
+X_CONST_WITH_PROPAGATION:
+  type: const
+  value: 100
+  unit: count
+  uncertainty: { type: percent, value: 5 }
+  distribution: { type: uniform }
+  propagation: monte_carlo   # ← IGNORED on const nodes
+  note: "propagation: has no effect on const nodes; use it on expr nodes only"
+
+# G2. sigma_level on uniform distribution
+#     BEHAVIOUR: sigma_level is only meaningful for normal distribution.
+#     On uniform, it is ignored. σ is always hw/√3 regardless.
+X_UNIFORM_WITH_SIGMA_LEVEL:
+  type: const
+  value: 100
+  unit: count
+  uncertainty: { type: percent, value: 5 }
+  distribution:
+    type: uniform
+    sigma_level: 2    # ← ignored for uniform
+  note: "sigma_level is ignored for uniform distribution. Remove it to avoid confusion."
+
+# G3. Circular reference between two formulas with propagation
+#     BEHAVIOUR: cycle detected → ERR diagnostic, both formulas have undefined range
+#     UI: Distribution tab empty, Dependency Tree shows cycle indicator
+CYCLE_A:
+  type: expr
+  formula: CYCLE_B + 1
+  unit: count
+  propagation: worst_case
+  uncertainty: { type: percent, value: 1 }
+  distribution: { type: uniform }
+
+CYCLE_B:
+  type: expr
+  formula: CYCLE_A * 2
+  unit: count
+  propagation: worst_case
+  # ERR: circular dependency detected: CYCLE_A -> CYCLE_B -> CYCLE_A
+  # BEHAVIOUR: both formulas have undefined range and value
+
+# G4. Using 'ranges:' (legacy per-dep override) instead of 'parameter_tolerances:'
+#     BEHAVIOUR: 'ranges:' is a legacy field, partially supported.
+#     Prefer 'parameter_tolerances:' for the three-level model.
+#     WARN: may or may not produce the expected result depending on parse path.
+SOME_INPUT:
+  type: const
+  value: 100
+  unit: count
+
+Y_RANGES_LEGACY_OVERRIDE:
+  type: expr
+  formula: SOME_INPUT * 2
+  unit: count
+  propagation: worst_case
+  ranges:                       # ← legacy syntax
+    SOME_INPUT:
+      tol: 5
+  # RECOMMENDATION: replace with:
+  # parameter_tolerances:
+  #   SOME_INPUT:
+  #     uncertainty: { type: percent, value: 5 }
+  #     distribution: { type: uniform }

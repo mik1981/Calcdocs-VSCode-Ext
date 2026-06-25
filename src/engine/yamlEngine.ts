@@ -49,9 +49,12 @@ import {
 import {
   propagate,
   runMonteCarlo,
-  generateSamplesForInput,
+  generateRootSamples,
+  propagateFromSamples,
   resultFromSamples,
   computeOutputDistribution,
+  buildPrng,
+  DEFAULT_MC_SAMPLES,
   type McInput
 } from "./monteCarlo";
 
@@ -406,6 +409,14 @@ export function evaluateYamlDocument(root: Record<string, unknown>, options: Eva
   const evaluated = new Map<string, EvaluatedYamlSymbol>();
   const evaluating = new Set<string>();
 
+   
+  
+  
+  
+  const sampleCache = new Map<string, Float64Array>();
+  const samplingInProgress = new Set<string>();
+  const samplePrng = buildPrng(undefined); 
+
   const createYamlDataQuantity = (value: number, unit?: string): ReturnType<typeof createQuantity> => {
     if (!unit) return createQuantity(value);
     const spec = getUnitSpec(unit);
@@ -441,6 +452,121 @@ export function evaluateYamlDocument(root: Record<string, unknown>, options: Eva
     }
     return quantities;
   };
+
+  /*
+   * Recursive sample population builder.
+   *
+   * Returns the Float64Array population for `name`, generating it lazily:
+   *  - const with uncertainty+distribution -> root samples via generateRootSamples()
+   *  - const without uncertainty -> undefined (no population; treated as fixed scalar by callers)
+   *  - expr -> recursively obtains populations for its dependencies (which may
+   *    themselves be const-with-uncertainty OR another expr's own propagated
+   *    population) and evaluates the formula sample-by-sample via
+   *    propagateFromSamples(). This is what makes a formula consuming another
+   *    formula's output inherit its TRUE empirical shape instead of being
+   *    degraded to a synthetic uniform approximation.
+   *
+   * Memoized in sampleCache exactly like `evaluated` memoizes scalar results,
+   * so a symbol referenced by multiple dependents is only sampled once.
+   *
+   * @param prngOverride - if provided, use this PRNG instead of the global samplePrng.
+   *   This is used when a symbol specifies a seed for deterministic Monte Carlo.
+   */
+  function getOrBuildSamples(name: string, nSamples: number, prngOverride?: () => number): Float64Array | undefined {
+    if (sampleCache.has(name)) return sampleCache.get(name);
+    if (samplingInProgress.has(name)) return undefined; 
+    const symbol = symbols.get(name);
+    if (!symbol) return undefined;
+
+    samplingInProgress.add(name);
+    try {
+      if (symbol.type === "const") {
+        if (symbol.literalValues) return undefined; 
+        const tolInput = symbol.tolerance?.input;
+        if (!tolInput || typeof symbol.literalValue !== "number" || !Number.isFinite(symbol.literalValue)) {
+          return undefined;
+        }
+        const samples = generateRootSamples(
+          tolInput.uncertainty,
+          tolInput.distribution,
+          symbol.literalValue,
+          nSamples,
+          prngOverride ?? samplePrng
+        );
+        if (samples) sampleCache.set(name, samples);
+        return samples;
+      }
+
+      
+      if (!symbol.ast || !symbol.expression) return undefined;
+
+      const depSamples: Record<string, Float64Array> = {};
+      let hasAnySampledDep = false;
+
+      for (const depName of symbol.dependencies) {
+        const depSpec = symbols.get(depName);
+        if (!depSpec) continue; 
+        const arr = getOrBuildSamples(depName, nSamples, prngOverride);
+        if (arr) {
+          depSamples[depName] = arr;
+          hasAnySampledDep = true;
+        }
+      }
+
+      
+      const override = symbol.tolerance?.parameterOverrides;
+      if (override) {
+        for (const [depName, paramTol] of Object.entries(override)) {
+          if (depSamples[depName]) continue; 
+          const depNominal = symbols.get(depName)?.yamlValue ?? externalValues.get(depName) ?? 0;
+          const arr = generateRootSamples(paramTol.uncertainty, paramTol.distribution, depNominal, nSamples, prngOverride ?? samplePrng);
+          if (arr) { depSamples[depName] = arr; hasAnySampledDep = true; }
+        }
+      }
+
+      if (!hasAnySampledDep) return undefined; 
+
+      
+      const evaluateOneSample = (sampleValues: Record<string, number>): number => {
+        const overrideMap = new Map<string, Quantity>();
+        for (const [depName, val] of Object.entries(sampleValues)) {
+          const unit = symbols.get(depName)?.effectiveUnit;
+          const q = unit ? createQuantityFromData(val, unit) : createQuantity(val);
+          if (q.ok) overrideMap.set(depName, q.value);
+        }
+        const sampleCtx: EvaluationContext = {
+          ignoreUnitCompatibility: true,
+          resolveIdentifier: (id: string): Quantity | undefined => {
+            const overridden = overrideMap.get(id);
+            if (overridden) return overridden;
+            
+            if (symbol.parameters.includes(id)) return createDimensionlessQuantity(1.0);
+            if (symbols.has(id)) {
+              const depEval = evaluateSymbol(id);
+              if (depEval?.quantity) return depEval.quantity;
+            }
+            return resolveExternalQuantity(id);
+          },
+          resolveArrayIdentifier: resolveArrayQuantities,
+          resolveLookup: (fn, args) => csvLookup(fn, args),
+        };
+        const ev = evaluateExpressionAst(symbol.ast!, sampleCtx);
+        if (!ev.ok) return NaN;
+        if (symbol.effectiveUnit) {
+          const out = applyOutputUnit(ev.quantity, symbol.effectiveUnit);
+          if (out.ok) return out.value.displayValue;
+          return NaN;
+        }
+        return toDisplayValue(ev.quantity);
+      };
+
+      const output = propagateFromSamples(depSamples, evaluateOneSample, nSamples);
+      sampleCache.set(name, output);
+      return output;
+    } finally {
+      samplingInProgress.delete(name);
+    }
+  }
 
   const evaluateSymbol = (name: string): EvaluatedYamlSymbol | undefined => {
     if (evaluated.has(name)) return evaluated.get(name);
@@ -502,6 +628,20 @@ export function evaluateYamlDocument(root: Record<string, unknown>, options: Eva
         const { uncertainty, distribution } = symbol.tolerance.input;
         const norm = normalizeUncertainty(uncertainty, result.value!);
         if (norm) {
+          // Generate root samples for this const input so that its own
+          // Distribution tab shows a real histogram, not a placeholder.
+          // NOTE: we do NOT store these samples in sampleCache here because
+          // getOrBuildSamples() (called during propagation) may need to
+          // regenerate them with a deterministic PRNG override (seed).
+          // The cache is populated lazily by getOrBuildSamples when needed.
+          const constSamples = generateRootSamples(
+            uncertainty, distribution, result.value!, DEFAULT_MC_SAMPLES, samplePrng
+          );
+          let constDist: import("../types/toleranceModel").OutputDistribution | undefined;
+          if (constSamples) {
+            const sorted = constSamples.slice().sort();
+            constDist = computeOutputDistribution(sorted);
+          }
           result.range = {
             min: norm.lower,
             max: norm.upper,
@@ -510,6 +650,7 @@ export function evaluateYamlDocument(root: Record<string, unknown>, options: Eva
             contributingInputs: [],
             method: "worst_case", // Default method for declared constants
             source: "declared",
+            distribution: constDist,
           };
         }
       }
@@ -618,11 +759,119 @@ export function evaluateYamlDocument(root: Record<string, unknown>, options: Eva
       result.quantity = quantity; result.value = toDisplayValue(quantity); result.outputUnit = toDisplayUnit(quantity);
     }
 
-    // ── TOLERANCE PROPAGATION ──────────────────────────────────────────────
-    // Tolerance propagation is now handled in Pass 2 below
+    
+    if (symbol.tolerance?.output) {
+      const propSpec = symbol.tolerance.output;
+      const method = propSpec.method;
+      const nSamples = propSpec.samples ?? DEFAULT_MC_SAMPLES;
+      const confidence = propSpec.confidence ?? 95;
 
+      // If a seed is specified for Monte Carlo, create a dedicated PRNG so
+      // that all samples for this symbol and its dependencies are fully
+      // deterministic: same seed → same bounds, even across separate
+      // evaluateYamlDocument calls.
+      const localPrng = (propSpec.seed !== undefined && method === "monte_carlo")
+        ? buildPrng(propSpec.seed)
+        : undefined;
+      
+      const scalarUnits = new Map<string, string>();
+      const arrayTolInputs = new Map<string, { tol: number; baseQuantities: Quantity[] }>();
+      for (const depName of symbol.dependencies) {
+        const dep = symbols.get(depName);
+        if (dep?.effectiveUnit) scalarUnits.set(depName, dep.effectiveUnit);
+        const depRange = specToToleranceRange(dep?.tolerance);
+        if (dep?.literalValues?.length && depRange?.tol !== undefined) {
+          const base: Quantity[] = []; let allOk = true;
+          for (const v of dep.literalValues) {
+            const q = createDataQuantity(v, dep.effectiveUnit);
+            if (!q) { allOk = false; break; }
+            base.push(q);
+          }
+          if (allOk && base.length > 0) arrayTolInputs.set(depName, { tol: Math.abs(depRange.tol) / 100, baseQuantities: base });
+        }
+      }
 
-    // ── Explain steps ──────────────────────────────────────────────────────
+      
+      // Build the sample population for every dependency. When a dedicated
+      // PRNG is active (localPrng), pass it as override so that root samples
+      // (const with uncertainty) and any recursively generated sample
+      // populations are all produced by the same deterministic stream.
+      const depSamples: Record<string, Float64Array> = {};
+      let hasAnySampledDep = false;
+      for (const depName of symbol.dependencies) {
+        if (!symbols.has(depName)) continue;
+        const arr = getOrBuildSamples(depName, nSamples, localPrng);
+        if (arr) { depSamples[depName] = arr; hasAnySampledDep = true; }
+      }
+      
+      const overrides = symbol.tolerance?.parameterOverrides;
+      if (overrides) {
+        for (const [depName, paramTol] of Object.entries(overrides)) {
+          const depNominal = symbols.get(depName)?.yamlValue ?? externalValues.get(depName) ?? 0;
+          const arr = generateRootSamples(paramTol.uncertainty, paramTol.distribution, depNominal, nSamples, localPrng ?? samplePrng);
+          if (arr) { depSamples[depName] = arr; hasAnySampledDep = true; }
+        }
+      }
+      
+      const arrayScaleSamples: Record<string, Float64Array> = {};
+      for (const [depName, { tol }] of arrayTolInputs.entries()) {
+        const arr = generateRootSamples({ type: "percent", value: tol * 100 }, { type: "uniform" }, 1.0, nSamples, localPrng ?? samplePrng);
+        if (arr) { arrayScaleSamples[`__array_scale_${depName}`] = arr; hasAnySampledDep = true; }
+      }
+
+      if (hasAnySampledDep) {
+        const evaluateOneSample = (sampleValues: Record<string, number>): number => {
+          const overrideMap = new Map<string, Quantity>();
+          const arrayOverrideMap = new Map<string, Quantity[]>();
+
+          for (const [n, val] of Object.entries(sampleValues)) {
+            if (n.startsWith("__array_scale_")) {
+              const depName = n.replace("__array_scale_", "");
+              const base = arrayTolInputs.get(depName)?.baseQuantities;
+              if (base) arrayOverrideMap.set(depName, base.map(q => ({ ...q, valueSi: q.valueSi * val })));
+            } else {
+              const unit = scalarUnits.get(n);
+              const q = unit ? createQuantityFromData(val, unit) : createQuantity(val);
+              if (q.ok) overrideMap.set(n, q.value);
+            }
+          }
+
+          const rangeCtx: EvaluationContext = {
+            ...context,
+            resolveIdentifier: (id) => overrideMap.get(id) ?? context.resolveIdentifier(id),
+            resolveArrayIdentifier: (id) => arrayOverrideMap.get(id) ?? context.resolveArrayIdentifier?.(id),
+          };
+
+          const ev = evaluateExpressionAst(symbol.ast!, rangeCtx);
+          if (!ev.ok) return NaN;
+          let q = ev.quantity;
+          if (symbol.effectiveUnit) {
+            const out = applyOutputUnit(q, symbol.effectiveUnit);
+            if (out.ok) return out.value.displayValue;
+            return NaN;
+          }
+          return toDisplayValue(q);
+        };
+
+        const allSamples: Record<string, Float64Array> = { ...depSamples, ...arrayScaleSamples };
+        const outputSamples = propagateFromSamples(allSamples, evaluateOneSample, nSamples);
+        sampleCache.set(name, outputSamples); 
+
+        const propResult = resultFromSamples(
+          outputSamples,
+          method,
+          Object.keys(allSamples),
+          confidence
+        );
+
+        result.range = {
+          ...propResult,
+          source: "propagated",
+        };
+      }
+    }
+
+    
     const substituted = substituteIdentifiersForExplain(symbol.ast, (identifier) => {
       if (symbols.has(identifier)) {
         const dep = evaluateSymbol(identifier);
@@ -665,280 +914,7 @@ export function evaluateYamlDocument(root: Record<string, unknown>, options: Eva
     return result;
   };
 
-  const sampleCache = new Map<string, Float64Array>();
-  const SAMPLES_COUNT = 10000;
-  const uncertaintyCache = new Map<string, boolean>();
-
-  function checkUncertainty(name: string, visiting = new Set<string>()): boolean {
-    if (uncertaintyCache.has(name)) return uncertaintyCache.get(name)!;
-    if (visiting.has(name)) return false;
-    visiting.add(name);
-
-    const symbol = symbols.get(name);
-    if (!symbol) {
-      visiting.delete(name);
-      return false;
-    }
-    if (symbol.type === "const") {
-      const has = symbol.tolerance?.input !== undefined;
-      uncertaintyCache.set(name, has);
-      visiting.delete(name);
-      return has;
-    }
-    if (symbol.type === "expr") {
-      if (symbol.tolerance?.parameterOverrides) {
-        for (const override of Object.values(symbol.tolerance.parameterOverrides)) {
-          if (override.uncertainty) {
-            uncertaintyCache.set(name, true);
-            visiting.delete(name);
-            return true;
-          }
-        }
-      }
-      for (const depName of symbol.dependencies) {
-        if (checkUncertainty(depName, visiting)) {
-          uncertaintyCache.set(name, true);
-          visiting.delete(name);
-          return true;
-        }
-      }
-    }
-    uncertaintyCache.set(name, false);
-    visiting.delete(name);
-    return false;
-  }
-
-  function getOrBuildSamples(name: string, seed: number): Float64Array | undefined {
-    const cacheKey = `${name}_${seed}`;
-    if (sampleCache.has(cacheKey)) return sampleCache.get(cacheKey);
-
-    if (name.startsWith("__array_scale_")) {
-      const depName = name.replace("__array_scale_", "");
-      const depSymbol = symbols.get(depName);
-      const depRange = specToToleranceRange(depSymbol?.tolerance);
-      if (depSymbol?.literalValues?.length && depRange?.tol !== undefined) {
-        const tolVal = Math.abs(depRange.tol);
-        const arr = generateSamplesForInput(
-          1.0,
-          { type: "percent", value: tolVal },
-          { type: "uniform" },
-          SAMPLES_COUNT,
-          seed
-        );
-        sampleCache.set(cacheKey, arr);
-        return arr;
-      }
-      return undefined;
-    }
-
-    const symbol = symbols.get(name);
-    if (!symbol) {
-      const extVal = externalValues.get(name);
-      if (extVal !== undefined) {
-        const arr = new Float64Array(SAMPLES_COUNT);
-        arr.fill(extVal);
-        sampleCache.set(cacheKey, arr);
-        return arr;
-      }
-      return undefined;
-    }
-
-    if (symbol.type === "const") {
-      const depEval = evaluated.get(name);
-      const val = depEval?.value ?? symbol.literalValue ?? 0;
-      if (symbol.tolerance?.input) {
-        const spec = symbol.tolerance.input;
-        const arr = generateSamplesForInput(val, spec.uncertainty, spec.distribution, SAMPLES_COUNT, seed);
-        sampleCache.set(cacheKey, arr);
-        return arr;
-      } else {
-        const arr = new Float64Array(SAMPLES_COUNT);
-        arr.fill(val);
-        sampleCache.set(cacheKey, arr);
-        return arr;
-      }
-    }
-
-    if (symbol.type === "expr" && symbol.ast) {
-      const depEval = evaluated.get(name);
-      const val = depEval?.value ?? 0;
-
-      if (!checkUncertainty(name)) {
-        const arr = new Float64Array(SAMPLES_COUNT);
-        arr.fill(val);
-        sampleCache.set(cacheKey, arr);
-        return arr;
-      }
-
-      const outputSamples = new Float64Array(SAMPLES_COUNT);
-      const parameterOverrides = symbol.tolerance?.parameterOverrides ?? {};
-
-      const depSampleArrays = new Map<string, Float64Array>();
-      for (const depName of symbol.dependencies) {
-        if (parameterOverrides[depName]?.uncertainty) {
-          const depSymbol = symbols.get(depName);
-          const depEval = evaluated.get(depName);
-          const depVal = depEval?.value ?? depSymbol?.literalValue ?? 0;
-          const overrideSpec = parameterOverrides[depName];
-          const arr = generateSamplesForInput(depVal, overrideSpec.uncertainty, overrideSpec.distribution, SAMPLES_COUNT, seed);
-          depSampleArrays.set(depName, arr);
-        } else {
-          const arr = getOrBuildSamples(depName, seed);
-          if (arr) depSampleArrays.set(depName, arr);
-        }
-      }
-
-      const arrayScales = new Map<string, Float64Array>();
-      for (const depName of symbol.dependencies) {
-        const depSymbol = symbols.get(depName);
-        const depRange = specToToleranceRange(depSymbol?.tolerance);
-        if (depSymbol?.literalValues?.length && depRange?.tol !== undefined) {
-          const scaleArr = getOrBuildSamples("__array_scale_" + depName, seed);
-          if (scaleArr) arrayScales.set(depName, scaleArr);
-        }
-      }
-
-      for (let i = 0; i < SAMPLES_COUNT; i++) {
-        const sampleContext: EvaluationContext = {
-          ignoreUnitCompatibility: true,
-          resolveIdentifier: (identifier: string): Quantity | undefined => {
-            if (symbol.parameters.includes(identifier)) return createDimensionlessQuantity(1.0);
-
-            if (depSampleArrays.has(identifier)) {
-              const sVal = depSampleArrays.get(identifier)![i];
-              const depEval = evaluated.get(identifier);
-              const unit = depEval?.outputUnit ?? depEval?.quantity?.displayUnit;
-              const q = unit ? createYamlDataQuantity(sVal, unit) : createQuantity(sVal);
-              return q.ok ? q.value : undefined;
-            }
-
-            const extValue = externalValues.get(identifier);
-            const extUnit = externalUnits.get(identifier);
-            if (extUnit) { const q = createYamlDataQuantity(extValue ?? 1.0, extUnit); if (q.ok) return q.value; }
-            if (extValue !== undefined) { const q = createQuantity(extValue); if (q.ok) return q.value; }
-            return undefined;
-          },
-          resolveArrayIdentifier: (id: string): Quantity[] | undefined => {
-            const base = resolveArrayQuantities(id);
-            if (base && arrayScales.has(id)) {
-              const scale = arrayScales.get(id)![i];
-              return base.map(q => ({ ...q, valueSi: q.valueSi * scale }));
-            }
-            return base;
-          },
-          resolveLookup: (fn, args) => csvLookup(fn, args),
-          resolveFunctionCall: (functionName, args) => {
-            const fnSymbol = symbols.get(functionName);
-            if (!fnSymbol?.ast || !fnSymbol.parameters) return undefined;
-            
-            const boundParameters = new Map<string, Quantity>();
-            fnSymbol.parameters.forEach((param, idx) => {
-              if (idx < args.length) {
-                boundParameters.set(param, args[idx]);
-              }
-            });
-
-            const fnSampleContext: EvaluationContext = {
-              ignoreUnitCompatibility: true,
-              resolveIdentifier: (identifier: string): Quantity | undefined => {
-                const bound = boundParameters.get(identifier);
-                if (bound) return bound;
-
-                const depSamples = getOrBuildSamples(identifier, seed);
-                if (depSamples) {
-                  const sVal = depSamples[i];
-                  const depEval = evaluated.get(identifier);
-                  const unit = depEval?.outputUnit ?? depEval?.quantity?.displayUnit;
-                  const q = unit ? createYamlDataQuantity(sVal, unit) : createQuantity(sVal);
-                  return q.ok ? q.value : undefined;
-                }
-
-                const extValue = externalValues.get(identifier);
-                const extUnit = externalUnits.get(identifier);
-                if (extUnit) { const q = createYamlDataQuantity(extValue ?? 1.0, extUnit); if (q.ok) return q.value; }
-                if (extValue !== undefined) { const q = createQuantity(extValue); if (q.ok) return q.value; }
-                return undefined;
-              },
-              resolveArrayIdentifier: (id: string): Quantity[] | undefined => {
-                const base = resolveArrayQuantities(id);
-                if (base && arrayScales.has(id)) {
-                  const scale = arrayScales.get(id)![i];
-                  return base.map(q => ({ ...q, valueSi: q.valueSi * scale }));
-                }
-                return base;
-              },
-              resolveLookup: (fn, args) => csvLookup(fn, args),
-              resolveFunctionCall: (nn, na) => {
-                return sampleContext.resolveFunctionCall?.(nn, na);
-              }
-            };
-
-            const ev = evaluateExpressionAst(fnSymbol.ast, fnSampleContext);
-            if (!ev.ok) return undefined;
-            let callQuantity = ev.quantity;
-            if (fnSymbol.effectiveUnit) {
-              const output = applyOutputUnit(callQuantity, fnSymbol.effectiveUnit);
-              if (output.ok) callQuantity = output.value.quantity;
-            }
-            return { ok: true, value: callQuantity };
-          }
-        };
-
-        const ev = evaluateExpressionAst(symbol.ast, sampleContext);
-        if (!ev.ok) {
-          outputSamples[i] = NaN;
-          continue;
-        }
-
-        let q = ev.quantity;
-        if (symbol.effectiveUnit) {
-          const out = applyOutputUnit(q, symbol.effectiveUnit);
-          if (out.ok) {
-            outputSamples[i] = out.value.displayValue;
-            continue;
-          }
-        }
-        outputSamples[i] = toDisplayValue(q);
-      }
-
-      sampleCache.set(cacheKey, outputSamples);
-      return outputSamples;
-    }
-
-    return undefined;
-  }
-
   for (const name of symbols.keys()) evaluateSymbol(name);
-
-  // Pass 2: Tolerance propagation via Monte Carlo recursive sampling
-  for (const name of symbols.keys()) {
-    const result = evaluated.get(name);
-    if (!result) continue;
-    const symbol = symbols.get(name);
-    if (!symbol) continue;
-
-    if (checkUncertainty(name)) {
-      const seed = symbol.tolerance?.output?.seed ?? 42;
-      const samples = getOrBuildSamples(name, seed);
-      if (samples) {
-        if (symbol.type === "const") {
-          const sorted = samples.slice().sort();
-          const dist = computeOutputDistribution(sorted);
-          if (result.range) {
-            result.range.distribution = dist;
-          }
-        } else {
-          const method = symbol.tolerance?.output?.method ?? "worst_case";
-          const confidence = symbol.tolerance?.output?.confidence ?? 95;
-          const rangeRes = resultFromSamples(samples, method, result.value ?? 0, confidence);
-          result.range = {
-            ...rangeRes,
-            source: "propagated",
-          };
-        }
-      }
-    }
-  }
   for (const symbol of evaluated.values()) {
     for (const error of symbol.errors) createDiagnostic(diagnostics, symbol.name, symbol.line, "error", error);
     for (const warning of symbol.warnings) createDiagnostic(diagnostics, symbol.name, symbol.line, "warning", warning);

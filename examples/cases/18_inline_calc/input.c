@@ -19,8 +19,8 @@
  */
 
 // @vin  = 24V
-// @r1   = 10kohm
-// @r2   = 22kohm
+// @r1   = 10 kohm
+// @r2   = 22 kohm
 // @r_par = @r1 * @r2 / (@r1 + @r2)
 // @i    = @vin / @r1
 // @p    = @vin * @i

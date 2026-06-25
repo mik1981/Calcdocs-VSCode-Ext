@@ -23,8 +23,12 @@ export interface OutputDistribution {
   p999: number;
   skewness: number;
   kurtosis: number;
-  /** 16 normalised (0‥1) histogram bin heights computed from real MC samples. */
-  bins16?: number[];
+  /** Pre-computed histogram from MC samples. Webview renders counts[] directly. */
+  histogram: {
+    counts: number[];
+    lo: number;
+    hi: number;
+  };
 }
 
 export type FormulaInputNode = {

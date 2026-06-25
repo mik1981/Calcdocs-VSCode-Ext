@@ -103,10 +103,12 @@ CalcDocs evaluates everything live:
 
 ---
 
-## 3️⃣ Interactive Formula Explorer
+## 3️⃣ Interactive Formula Explorer with estimated tolerance propagation
 
-Explore firmware formulas as a live dependency graph directly inside VS Code.
+Explore firmware formulas as a live dependency graph directly inside VS Code.  
+Check whether the measured value matches your expectations.
 
+![Macro Chain Revelation in code](./resources/interactive_tolerance_viewer.gif)  
 ![Macro Chain Revelation in code](./resources/interactive_formula_viewer.gif)
 
 CalcDocs keeps formulas and firmware intrinsically synchronized.
@@ -118,6 +120,7 @@ The same engineering logic can now:
 ✅ be reused during debugging  
 ✅ propagate through dependencies automatically  
 ✅ stay permanently aligned with the firmware implementation  
+✅ visualize real output distributions with Monte Carlo sampling and a new Distribution tab  
 ✅ can also propagate **tolerances** (e.g. `tol`, `min`/`max`) through your YAML formula dependency graph to compute final **min/max ranges**.
 
 No duplicated engineering logic.  
@@ -337,6 +340,7 @@ Full documentation available on GitHub:
 - 👉 [Inline Calculations](https://github.com/mik1981/Calcdocs-VSCode-Extension/blob/main/docs/inline-calculations.md)
 - 👉 [Interactive Formula Viewer](https://github.com/mik1981/Calcdocs-VSCode-Extension/blob/main/docs/interactive-formula-viewer.md)
 - 👉 [Tolerance propagation & formula ranges](https://github.com/mik1981/Calcdocs-VSCode-Extension/blob/main/docs/tolerance-and-ranges.md)
+- 👉 [Probabilistic Modeling Guide](https://github.com/mik1981/Calcdocs-VSCode-Extension/blob/main/docs/probabilistic-modeling-guide.md)
 
 ---
 

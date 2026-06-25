@@ -28,14 +28,14 @@ type FormulaViewModel = {
 };
 
 /**
- * Verifica se c'è contenuto calcolabile sufficiente per aprire la Interactive View.
- * Restituisce false se il file attivo non è rilevante o non contiene formule.
+ * Check if there is enough computable content to open the Interactive View.
+ * Returns false if the active file is not relevant or contains no formulas.
  */
 export function hasInteractiveContent(
   editor: vscode.TextEditor | undefined,
   state: CalcDocsState
 ): boolean {
-  // Nessun editor aperto: controlla se lo stato ha già voci indicizzate
+  // No open editor: check if the state already has indexed entries
   if (!editor || editor.document.uri.scheme !== "file") {
     return Array.from(state.formulaIndex.values()).some(isFormulaLikeEntry);
   }
@@ -46,14 +46,14 @@ export function hasInteractiveContent(
 
   // ── File C/C++ ──────────────────────────────────────────────────────────
   if (isCppLanguage(languageId)) {
-    // Controllo rapido: cerca almeno un'assegnazione @variable = ...
-    // senza eseguire la valutazione completa.
+    // Quick check: look for at least one @variable = ... assignment
+    // without running the full evaluation.
     return /@[A-Za-z_][A-Za-z0-9_]*\s*=/.test(editor.document.getText());
   }
 
   // ── File YAML ───────────────────────────────────────────────────────────
   if (/^ya?ml$/i.test(languageId)) {
-    // Se ci sono già voci indicizzate per questo file, è sufficiente.
+    // If there are already indexed entries for this file, that is sufficient.
     const hasIndexed = Array.from(state.formulaIndex.values())
       .some(e => e._filePath === relativePath && isFormulaLikeEntry(e));
     if (hasIndexed) return true;
@@ -181,14 +181,9 @@ function buildTransientYamlEntries(
       }
       if (evaluated.range) {
         entry.toleranceResult = {
-          min: evaluated.range.min,
-          max: evaluated.range.max,
+          ...evaluated.range,
           source: evaluated.range.source,
-          tol: evaluated.range.tol,
-          nominalValue: evaluated.range.nominalValue,
-          mode: evaluated.range.mode,
-          sigma: evaluated.range.sigma,
-        } as any;
+        };
       }
     }
 
@@ -222,7 +217,7 @@ function buildInlineEntries(
       return src.includes('=') || src.includes('@');
     })
     .map((result): CoreFormulaEntry | null => {
-      // 1. Puliamo l'espressione rimuovendo i caratteri '@'
+      // 1. Clean the expression by removing '@' characters
       const expression = normalizeInlineExpression(result.expression).trim();
 
       // Ricava il nome: usa result.variable se disponibile,
@@ -232,9 +227,9 @@ function buildInlineEntries(
         ? result.variable.replace(/@/g, "").trim()
         : result.source
             .split('=')[0]
-            .replace(/[/@*]/g, " ")   // sostituisce /  @  * con spazio
+            .replace(/[/@*]/g, " ")   // replaces /  @  * with space
             .trim()
-            .replace(/\s+/g, "_")     // normalizza spazi interni
+            .replace(/\s+/g, "_")     // normalizes internal spaces
             || `inline_${result.line}`;
 
       const key = rawKey.replace(/@/g, "").trim();
@@ -244,8 +239,8 @@ function buildInlineEntries(
       const isPureConstant = /^-?\d+(\.\d+)?([eE][+-]?\d+)?(\s*[A-Za-z%][A-Za-z0-9_%/^*.-]*)?$/.test(expression);
       const exprType = isPureConstant ? "const" : "expr";
 
-      // Per costanti pure (es. "5 mm", "9.81 m/s2") estrai l'unità dall'espressione
-      // se l'evaluator non l'ha già fornita in outputUnit.
+      // For pure constants (e.g. "5 mm", "9.81 m/s2") extract the unit from the expression
+      // if the evaluator has not already provided it in outputUnit.
       let inferredUnit = result.outputUnit;
       if (isPureConstant && !inferredUnit) {
         const constUnitMatch = expression.match(
@@ -259,7 +254,7 @@ function buildInlineEntries(
       return {
         key,
         unit: inferredUnit,
-        // Se è una costante numerica pura, non passiamo la formula stringa per evitare che il motore la blocchi
+        // If it is a pure numeric constant, do not pass the formula string to avoid the engine blocking it
         formula: exprType === "const" ? undefined : expression,
         exprType,
         steps: [],
@@ -284,9 +279,9 @@ function buildFormulaViewModel(
       ? path.relative(state.workspaceRoot, editor.document.uri.fsPath)
       : undefined;
 
-  // ── Priorità 1: file C/C++ con calc inline nei commenti.
+  // ── Priority 1: C/C++ file with inline calc in comments.
   // Le entry inline vengono aggiunte sopra al state completo (che contiene
-  // tutti i simboli indicizzati: #define, YAML, ecc.) così i riferimenti
+  // all indexed symbols: #define, YAML, etc.) so references
   // @ADC_MAX, @NTC_R ecc. vengono risolti come input interattivi.
   if (editor && isCppLanguage(editor.document.languageId)) {
     const inlineEntries = buildInlineEntries(editor, state);
@@ -304,7 +299,7 @@ function buildFormulaViewModel(
   const allIndexedEntries = Array.from(state.formulaIndex.values())
     .filter(isFormulaLikeEntry);
 
-  // ── Priorità 2: entry indicizzate del file corrente (non-C, o C senza inline)
+  // ── Priority 2: indexed entries of the current file (non-C, or C without inline)
   if (relativePath) {
     const sameFileEntries = allIndexedEntries.filter(
       (entry) => entry._filePath === relativePath
@@ -320,7 +315,7 @@ function buildFormulaViewModel(
     }
   }
 
-  // ── Priorità 3: YAML aperto direttamente nell'editor (transient parse)
+  // ── Priority 3: YAML opened directly in the editor (transient parse)
   if (isYamlEditor(editor)) {
     const transientEntries = buildTransientYamlEntries(editor, state);
     if (transientEntries.length > 0) {
@@ -339,7 +334,7 @@ function buildFormulaViewModel(
     }
   }
 
-  // ── Priorità 4: tutte le entry indicizzate del workspace
+  // ── Priority 4: all indexed entries of the workspace
   if (allIndexedEntries.length > 0) {
     const engine = new InteractiveFormulaEngine(state);
     return {
@@ -349,8 +344,9 @@ function buildFormulaViewModel(
     };
   }
 
-  // ── Priorità 5: inline calcs generici per qualsiasi tipo di file
-  if (editor) {
+  // ── Priority 5: generic inline calcs for C/C++ files (non YAML)
+  //     YAML files already have their handling in Priorities 2/3 via formulaIndex.
+  if (editor && !isYamlEditor(editor)) {
     const inlineEntries = buildInlineEntries(editor, state);
     if (inlineEntries.length > 0) {
       const transientState = cloneStateWithFormulaEntries(state, inlineEntries);
@@ -369,6 +365,70 @@ function buildFormulaViewModel(
     formulas: [],
     engine,
   };
+}
+
+function buildLoadingHtml(
+  webview: vscode.Webview,
+  nonce: string
+): string {
+  const cspSource = webview.cspSource;
+  const csp = [
+    "default-src 'none'",
+    `style-src ${cspSource} 'unsafe-inline'`,
+    `script-src 'nonce-${nonce}' ${cspSource}`,
+  ].join("; ");
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="${csp}">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  height: 100vh; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 18px;
+  background: var(--vscode-editor-background);
+  color: var(--vscode-editor-foreground);
+  font-family: var(--vscode-font-family, "Segoe UI", system-ui, sans-serif);
+  font-size: var(--vscode-font-size, 13px);
+}
+.logo { font-size: 1.05rem; font-weight: 700; font-family: var(--vscode-editor-font-family, Consolas, monospace); color: var(--vscode-focusBorder, #007acc); letter-spacing: 0.04em; }
+.stage { font-size: 0.82rem; color: var(--vscode-descriptionForeground); min-height: 1.2em; text-align: center; }
+.bar-track { width: 280px; height: 4px; background: rgba(128,128,128,0.18); border-radius: 2px; overflow: hidden; position: relative; }
+.bar-fill { position: absolute; top: 0; left: 0; bottom: 0; width: 0%; background: var(--vscode-focusBorder, #007acc); border-radius: 2px; transition: width 400ms cubic-bezier(0.4, 0, 0.2, 1); }
+.detail { font-size: 0.72rem; color: var(--vscode-descriptionForeground); opacity: 0.55; text-align: center; max-width: 280px; line-height: 1.4; }
+</style>
+</head>
+<body>
+<div class="logo">CalcDocs</div>
+<div class="stage" id="stage">Initializing…</div>
+<div class="bar-track"><div class="bar-fill" id="bar"></div></div>
+<div class="detail" id="detail">Monte Carlo calculation in progress…</div>
+<script nonce="${nonce}">
+const stages = [
+  { pct: 15, label: "Building dependency tree…", detail: "" },
+  { pct: 40, label: "Starting Monte Carlo simulation…", detail: "N samples per input" },
+  { pct: 70, label: "Computing output distribution…", detail: "uncertainty propagation" },
+  { pct: 88, label: "Computing statistics (μ, σ, percentiles)…", detail: "almost ready" },
+];
+let idx = 0;
+const stageEl = document.getElementById("stage");
+const barEl = document.getElementById("bar");
+const detailEl = document.getElementById("detail");
+const delays = [300, 800, 1400, 2000];
+function advance() {
+  if (idx >= stages.length) return;
+  const s = stages[idx++];
+  if (stageEl) stageEl.textContent = s.label;
+  if (barEl) barEl.style.width = s.pct + "%";
+  if (detailEl && s.detail) detailEl.textContent = s.detail;
+  if (idx < stages.length) setTimeout(advance, delays[idx - 1] || 1200);
+}
+setTimeout(advance, 100);
+</script>
+</body>
+</html>`;
 }
 
 function buildWebviewHtml(
@@ -425,6 +485,9 @@ export function openInteractiveView(
       localResourceRoots: [vscode.Uri.file(path.join(context.extensionPath, "resources"))],
     }
   );
+
+  // ── Show the loading screen immediately (before heavy computation) ──
+  panel.webview.html = buildLoadingHtml(panel.webview, generateNonce());
 
   let viewModel: FormulaViewModel = buildFormulaViewModel(
     vscode.window.activeTextEditor,
@@ -492,7 +555,17 @@ export function openInteractiveView(
     );
   }
 
-  refreshHtml(vscode.window.activeTextEditor);
+  // ── Set the actual HTML using the already computed viewModel (avoids double compute) ──
+  {
+    const nonce = generateNonce();
+    const activeEditor = vscode.window.activeTextEditor;
+    const initialData: CalcDocsInitialData = {
+      formulas: viewModel.formulas,
+      selectedFormulaId,
+      activeFileName: activeEditor?.document.fileName ?? "",
+    };
+    panel.webview.html = buildWebviewHtml(panel.webview, context.extensionPath, nonce, initialData);
+  }
 
   const activeEditorWatcher = vscode.window.onDidChangeActiveTextEditor((editor) => {
     if (!editor) {

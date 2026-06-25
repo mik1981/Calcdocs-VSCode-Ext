@@ -18,7 +18,7 @@ import { shouldRenderInlineCalcGhostForResult } from "../core/ghostPolicy";
 
 const CODELENS_MAX_TITLE_LEN = 160;
 const CODELENS_SOURCE_PREVIEW_LEN = 80;
-const INLINE_CALC_GHOST_LANGUAGES = new Set(["c", "cpp", "plaintext", "yaml"]);
+const INLINE_CALC_GHOST_LANGUAGES = new Set(["c", "cpp"]);
 
 function clampText(text: string, max: number): string {
   if (text.length <= max) {
@@ -197,9 +197,6 @@ export function registerInlineCalcCodeLensProvider(
         { language: "cpp", scheme: "file" },
         { language: "c", scheme: "untitled" },
         { language: "cpp", scheme: "untitled" },
-        { language: "plaintext", scheme: "file" },
-        { language: "yaml", scheme: "file" },
-        { language: "yaml", scheme: "untitled" },
       ],
       provider
     )

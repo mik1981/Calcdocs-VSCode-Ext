@@ -4,7 +4,7 @@ import { evaluateInlineCalcs } from "./inlineCalc";
 import type { InlineCalcDiagnosticsLevel } from "./config";
 import { CalcDocsState } from "./state";
 
-const SUPPORTED_INLINE_LANGUAGES = new Set(["c", "cpp", "plaintext", "yaml"]);
+const SUPPORTED_INLINE_LANGUAGES = new Set(["c", "cpp"]);
 
 function isSupportedInlineDocument(document: vscode.TextDocument): boolean {
   if (!SUPPORTED_INLINE_LANGUAGES.has(document.languageId)) {

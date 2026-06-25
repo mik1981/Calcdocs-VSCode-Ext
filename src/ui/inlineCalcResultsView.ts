@@ -129,7 +129,12 @@ export class InlineCalcResultsViewProvider
       return this.getFormulaItems(this.activeDocument);
     }
 
-    // Otherwise, treat as C/C++ inline calc file
+    // Inline calculations are only for C/C++ files
+    if (this.activeDocument.languageId !== "c" && this.activeDocument.languageId !== "cpp") {
+      items.push(createInfoItem("Inline calculations are only available in C/C++ files"));
+      return items;
+    }
+
     const results = evaluateInlineCalcs(
       this.activeDocument.getText(),
       this.state,
