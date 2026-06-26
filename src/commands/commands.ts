@@ -3,7 +3,6 @@ import * as path from "path";
 import * as vscode from "vscode";
 
 import { clearCppParserCache } from "../core/cppParser";
-import { writeBackYaml } from "../core/analysis";
 import { getConfig } from "../core/config";
 import { CalcDocsState, SymbolDefinitionLocation } from "../core/state";
 import { AnalysisScheduler } from "../infra/watchers";
@@ -24,7 +23,7 @@ type RegisterCommandsParams = {
 
 /**
  * Registers all extension commands exposed in package.json.
- * Example: "calcdocs.forceRefresh" runs analysis and writes computed values back to YAML.
+ * Example: "calcdocs.recompute" runs analysis and writes computed values back to YAML.
  */
 export function registerCommands({
   context,
@@ -34,21 +33,16 @@ export function registerCommands({
   formulaRegistry,
 }: RegisterCommandsParams): void {
   context.subscriptions.push(
-    vscode.commands.registerCommand("calcdocs.forceRefresh", async () => {
+    vscode.commands.registerCommand("calcdocs.recompute", async () => {
       if (!state.enabled) {
         await vscode.window.showWarningMessage(
-          localize("command.forceRefresh.warningDisabled")
+          localize("command.recompute.warningDisabled")
         );
         return;
       }
 
       await runAnalysisAndRefreshUi();
-
-      if (state.lastYamlPath && state.lastYamlRaw) {
-        await writeBackYaml(state, state.lastYamlPath, state.lastYamlRaw);
-      }
-
-      await vscode.window.showInformationMessage("CalcDocs updated.");
+      await vscode.window.showInformationMessage("CalcDocs analysis updated.");
     }),
 
     vscode.commands.registerCommand("calcdocs.generateFormulaHeader", async () => {
@@ -240,7 +234,7 @@ export function registerCommands({
     const picks: Array<
       vscode.QuickPickItem & {
         action:
-          | "forceRefresh"
+          | "recompute"
           | "restart"
           | "toggleEnabled"
           | "setInvasiveness"
@@ -256,9 +250,9 @@ export function registerCommands({
       }
     > = [
       {
-        label: "$(refresh) Force Refresh",
-        description: "Full analysis + YAML write-back (Ctrl+Alt+R)",
-        action: "forceRefresh",
+        label: "$(refresh) Force Recompute",
+        description: "Full analysis refresh (Ctrl+Alt+R)",
+        action: "recompute",
       },
       {
         label: "$(sync~spin) Restart CalcDocs",
@@ -346,8 +340,8 @@ export function registerCommands({
     }
 
     switch (picked.action) {
-      case "forceRefresh":
-        await vscode.commands.executeCommand("calcdocs.forceRefresh");
+      case "recompute":
+        await vscode.commands.executeCommand("calcdocs.recompute");
         return;
       case "restart":
         clearCppParserCache();
@@ -459,21 +453,37 @@ async function openInlineCalcGuide(
     }
   );
 
-const locale = vscode.env.language.toLowerCase();
-  const guideFileName = locale.startsWith('it') ? 'inline-calc-guide_it.html' : 'inline-calc-guide_en.html';
-  const htmlUri = vscode.Uri.joinPath(
-    context.extensionUri,
-    "resources",
-    guideFileName
-  );
+  const locale = vscode.env.language.toLowerCase();
 
-  try {
-    const htmlContent = await fsp.readFile(htmlUri.fsPath, "utf8");
-    panel.webview.html = htmlContent;
-  } catch {
-    panel.webview.html = `<!doctype html>
-<html><body><h2>CalcDocs Guide</h2><p>Guide file not found.</p></body></html>`;
+  // es: "it", "en", "it-it" → ridotto a "it"
+  const lang = locale.split("-")[0];
+
+  const tryFiles = [
+    `inline-calc-guide_${lang}.html`,
+    "inline-calc-guide_en.html",
+  ];
+
+  let htmlContent: string | undefined;
+
+  for (const fileName of tryFiles) {
+    const htmlUri = vscode.Uri.joinPath(
+      context.extensionUri,
+      "resources",
+      fileName
+    );
+
+    try {
+      htmlContent = await fsp.readFile(htmlUri.fsPath, "utf8");
+      break; // trovato → stop
+    } catch {
+      // file non esiste → continua
+    }
   }
+
+  panel.webview.html =
+    htmlContent ??
+    `<!doctype html>
+<html><body><h2>CalcDocs Guide</h2><p>Guide file not found.</p></body></html>`;
 }
 
 /**

@@ -1,3 +1,4 @@
+import * as fsp from "fs/promises";
 import * as vscode from "vscode";
 
 import { registerCommands } from "./commands/commands";
@@ -146,6 +147,50 @@ export function registerGuideCommands(context: vscode.ExtensionContext): void {
       
       // Fallback: apre la guida interattiva come pannello
       GuideWebviewProvider.openAsPanel(context);
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("calcdocs.openGuideYaml", async () => {
+      const panel = vscode.window.createWebviewPanel(
+        "calcdocsYamlGuide",
+        "CalcDocs YAML Guide",
+        vscode.ViewColumn.Beside,
+        {
+          enableFindWidget: true,
+          retainContextWhenHidden: true,
+        }
+      );
+
+      const locale = vscode.env.language.toLowerCase();
+      const lang = locale.split("-")[0];
+
+      const tryFiles = [
+        `formula-yaml-guide_${lang}.html`,
+        "formula-yaml-guide_en.html",
+      ];
+
+      let htmlContent: string | undefined;
+
+      for (const fileName of tryFiles) {
+        const htmlUri = vscode.Uri.joinPath(
+          context.extensionUri,
+          "resources",
+          fileName
+        );
+
+        try {
+          htmlContent = await fsp.readFile(htmlUri.fsPath, "utf8");
+          break;
+        } catch {
+          // file non esiste → continua
+        }
+      }
+
+      panel.webview.html =
+        htmlContent ??
+        `<!doctype html>
+<html><body><h2>CalcDocs YAML Guide</h2><p>Guide file not found.</p></body></html>`;
     })
   );
 
@@ -327,31 +372,87 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     runtimeStatusBar.hide();
   };
 
+  function refreshUi(
+    state: ReturnType<typeof createCalcDocsState>,
+    options: {
+      editor?: vscode.TextEditor;
+      refreshDiagnostics?: boolean;
+    } = {}
+  ): void {
+    const { editor, refreshDiagnostics = true } = options;
+
+    refreshRuntimeStatus();
+    invalidatePriorityCache();
+
+    codeLensProvider.refresh();
+    inlineCalcCodeLensProvider.refresh();
+    inlineCalcResultsViewProvider.refresh();
+
+    if (refreshDiagnostics) {
+      refreshInlineCalcDiagnosticsForVisibleEditors(state);
+      diagnosticsProvider.mergeForVisibleEditors();
+    }
+
+    if (editor && state.enabled && state.inlineGhostEnabled) {
+      ghostProvider.update(editor);
+    }
+
+    if (editor && state.enabled) {
+      formulaOutlineProvider.refreshDecorations();
+    }
+
+    const activeEditor = editor ?? vscode.window.activeTextEditor;
+    const hasFormulas =
+      state.formulaIndex.size > 0 || isActiveFormulaYamlWithEntries(activeEditor, state);
+    void vscode.commands.executeCommand(
+      "setContext",
+      "calcdocs.hasFormulas",
+      hasFormulas
+    );
+
+    const isYamlActive =
+      !!activeEditor &&
+      activeEditor.document.languageId === "yaml" &&
+      activeEditor.document.fileName.includes("formula");
+    void vscode.commands.executeCommand(
+      "setContext",
+      "calcdocs.mode",
+      isYamlActive ? "yaml" : "inline"
+    );
+  }
+
+  function isActiveFormulaYamlWithEntries(
+    editor: vscode.TextEditor | undefined,
+    state: ReturnType<typeof createCalcDocsState>
+  ): boolean {
+    if (!editor) {
+      return false;
+    }
+
+    const file = editor.document.fileName.toLowerCase();
+    const isYaml = file.endsWith(".yaml") || file.endsWith(".yml");
+    if (!isYaml || !file.includes("formula")) {
+      return false;
+    }
+
+    return state.formulaIndex.size > 0;
+  }
+
   /**
    * Esegue l'analisi completa del workspace e sincronizza tutti i componenti UI
    * che dipendono dallo stato corrente.
    */
   const runAnalysisAndRefreshUi = async (): Promise<void> => {
     try {
-      // Se l'estensione è disabilitata, pulisci lo stato e ferma i provider
       if (!state.enabled) {
         clearComputedState(state);
         clearDiagnostics(state);
         clearInlineCalcDiagnostics(state);
-        refreshRuntimeStatus();
-        invalidatePriorityCache();
-        codeLensProvider.refresh();
-        inlineCalcCodeLensProvider.refresh();
-        inlineCalcResultsViewProvider.refresh();
-        diagnosticsProvider.mergeForVisibleEditors();
-        const activeEditor = vscode.window.activeTextEditor;
-        if (activeEditor) {
-          ghostProvider.update(activeEditor);
-        }
+
+        refreshUi(state);
         return;
       }
 
-      // Esegui l'analisi del workspace
       await runAnalysis(state);
 
       const activeEditor = vscode.window.activeTextEditor;
@@ -359,23 +460,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         await runActiveCppFileAnalysis(state, activeEditor.document.uri.fsPath);
       }
 
-      // Aggiorna tutti i componenti UI
-      refreshRuntimeStatus();
-      invalidatePriorityCache();
-      codeLensProvider.refresh();
-      inlineCalcCodeLensProvider.refresh();
-      inlineCalcResultsViewProvider.refresh();
-      refreshInlineCalcDiagnosticsForVisibleEditors(state);
-      diagnosticsProvider.mergeForVisibleEditors();
-      if (activeEditor) {
-        ghostProvider.update(activeEditor);
-        formulaOutlineProvider.refreshDecorations();
-      }
+      refreshUi(state, { editor: activeEditor });
+
     } catch (error: unknown) {
       const message = getErrorMessage(error);
       state.output.warn(`[runAnalysisAndRefreshUi] errore inatteso: ${message}`);
     }
   };
+
 
   const runActiveCppAnalysisAndRefreshUi = async (
     editor: vscode.TextEditor | undefined
@@ -386,14 +478,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
 
       await runActiveCppFileAnalysis(state, editor.document.uri.fsPath);
-      refreshRuntimeStatus();
-      invalidatePriorityCache();
-      codeLensProvider.refresh();
-      inlineCalcCodeLensProvider.refresh();
-      inlineCalcResultsViewProvider.refresh();
-      refreshInlineCalcDiagnosticsForVisibleEditors(state);
-      diagnosticsProvider.mergeForVisibleEditors();
-      ghostProvider.update(editor);
+
+      refreshUi(state, { editor });
+
     } catch (error: unknown) {
       const message = getErrorMessage(error);
       state.output.warn(`[runActiveCppAnalysisAndRefreshUi] errore inatteso: ${message}`);
@@ -449,26 +536,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Aggiorna i CodeLens quando un documento viene modificato
   context.subscriptions.push(
     vscode.workspace.onDidChangeTextDocument((event) => {
-      if (!state.enabled) {
-        return;
-      }
+      if (!state.enabled) return;
 
-      codeLensProvider.refresh();
-      inlineCalcCodeLensProvider.refresh();
       inlineCalcResultsViewProvider.notifyDocumentChanged(event.document);
-      refreshInlineCalcDiagnosticsForDocument(event.document, state);
-      diagnosticsProvider.mergeDiagnosticsForUri(event.document.uri);
-
-      const isYamlDocument =
-        (event.document.languageId === "yaml" || event.document.languageId === "yml") &&
-        (event.document.uri.scheme === "file" || event.document.uri.scheme === "untitled");
-      if (isYamlDocument) {
-        scheduler?.schedule(200);
-      }
 
       const editor = vscode.window.activeTextEditor;
       if (editor && event.document === editor.document) {
-        ghostProvider.update(editor);
+        refreshUi(state, { editor, refreshDiagnostics: true });
+      }
+
+      const isYamlDocument =
+        (event.document.languageId === "yaml" || event.document.languageId === "yml");
+
+      if (isYamlDocument) {
+        scheduler?.schedule(200);
       }
     })
   );
@@ -477,32 +558,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.window.onDidChangeActiveTextEditor((editor) => {
       inlineCalcResultsViewProvider.setActiveEditor(editor);
       inlineCalcCodeLensProvider.refresh();
+
       if (editor) {
-        refreshInlineCalcDiagnosticsForDocument(editor.document, state);
-        diagnosticsProvider.mergeDiagnosticsForUri(editor.document.uri);
-        ghostProvider.update(editor);
+        refreshUi(state, { editor });
       }
+
       void runActiveCppAnalysisAndRefreshUi(editor);
     })
   );
 
   context.subscriptions.push(
     vscode.workspace.onDidSaveTextDocument((document) => {
-      const activeEditor = vscode.window.activeTextEditor;
-      if (!activeEditor) {
-        return;
-      }
-
-      if (activeEditor.document.uri.toString() !== document.uri.toString()) {
-        return;
-      }
+      const editor = vscode.window.activeTextEditor;
+      if (!editor) return;
+      if (editor.document.uri.toString() !== document.uri.toString()) return;
 
       inlineCalcResultsViewProvider.notifyDocumentChanged(document);
-      inlineCalcCodeLensProvider.refresh();
-      refreshInlineCalcDiagnosticsForDocument(document, state);
-      diagnosticsProvider.mergeDiagnosticsForUri(document.uri);
-      ghostProvider.update(activeEditor);
-      void runActiveCppAnalysisAndRefreshUi(activeEditor);
+
+      refreshUi(state, { editor });
+
+      void runActiveCppAnalysisAndRefreshUi(editor);
     })
   );
 
@@ -581,7 +656,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       inlineCalcResultsViewProvider.refresh();
       refreshInlineCalcDiagnosticsForVisibleEditors(state);
       const activeEditor = vscode.window.activeTextEditor;
-      if (activeEditor) {
+      if (activeEditor && state.inlineGhostEnabled ) {
         ghostProvider.update(activeEditor);
       }
 

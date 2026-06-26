@@ -24,22 +24,6 @@ SUM_UNIFORM:
   unit: count
   propagation: monte_carlo
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 SQUARE_UNIFORM:
   formula: A * A
   unit: count

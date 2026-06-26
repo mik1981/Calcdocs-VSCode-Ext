@@ -60,7 +60,7 @@
   "config.thousandsSeparator.narrowNoBreakSpace": "Narrow No-Break Space (U+202F)",
   "config.thousandsSeparator": "Thousands separator for formatted numbers.",
 
-  "command.forceRefresh.title": "CalcDocs: Force Formula Refresh",
+  "command.recompute.title": "CalcDocs: Recompute Analysis",
   "command.setScanInterval.title": "CalcDocs: Set Scan Interval",
   "command.toggleEnabled.title": "CalcDocs: Toggle Enable/Disable",
   "command.toggleGhostValues.title": "CalcDocs: Toggle Ghost Values",

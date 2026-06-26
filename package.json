@@ -2,7 +2,7 @@
   "name": "calcdocs-vscode-extension",
   "displayName": "CalcDocs - C/C++ Constants & Formula Evaluator",
   "description": "%extension.description%",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "publisher": "convergo-dev",
   "repository": {
     "type": "git",
@@ -357,8 +357,8 @@
         "icon": "$(file-code)"
       },
       {
-        "command": "calcdocs.forceRefresh",
-        "title": "%command.forceRefresh.title%"
+        "command": "calcdocs.recompute",
+        "title": "%command.recompute.title%"
       },
       {
         "command": "calcdocs.setScanInterval",
@@ -395,7 +395,7 @@
       {
         "command": "calcdocs.inlineCalc.openGuide",
         "title": "%command.inlineCalc.openGuide.title%",
-        "icon": "resources/guide_icon.svg"
+        "icon": "$(book)"
       },
       {
         "command": "calcdocs.openInteractiveView",
@@ -409,7 +409,12 @@
       {
         "command": "calcdocs.openGuide",
         "title": "CalcDocs: Open Interactive Guide",
-        "icon": "resources/guide_icon.svg"
+        "icon": "$(book)"
+      },
+      {
+        "command": "calcdocs.openGuideYaml",
+        "title": "Open YAML Formula Guide",
+        "icon": "$(notebook)"
       }
     ],
     "menus": {
@@ -435,6 +440,11 @@
           "command": "calcdocs.openGuide",
           "when": "view == calcdocs.inlineCalcResults && resourceExtname =~ /\\.(yaml|yml)$/ && formulaFileNames",
           "group": "navigation@10"
+        },
+        {
+          "command": "calcdocs.openGuideYaml",
+          "when": "view == calcdocs.inlineCalcResults && calcdocs.mode == yaml",
+          "group": "navigation@1"
         }
       ]
     },
@@ -464,7 +474,7 @@
         "mac": "cmd+alt+m"
       },
       {
-        "command": "calcdocs.forceRefresh",
+        "command": "calcdocs.recompute",
         "key": "ctrl+alt+r",
         "mac": "cmd+alt+r"
       },

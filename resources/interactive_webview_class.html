@@ -2032,8 +2032,12 @@ function requestEvaluation(changedId) {
 /* ─── Apply evaluation result ─────────────────────────────────────────────── */
 function applyResult(msg) {
   hideLoading();
-  const focusedName = document.activeElement && document.activeElement.dataset
-    ? document.activeElement.dataset.name : null;
+  const activeEl     = document.activeElement;
+  const focusedName  = activeEl && activeEl.dataset && activeEl.dataset.name
+    ? activeEl.dataset.name : null;
+  const focusedSelS  = (focusedName && activeEl instanceof HTMLInputElement) ? activeEl.selectionStart : null;
+  const focusedSelE  = (focusedName && activeEl instanceof HTMLInputElement) ? activeEl.selectionEnd   : null;
+  const focusedVal   = (focusedName && activeEl instanceof HTMLInputElement) ? activeEl.value : null;
 
   values      = msg.values      || {};
   units       = msg.units       || {};
@@ -2049,7 +2053,26 @@ function applyResult(msg) {
 
   if (focusedName) {
     const inp = findInput(focusedName);
-    if (inp) { inp.focus(); inp.selectionStart = inp.selectionEnd = inp.value.length; }
+    if (inp) {
+      // Risali gli antenati .node-card e rimuovi "collapsed" forzatamente,
+      // così l'input è sempre visibile (il re-render può aver richiuso i nodi).
+      let el = inp.parentElement;
+      while (el) {
+        if (el.classList && el.classList.contains("node-card")) {
+          el.classList.remove("collapsed");
+          // Aggiorna openNodes in modo che il nodo rimanga aperto anche al prossimo render
+          const key = el.dataset.node;
+          if (key) openNodes.add(key);
+        }
+        el = el.parentElement;
+      }
+      inp.focus();
+      // Ripristina posizione cursore/selezione
+      const len = inp.value.length;
+      const s = focusedSelS !== null ? Math.min(focusedSelS, len) : len;
+      const e = focusedSelE !== null ? Math.min(focusedSelE, len) : len;
+      try { inp.setSelectionRange(s, e); } catch(_) {}
+    }
   }
 }
 

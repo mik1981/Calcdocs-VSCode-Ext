@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>CalcDocs Guide: YAML Formulas</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: transparent;
+      --text: #d4d4d4;
+      --muted: #9da5b4;
+      --card: rgba(127, 127, 127, 0.12);
+      --border: rgba(127, 127, 127, 0.35);
+      --accent: #4fc1ff;
+      --warn: #d7ba7d;
+      --err: #f48771;
+      --ok: #8bc34a;
+    }
+    body {
+      margin: 0;
+      padding: 20px;
+      font-family: "Segoe UI", "Arial", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    h1, h2, h3 {
+      margin: 0 0 10px;
+      color: var(--accent);
+    }
+    h1 { font-size: 1.4rem; }
+    h2 { margin-top: 22px; font-size: 1.1rem; }
+    h3 { margin-top: 14px; font-size: 1rem; }
+    p, li { color: var(--text); }
+    .muted { color: var(--muted); }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px;
+      margin-top: 12px;
+    }
+    code {
+      background: rgba(127, 127, 127, 0.18);
+      border-radius: 4px;
+      padding: 1px 5px;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 0.95em;
+    }
+    pre {
+      margin: 0;
+      overflow-x: auto;
+      white-space: pre;
+    }
+    .tag {
+      display: inline-block;
+      margin-right: 8px;
+      border-radius: 999px;
+      padding: 2px 8px;
+      border: 1px solid var(--border);
+      font-size: 0.82rem;
+      color: var(--muted);
+    }
+    .ok { color: var(--ok); }
+    .warn { color: var(--warn); }
+    .err { color: var(--err); }
+  </style>
+</head>
+<body>
+  <h1>YAML Formulas Guide</h1>
+  <p class="muted">Structured formula definitions for CalcDocs.</p>
+
+  <h2>1) Basic structure</h2>
+  <div class="card">
+<pre><code>ADC_MAX:
+  type: const
+  value: 4095
+  unit: count
+
+R_PULLUP:
+  type: const
+  value: 10
+  unit: kohm
+
+NTC_ADC:
+  type: expr
+  expr: ADC_MAX * NTC_R / (R_PULLUP + NTC_R)
+  unit: count
+  value: auto</code></pre>
+    <p><span class="tag">type: const</span> fixed scalar value</p>
+    <p><span class="tag">type: expr</span> expression with dependencies</p>
+    <p><span class="tag">type: lookup</span> tabular value from CSV (direct or interpolated)</p>
+  </div>
+
+  <h2>2) Dependency resolution</h2>
+  <div class="card">
+    <p>CalcDocs builds a dependency graph and resolves symbols in topological order.</p>
+    <ul>
+      <li><span class="err">Error</span> if a symbol is undefined.</li>
+      <li><span class="err">Error</span> if a circular dependency is found.</li>
+      <li><span class="warn">Warning</span> if a formula depends on ambiguous C/C++ conditional symbols.</li>
+    </ul>
+  </div>
+
+  <h2>3) Units and conversions</h2>
+  <div class="card">
+    <p>Compatible units can be mixed freely when dimensions match:</p>
+<pre><code>PRESSURE_OK:
+  type: expr
+  expr: 100 bar + 10 kPa
+  unit: atm    # valid conversion chain bar -> Pa <- kPa -> atm</code></pre>
+    <p class="muted">Automatic conversion is applied only when strictly necessary.</p>
+    <p>Incompatible sums/subtractions are rejected:</p>
+<pre><code>BAD_SUM:
+  type: expr
+  expr: 10 ohm + 3 V   # error</code></pre>
+  </div>
+
+  <h2>4) CSV lookup formulas</h2>
+  <div class="card">
+<pre><code>NTC_R:
+  type: lookup
+  table: ntc_10k_table.csv
+  row: 25
+  lookupColumn: temp_c
+  valueColumn: resistance_ohm
+  interpolation: linear
+  unit: ohm</code></pre>
+    <p>Equivalent expression form:</p>
+<pre><code>expr: csv("ntc_10k_table.csv", 25, "temp_c", "resistance_ohm", "linear")</code></pre>
+  </div>
+
+  <h2>5) Hover and explain mode</h2>
+  <div class="card">
+    <p>Hover includes:</p>
+    <ul>
+      <li>computed value and final output unit</li>
+      <li>expanded formula</li>
+      <li>resolved dependencies (with value + unit when available)</li>
+      <li>step-by-step explain chain</li>
+    </ul>
+<pre><code>= 4095 * 10 / (10000 + 10)
+= 4095 * 10 / 10010
+= 4.0909090909</code></pre>
+  </div>
+
+  <h2>6) C/C++ unit extraction</h2>
+  <div class="card">
+<pre><code>#define R_PULLUP 10000 // ohm
+const float VREF = 3.3; // V</code></pre>
+    <p>CalcDocs imports detected units and enriches YAML symbols. Missing YAML entries are suggested in diagnostics.</p>
+  </div>
+
+  <h2>7) Supported units (including SI prefixes)</h2>
+  <div class="card">
+    <p>Units are parsed from <code>src/engine/units.ts</code>.</p>
+    <p class="muted">Key rule: conversions between units are only allowed when the <b>dimensions</b> match.</p>
+
+    <h3>7.1) SI / engineering prefixes</h3>
+    <pre><code>prefixes: q, r, y, z, a, f, p, n, u, m, c, d, da, h, k, M, G, T
+example: mV, kOhm, uA, MHz</code></pre>
+
+    <h3>7.2) Composite units</h3>
+    <pre><code>V/m
+m/s
+N*m
+W/(m*K)
+m2/s
+A/mm2
+Ohm^2</code></pre>
+
+    <h3>7.3) Common families</h3>
+    <ul>
+      <li><b>time & frequency</b>: <code>s, min, h, day, Hz</code></li>
+      <li><b>length</b>: <code>m, in, ft, yd, mi, nmi</code></li>
+      <li><b>mass</b>: <code>g, kg, lb, oz, st, slug</code></li>
+      <li><b>force/pressure</b>: <code>N, Pa, bar, atm, psi</code></li>
+      <li><b>energy/power</b>: <code>J, W, hp, BTU, Wh</code></li>
+      <li><b>electrical</b>: <code>V, A, Ohm, F, H, S</code></li>
+      <li><b>thermo</b>: <code>K, degC, degF, R</code></li>
+    </ul>
+  </div>
+</body>
+</html>

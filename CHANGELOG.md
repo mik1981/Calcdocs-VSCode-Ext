@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.3.6] - 06/xx/2026
+
+- Dynamic Formulas view: Implemented the new interactive visualization.
+- Guide icons: Added visual indicators for writing YAML formulas and inline calculations.
+- Interactive formula viewer: Fixed the focus behavior on edited values.
+- Documentation: Updated readme.md with the latest changes.
+- Obsolete code: Deleted outdated code related to writeback YAML.
+- Dual-language support: Temporarily disabled due to high maintenance overhead.
+
+### Upcoming Features:
+
+- Visual dependency graph
+- Fixed-point Analyzer (Q15/Q31)
+- Improve webview for tolerance model propagation
+- Interactive WebView-based formula builder to guide non-technical users without requiring raw text editing
+- Table formula support
+
 ## [0.3.5] - 06/25/2026
 
 - Evaluated YAML formulas in integration tests (CSV-driven) to validate `formula*.yaml` symbols (e.g. case_14_complex_formulas)
@@ -9,14 +26,6 @@
 - Extended OutputDistribution to expose bins16 for accurate histogram rendering
 - Added fallback rendering using CDF interpolation and synthetic sampling when histogram bins are unavailable
 - Updated propagation semantics: mode selection now reports bounds separately from the sampling algorithm
-
-### Upcoming Features:
-
-- Visual dependency graph
-- Fixed-point Analyzer (Q15/Q31)
-- Improve webview for tolerance model propagation
-- Interactive WebView-based formula builder to guide non-technical users without requiring raw text editing
-- Table formula support
 
 ## [0.3.4] - 06/09/2026
 

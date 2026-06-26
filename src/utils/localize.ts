@@ -24,7 +24,7 @@ const fallbackEn: Record<string, string> = {
   "config.thousandsSeparator.narrowNoBreakSpace": "Narrow No-Break Space (U+202F)",
   "config.thousandsSeparator": "Thousands separator for formatted numbers.",
 
-  "command.forceRefresh.title": "CalcDocs: Force Formula Refresh",
+  "command.recompute.title": "CalcDocs: Recompute Analysis",
   "command.setScanInterval.title": "CalcDocs: Set Scan Interval",
   "command.toggleEnabled.title": "CalcDocs: Toggle Enable/Disable",
   "command.toggleGhostValues.title": "CalcDocs: Toggle Ghost Values",
@@ -49,8 +49,8 @@ const fallbackEn: Record<string, string> = {
   "statusBar.enabledDegradedDetails": "CalcDocs enabled.\n\nCPU {0}% RAM {1}MB{2}.\nCPU threshold: {3}%.\nStack usage {4}/{5}, circular reference detected {6}, branches stopped by depth guard {7}.\n\n{8}\n\nClick to open quick menu.",
   "statusBar.stackUsage": " STK {0}/{1}",
 
-  "command.forceRefresh.warningDisabled": "CalcDocs is disabled. Re-enable it from settings or with CalcDocs: Toggle Enabled.",
-  "command.forceRefresh.success": "CalcDocs updated.",
+  "command.recompute.warningDisabled": "CalcDocs is disabled. Re-enable it from settings or with CalcDocs: Toggle Enabled.",
+  "command.recompute.success": "CalcDocs updated.",
   "command.setScanInterval.prompt": "Scan interval in seconds, 0 disables periodic scan",
   "command.setScanInterval.invalidInput": "Insert a number >= 0",
   "command.toggleEnabled.enabled": "CalcDocs enabled.",

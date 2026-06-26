@@ -1,4 +1,4 @@
-# 🧮 CalcDocs — Instantly See What Your Firmware REALLY Computes [0.3.5-*prerelease*]
+# 🧮 CalcDocs — Instantly See What Your Firmware REALLY Computes [0.3.6-*prerelease*]
 
 <p align="center">
   <b>Reveal hidden firmware values directly inside VS Code.</b><br>
@@ -91,6 +91,7 @@ CalcDocs evaluates everything live:
 * Keep formulas near the actual firmware logic
 * Eliminate scattered Excel and text notes
 
+👉 [Inline Calculations](https://github.com/mik1981/Calcdocs-VSCode-Extension/blob/main/docs/inline-calculations.md)
 
 ---
 
@@ -109,6 +110,7 @@ Explore firmware formulas as a live dependency graph directly inside VS Code.
 Check whether the measured value matches your expectations.
 
 ![Macro Chain Revelation in code](./resources/interactive_tolerance_viewer.gif)  
+
 ![Macro Chain Revelation in code](./resources/interactive_formula_viewer.gif)
 
 CalcDocs keeps formulas and firmware intrinsically synchronized.
@@ -127,6 +129,12 @@ No duplicated engineering logic.
 No spreadsheet drift.  
 No parallel maintenance.  
 
+📖 **Learn more**
+
+- 👉 [Interactive Formula Viewer](https://github.com/mik1981/Calcdocs-VSCode-Extension/blob/main/docs/interactive-formula-viewer.md)
+- 👉 [Tolerance propagation & formula ranges](https://github.com/mik1981/Calcdocs-VSCode-Extension/blob/main/docs/tolerance-and-ranges.md)
+- 👉 [Probabilistic Modeling Guide](https://github.com/mik1981/Calcdocs-VSCode-Extension/blob/main/docs/probabilistic-modeling-guide.md)
+
 ---
 
 ## 4️⃣ Macro Chain Revelation
@@ -135,6 +143,8 @@ No parallel maintenance.
 | :---: | :---: |
 | Inside ***C code*** | ![Macro Chain Revelation in code](./resources/macro_chain_revelation_code.gif) |
 | Inside **formulas\*.yaml** | ![Macro Chain Revelation in formulas](./resources/macro_chain_revelation_formulas.gif) |
+
+👉 [Interactive Formula Viewer](https://github.com/mik1981/Calcdocs-VSCode-Extension/blob/main/docs/interactive-formula-viewer.md)
 
 ---
 
@@ -216,6 +226,8 @@ CalcDocs:
 ✅ prevents formula drift  
 ✅ shows results inline  
 
+👉 [Formula YAML Guide](https://github.com/mik1981/Calcdocs-VSCode-Extension/blob/main/docs/formulas-yaml.md)
+
 ---
 
 ## ⚖️ Built-In Validation
@@ -226,6 +238,8 @@ Detect issues early:
 - Overflow risks
 - Invalid conversions
 - YAML/C inconsistencies
+
+👉 [Features Overview](https://github.com/mik1981/Calcdocs-VSCode-Extension/blob/main/docs/features.md)
 
 ---
 
@@ -267,6 +281,10 @@ Formulas stay aligned with firmware
 
 Know values before runtime
 
+📖 **Learn more**
+
+- 👉 [Real Use Cases](https://github.com/mik1981/Calcdocs-VSCode-Extension/blob/main/docs/use-cases.md)
+
 ---
 
 ## 📚 Create Self-Documenting Firmware
@@ -305,6 +323,8 @@ For best results, combine it with:
 
 CalcDocs integrates without conflicts.
 
+👉 [Configuration](https://github.com/mik1981/Calcdocs-VSCode-Extension/blob/main/docs/configuration.md)
+
 ---
 
 > CalcDocs supports engineering prefixes automatically:
@@ -327,20 +347,17 @@ If CalcDocs saves you time:
 
 ## 📚 Documentation
 
-Full documentation available on GitHub:
+Start here:
 
 - 👉 [Getting Started](https://github.com/mik1981/Calcdocs-VSCode-Extension/blob/main/docs/getting-started.md)
-- 👉 [Formula YAML Guide](https://github.com/mik1981/Calcdocs-VSCode-Extension/blob/main/docs/formulas-yaml.md)
-- 👉 [Real Use Cases](https://github.com/mik1981/Calcdocs-VSCode-Extension/blob/main/docs/use-cases.md)
 - 👉 [Features Overview](https://github.com/mik1981/Calcdocs-VSCode-Extension/blob/main/docs/features.md)
-- 👉 [Configuration](https://github.com/mik1981/Calcdocs-VSCode-Extension/blob/main/docs/configuration.md)
+
+Reference:
+
 - 👉 [Architecture](https://github.com/mik1981/Calcdocs-VSCode-Extension/blob/main/docs/architecture.md)
-- 👉 [Limitations](https://github.com/mik1981/Calcdocs-VSCode-Extension/blob/main/docs/limitations.md)
+- 👉 [Configuration](https://github.com/mik1981/Calcdocs-VSCode-Extension/blob/main/docs/configuration.md)
 - 👉 [Contributing](https://github.com/mik1981/Calcdocs-VSCode-Extension/blob/main/docs/contributing.md)
-- 👉 [Inline Calculations](https://github.com/mik1981/Calcdocs-VSCode-Extension/blob/main/docs/inline-calculations.md)
-- 👉 [Interactive Formula Viewer](https://github.com/mik1981/Calcdocs-VSCode-Extension/blob/main/docs/interactive-formula-viewer.md)
-- 👉 [Tolerance propagation & formula ranges](https://github.com/mik1981/Calcdocs-VSCode-Extension/blob/main/docs/tolerance-and-ranges.md)
-- 👉 [Probabilistic Modeling Guide](https://github.com/mik1981/Calcdocs-VSCode-Extension/blob/main/docs/probabilistic-modeling-guide.md)
+- 👉 [Limitations](https://github.com/mik1981/Calcdocs-VSCode-Extension/blob/main/docs/limitations.md)
 
 ---
 
@@ -350,4 +367,3 @@ Spreadsheets hide logic.
 Code hides values.
 
 # **CalcDocs reveals both.**
-
