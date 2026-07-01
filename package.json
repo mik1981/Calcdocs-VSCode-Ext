@@ -2,7 +2,7 @@
   "name": "calcdocs-vscode-extension",
   "displayName": "CalcDocs - C/C++ Constants & Formula Evaluator",
   "description": "%extension.description%",
-  "version": "0.3.6",
+  "version": "0.3.8",
   "publisher": "convergo-dev",
   "repository": {
     "type": "git",
@@ -68,7 +68,11 @@
     "onLanguage:c",
     "onLanguage:cpp",
     "onLanguage:yaml",
-    "onCommand:calcdocs.openTestFolder"
+    "onCommand:calcdocs.openTestFolder",
+    "onCommand:calcdocs.inspection.openInspector",
+    "onCommand:calcdocs.inspection.explainFormula",
+    "onCommand:calcdocs.inspection.healthCheck",
+    "onCommand:calcdocs.inspection.exportReport"
   ],
   "contributes": {
     "configuration": {
@@ -403,8 +407,48 @@
         "icon": "$(beaker)"
       },
       {
+        "command": "calcdocs.inspection.openInspector",
+        "title": "CalcDocs: Open Formula Inspector",
+        "icon": "$(search)"
+      },
+      {
+        "command": "calcdocs.inspection.explainFormula",
+        "title": "CalcDocs: Explain Formula",
+        "icon": "$(debug-alt)"
+      },
+      {
+        "command": "calcdocs.inspection.healthCheck",
+        "title": "CalcDocs: Local Formula Health Check",
+        "icon": "$(pulse)"
+      },
+      {
+        "command": "calcdocs.inspection.exportReport",
+        "title": "CalcDocs: Export Formula Report",
+        "icon": "$(export)"
+      },
+      {
         "command": "calcdocs.formulas.foldAll",
         "title": "%command.formulas.foldAll%"
+      },
+      {
+        "command": "calcdocs.formulas.setViewMode",
+        "title": "Formula View Mode",
+        "icon": "$(list-tree)"
+      },
+      {
+        "command": "calcdocs.formulas.setSortOrder",
+        "title": "Formula Sort Order",
+        "icon": "$(sort-precedence)"
+      },
+      {
+        "command": "calcdocs.formulas.setFilter",
+        "title": "Filter Formulas…",
+        "icon": "$(filter)"
+      },
+      {
+        "command": "calcdocs.formulas.clearFilter",
+        "title": "Clear Formula Filter",
+        "icon": "$(clear-all)"
       },
       {
         "command": "calcdocs.openGuide",
@@ -423,6 +467,26 @@
           "command": "calcdocs.openInteractiveView",
           "when": "resourceExtname =~ /\\.(yaml|yml|c|cc|cpp|cxx|h|hpp|hxx)$/",
           "group": "calcDocs@1"
+        },
+        {
+          "command": "calcdocs.inspection.openInspector",
+          "when": "resourceExtname =~ /\\.(yaml|yml|c|cc|cpp|cxx|h|hpp|hxx)$/",
+          "group": "calcDocs@2"
+        },
+        {
+          "command": "calcdocs.inspection.explainFormula",
+          "when": "resourceExtname =~ /\\.(yaml|yml|c|cc|cpp|cxx|h|hpp|hxx)$/",
+          "group": "calcDocs@3"
+        },
+        {
+          "command": "calcdocs.inspection.healthCheck",
+          "when": "resourceExtname =~ /\\.(yaml|yml|c|cc|cpp|cxx|h|hpp|hxx)$/",
+          "group": "calcDocs@4"
+        },
+        {
+          "command": "calcdocs.inspection.exportReport",
+          "when": "resourceExtname =~ /\\.(yaml|yml|c|cc|cpp|cxx|h|hpp|hxx)$/",
+          "group": "calcDocs@5"
         }
       ],
       "view/title": [
@@ -430,6 +494,26 @@
           "command": "calcdocs.openInteractiveView",
           "when": "view == calcdocs.inlineCalcResults && calcdocs.hasInteractiveContent",
           "group": "navigation@1"
+        },
+        {
+          "command": "calcdocs.formulas.setViewMode",
+          "when": "view == calcdocs.inlineCalcResults && (calcdocs.mode == yaml || calcdocs.cFileActive)",
+          "group": "navigation@5"
+        },
+        {
+          "command": "calcdocs.formulas.setSortOrder",
+          "when": "view == calcdocs.inlineCalcResults && calcdocs.mode == yaml && calcdocs.formulaViewMode == 'flat'",
+          "group": "navigation@6"
+        },
+        {
+          "command": "calcdocs.formulas.setFilter",
+          "when": "view == calcdocs.inlineCalcResults && (calcdocs.mode == yaml || calcdocs.cFileActive)",
+          "group": "navigation@7"
+        },
+        {
+          "command": "calcdocs.formulas.clearFilter",
+          "when": "view == calcdocs.inlineCalcResults && (calcdocs.mode == yaml || calcdocs.cFileActive)",
+          "group": "navigation@8"
         },
         {
           "command": "calcdocs.inlineCalc.openGuide",

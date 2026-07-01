@@ -1,0 +1,39 @@
+# Case 22: Physics-Aware Dependency Clustering
+PI:
+  value: 3.14
+GRAVITY:
+  value: 9.81
+  unit: m/s2
+MASS_KG:
+  value: 10
+  unit: kg
+ACCEL:
+  formula: GRAVITY
+  unit: m/s2
+FORCE_N:
+  formula: MASS_KG * ACCEL
+  unit: N
+FORCE_N_ALT:
+  formula: MASS_KG * GRAVITY
+  unit: N
+VELOCITY:
+  formula: ACCEL * 5 s
+  unit: m/s
+KINETIC_ENERGY_J:
+  formula: 0.5 * MASS_KG * VELOCITY * VELOCITY
+  unit: J
+TIME_S:
+  value: 2
+  unit: s
+WORK_J:
+  formula: FORCE_N * 10 m
+  unit: J
+POWER_W:
+  formula: WORK_J / TIME_S
+  unit: W
+AREA_M2:
+  value: 0.5
+  unit: m2
+PRESSURE_PA:
+  formula: FORCE_N / AREA_M2
+  unit: Pa

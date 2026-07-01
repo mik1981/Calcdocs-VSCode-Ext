@@ -1,6 +1,44 @@
 # Changelog
 
-## [0.3.6] - 06/xx/2026
+## [0.3.8] - 07/xx/2026
+
+- Expanded clangd backend detection to automatically support compatible VS Code distributions (not only llvm-vs-code-extensions.vscode-clangd).
+- Aligned Formula Explorer with the active C/C++ document context.
+- New parametric formula consistency evaluation engine to assess formula plausibility.
+- Replaced full workspace scanning on every change with lazy resolution: .c/.cpp files only scan themselves and their own includes.
+- Formula*.yaml files resolve external symbols via targeted lookup with a persistent cache per symbol (workspace scanned only once per symbol, then only mtime check). 
+
+## [0.3.7] - 07/01/2026
+
+### Formula Inspection
+
+- Added **Explain Mode** to inspect formula evaluation step by step.
+- New **Formula Inspector** panel showing expressions, resolved symbols, values, and units.
+- Built as a read-only inspection layer with **no changes to the evaluation engine**.
+
+### Formula Explorer
+
+- Added **sorting** (Alphabetical / Source Order).
+- Added **text filtering** across formula name, expression, description, and unit.
+- New **Dependency Groups** view to visualize formulas by dependency chains, with automatic cycle handling.
+- View switching is instant and does not trigger formula re-parsing.
+
+### Performance
+
+- Inspection features have **zero impact** on formula evaluation.
+- Dependency analysis is optimized for large formula sets.
+- No additional workspace scans introduced.
+
+### Coming Next
+
+- Visual dependency graph
+- Fixed-point analyzer (Q15/Q31)
+- Tolerance propagation improvements
+- Interactive Formula Builder
+- Table formula support
+- Faster large-workspace experience with incremental, open-file-based analysis
+
+## [0.3.6] - 06/26/2026
 
 - Dynamic Formulas view: Implemented the new interactive visualization.
 - Guide icons: Added visual indicators for writing YAML formulas and inline calculations.
@@ -8,14 +46,6 @@
 - Documentation: Updated readme.md with the latest changes.
 - Obsolete code: Deleted outdated code related to writeback YAML.
 - Dual-language support: Temporarily disabled due to high maintenance overhead.
-
-### Upcoming Features:
-
-- Visual dependency graph
-- Fixed-point Analyzer (Q15/Q31)
-- Improve webview for tolerance model propagation
-- Interactive WebView-based formula builder to guide non-technical users without requiring raw text editing
-- Table formula support
 
 ## [0.3.5] - 06/25/2026
 

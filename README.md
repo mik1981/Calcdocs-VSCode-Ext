@@ -1,4 +1,4 @@
-# 🧮 CalcDocs — Instantly See What Your Firmware REALLY Computes [0.3.6-*prerelease*]
+# 🧮 CalcDocs — Instantly See What Your Firmware REALLY Computes
 
 <p align="center">
   <b>Reveal hidden firmware values directly inside VS Code.</b><br>
@@ -12,6 +12,8 @@
 [![Version](https://vsmarketplacebadges.dev/version-short/convergo-dev.calcdocs-vscode-extension.svg)](https://visualstudio.com)
 [![Download](https://vsmarketplacebadges.dev/downloads-short/convergo-dev.calcdocs-vscode-extension.svg)](https://visualstudio.com)
 [![License](./resources/license-badge.png)](./LICENSE.md)
+
+CalcDocs is the first VS Code extension focused on understanding firmware engineering calculations instead of source code syntax.  
 
 > Firmware logic is often invisible.
 >
@@ -28,7 +30,7 @@
 
 ## ⚡ What CalcDocs does
 
-CalcDocs transforms VS Code into a **live firmware calculation explorer**.
+CalcDocs transforms VS Code into a **live engineering calculation explorer**.
 
 Instead of manually expanding macros, opening Excel files, or mentally resolving formulas:
 
@@ -36,16 +38,13 @@ Instead of manually expanding macros, opening Excel files, or mentally resolving
 ✅ See the final computed result  
 ✅ Understand firmware logic instantly
 
-No build.
-No flashing.
-No debugger.
+No build. No flashing. No debugger required.
 
 ---
 
 ## ⚡ 5-second demo
 
 ---
-
 
 ## 1️⃣ Coding Evaluator
 
@@ -96,7 +95,7 @@ CalcDocs evaluates everything live:
 ---
 
 > Keep engineering calculations close to the firmware logic instead of:
-> - Excel sheets
+> - external spreadsheets
 > - random `.txt` files
 > - disconnected documentation
 >
@@ -109,7 +108,9 @@ CalcDocs evaluates everything live:
 Explore firmware formulas as a live dependency graph directly inside VS Code.  
 Check whether the measured value matches your expectations.
 
-![Macro Chain Revelation in code](./resources/interactive_tolerance_viewer.gif)  
+![Macro Chain Revelation in code](./resources/histogram_screenshot.png)  
+
+![Tolerance propagation in code](./resources/interactive_tolerance_viewer.gif)  
 
 ![Macro Chain Revelation in code](./resources/interactive_formula_viewer.gif)
 
@@ -293,18 +294,6 @@ Engineering decisions stay inside the source code.
 
 ---
 
-# ❗ What CalcDocs Is NOT
-
-CalcDocs is intentionally focused.
-
-It is:
-
-❌ NOT a compiler  
-❌ NOT a debugger  
-❌ NOT a full static analyzer  
-
----
-
 > CalcDocs focuses on one thing:
 >
 > **making firmware numeric logic visible.**
@@ -357,7 +346,11 @@ Reference:
 - 👉 [Architecture](https://github.com/mik1981/Calcdocs-VSCode-Extension/blob/main/docs/architecture.md)
 - 👉 [Configuration](https://github.com/mik1981/Calcdocs-VSCode-Extension/blob/main/docs/configuration.md)
 - 👉 [Contributing](https://github.com/mik1981/Calcdocs-VSCode-Extension/blob/main/docs/contributing.md)
-- 👉 [Limitations](https://github.com/mik1981/Calcdocs-VSCode-Extension/blob/main/docs/limitations.md)
+
+Design & Scope:
+
+- 👉 [Project-Scope](https://github.com/mik1981/Calcdocs-VSCode-Extension/blob/main/docs/project-scope.md)
+- 👉 [Design-Philosophy](https://github.com/mik1981/Calcdocs-VSCode-Extension/blob/main/docs/design-philosophy.md)
 
 ---
 

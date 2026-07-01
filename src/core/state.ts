@@ -151,15 +151,42 @@ export type CalcDocsState = {
   inlineCodeLens: InlineCodeLensConfig;
   /** Configurazione runtime Inline Hover */
   inlineHover: InlineHoverConfig;
+
+  /**
+   * Persistent cache: which file resolved a given external C/C++ symbol for
+   * a given formulas.yaml, and what the include-closure mtimes were at the
+   * time. A full workspace search only happens once per symbol - never
+   * needed until the remembered file (or one of its own includes) changes,
+   * is deleted, or no longer defines the symbol.
+   * Key: `${yamlPath}::${symbolName}`.
+   */
+  yamlSymbolLocations: Map<string, YamlSymbolLocationEntry>;
+
+  /**
+   * Persistent record of which config.c/config.h files have been located in
+   * the workspace and their mtime at last parse - so the (cheap, filename-only)
+   * workspace search for these files happens once, not on every inline-calc
+   * evaluation. Key: absolute file path.
+   */
+  configVarsSourceFiles: Map<string, number>;
+};
+
+export type YamlSymbolLocationEntry = {
+  
+  symbol: string;
+  
+  definingFile: string;
+  
+  /** file path -> mtimeMs, at the time this entry was last verified. Includes definingFile itself. */
+  includeClosureMtimes: Map<string, number>;
+  
+  value: number;
+  
+  unit?: string;
 };
 
 
-/**
- * Crea un'istanza vuota di AnalysisStackUsage con valori di default.
- * Utilizzato per resettare le statistiche prima di una nuova analisi.
- * 
- * @returns Oggetto con statistiche di stack inizializzate a zero
- */
+
 export function createDefaultAnalysisStackUsage(): AnalysisStackUsage {
   return {
     usedDepth: 0,
@@ -249,6 +276,8 @@ export function createCalcDocsState(
       showWarnings: true,
       showErrors: true,
     },
+    yamlSymbolLocations: new Map<string, YamlSymbolLocationEntry>(),
+    configVarsSourceFiles: new Map<string, number>(),
   };
 }
 

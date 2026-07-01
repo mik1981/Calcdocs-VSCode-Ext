@@ -531,9 +531,15 @@ export function buildFormulaSymbolTable(
     }
   }
 
-  // Two forward passes: first resolves top-level formulas,
-  // second catches formulas that depend on results from pass 1.
-  for (let pass = 0; pass < 2; pass++) {
+  // Iterate until no more formulas can be resolved (fixed-point), instead of
+  // a fixed 2-pass limit. Two passes is enough for a 1-level dependency
+  // chain (A depends on B, B depends on cSymbols) but silently stops
+  // resolving anything deeper (A -> B -> C -> cSymbols) - bounded by
+  // formulas.length so a genuine circular reference still terminates.
+  const maxPasses = formulas.length + 1;
+  for (let pass = 0; pass < maxPasses; pass++) {
+    let progressed = false;
+
     for (const formula of formulas) {
       if (table.has(formula.id)) continue; // already resolved
       if (formula.parameters?.length) continue; // function-like formulas resolve only when called
@@ -564,8 +570,11 @@ export function buildFormulaSymbolTable(
             ? toDeclaredUnitInternalValue(result, formula.unit)
             : result
         );
+        progressed = true;
       }
     }
+
+    if (!progressed) break; // fixed point reached (or a real dependency gap/cycle)
   }
 
   return table;

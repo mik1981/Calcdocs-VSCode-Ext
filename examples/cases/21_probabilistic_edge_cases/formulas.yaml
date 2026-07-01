@@ -1,7 +1,7 @@
 # Case 21: Probabilistic edge cases
 # Questo esempio mostra comportamenti controintuitivi delle distribuzioni in Monte Carlo.
 
-A:
+AA:
   value: 100
   unit: count
   uncertainty:
@@ -10,7 +10,7 @@ A:
   distribution:
     type: uniform
 
-B:
+BB:
   value: 100
   unit: count
   uncertainty:
@@ -20,16 +20,16 @@ B:
     type: uniform
 
 SUM_UNIFORM:
-  formula: A + B
+  formula: AA + BB
   unit: count
   propagation: monte_carlo
 
 SQUARE_UNIFORM:
-  formula: A * A
+  formula: AA * AA
   unit: count
   propagation: monte_carlo
 
-C:
+CC:
   value: 100
   unit: count
   uncertainty:
@@ -39,7 +39,7 @@ C:
     type: normal
     sigma_level: 2
 
-D:
+DD:
   value: 100
   unit: count
   uncertainty:
@@ -49,11 +49,11 @@ D:
     type: triangular
 
 MIXED_DIST:
-  formula: C + A + D
+  formula: CC + AA + DD
   unit: count
   propagation: monte_carlo
 
-E:
+EE:
   value: 0.1
   unit: count
   uncertainty:
@@ -64,6 +64,6 @@ E:
     type: uniform
 
 DIVISION_NEAR_ZERO:
-  formula: A / E
+  formula: AA / EE
   unit: count
   propagation: monte_carlo

@@ -173,91 +173,6 @@ function logStackUsageIfNeeded(
 }
 
 /**
- * Crea un mega-file temporaneo per un file sorgente C/C++, risolvendo ricorsivamente tutti gli #include
- * (solo sorgenti, headers ignorati). Ogni mega-file è indipendente.
- * 
- * @param sourcePath - File sorgente principale (.c/.cpp/.cc)
- * @param workspaceRoot - Root del workspace per path relativi
- * @param output - Output channel per logging
- * @returns Percorso del file temporaneo mega
- */
-// async function createMegaSourceFile(
-//   sourcePath: string,
-//   workspaceRoot: string,
-//   output: any
-// ): Promise<string> {
-//   const visited = new Set<string>();
-//   const tempDirName = `calcdocs-mega-${crypto.randomUUID().slice(0,8)}`;
-//   const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), tempDirName + '-'));
-  
-//   async function resolveInclude(relIncludePath: string, baseDir: string): Promise<string> {
-//     const absIncludePath = path.resolve(baseDir, relIncludePath);
-//     const key = absIncludePath.toLowerCase();
-    
-//     if (visited.has(key)) {
-//       return '';
-//     }
-//     visited.add(key);
-    
-//     const ext = path.extname(absIncludePath).toLowerCase();
-//     // if (!SOURCES_ONLY_EXTS.has(ext)) {
-//     //   output.detail(`[Mega] Skip header: ${relIncludePath}`);
-//     //   return '';
-//     // }
-    
-//     let content: string;
-//     try {
-//       content = await fsp.readFile(absIncludePath, 'utf8');
-//     } catch (err) {
-//       output.warn(`[Mega] Failed read ${relIncludePath}: ${err}`);
-//       return '';
-//     }
-    
-//     const lines = content.split(/\r?\n/);
-//     let processedContent = `/* === INCL ${path.relative(workspaceRoot, absIncludePath)} === */\n`;
-    
-//     for (const line of lines) {
-//       const includeMatch = line.match(INCLUDE_RX);
-//       if (includeMatch) {
-//         const nested = await resolveInclude(includeMatch[1], path.dirname(absIncludePath));
-//         processedContent += nested || line + '\\n';
-//       } else {
-//         processedContent += line + '\\n';
-//       }
-//     }
-    
-//     output.detail(`trovati: ${processedContent}`);
-//     return processedContent;
-//   }
-  
-//   // Main source processing
-//   const mainDir = path.dirname(sourcePath);
-//   let megaContent = `/* === MEGA from ${path.relative(workspaceRoot, sourcePath)} === */\n`;
-//   const mainContent = await fsp.readFile(sourcePath, 'utf8');
-//   const mainLines = mainContent.split(/\r?\n/);
-  
-//   for (const line of mainLines) {
-//     const includeMatch = line.match(INCLUDE_RX);
-//     if (includeMatch) {
-//       const included = await resolveInclude(includeMatch[1], mainDir);
-//       output.warn(`incluso ${includeMatch[1]} in ${mainDir}`);
-//       megaContent += included || line + '\\n';
-//     } else {
-//       megaContent += line + '\\n';
-//     }
-//   }
-  
-//   const tempFileName = `mega-${path.basename(sourcePath)}`;
-//   const tempPath = path.join(tempDir, tempFileName);
-//   await fsp.writeFile(tempPath, megaContent, 'utf8');
-  
-//   const sizeKB = (Buffer.byteLength(megaContent) / 1024).toFixed(1);
-//   output.detail(`[Mega] Created ${tempPath} (${sizeKB}kB)`);
-  
-//   return tempPath;
-// }
-
-/**
  * Orchestrazione principale dell'analisi del workspace.
  * Scansiona i file, decide la modalità (YAML vs solo C/C++) e popola le mappe di stato condivise.
  * 
@@ -890,7 +805,7 @@ async function reportFormulaDiscrepancies(
  * @param yamlPath - Percorso del file YAML da caricare
  * @returns L'oggetto LoadedYaml se il parsing ha successo, null altrimenti
  */
-async function loadYamlOrReportError(
+export async function loadYamlOrReportError(
   state: CalcDocsState,
   yamlPath: string
 ): Promise<LoadedYaml | null> {
@@ -1054,7 +969,7 @@ async function runYamlAnalysis(
  * @param yamlRoot - Oggetto YAML parsato
  * @returns Array di coppie [chiave, oggetto] per i nodi di primo livello
  */
-function getYamlNodeEntries(yamlRoot: Record<string, unknown>): YamlNodeEntries {
+export function getYamlNodeEntries(yamlRoot: Record<string, unknown>): YamlNodeEntries {
   const entries: YamlNodeEntries = [];
 
   for (const [key, value] of Object.entries(yamlRoot)) {
@@ -1076,7 +991,7 @@ function getYamlNodeEntries(yamlRoot: Record<string, unknown>): YamlNodeEntries 
  * @param state - Stato corrente dell'estensione
  * @param yamlNodes - Entry YAML da processare
  */
-function seedSymbolValuesFromYaml(
+export function seedSymbolValuesFromYaml(
   state: CalcDocsState,
   yamlNodes: YamlNodeEntries
 ): void {
@@ -1111,7 +1026,7 @@ function seedSymbolValuesFromYaml(
  * @param cppSymbols - Simboli C/C++ raccolti dal parser
  * @param options - Opzioni che controllano l'ordine di merge
  */
-function applyCppSymbols(
+export function applyCppSymbols(
   state: CalcDocsState,
   cppSymbols: CollectedCppSymbols,
   options: {
@@ -1370,7 +1285,7 @@ function buildReverseDefineDependencies(
   return reverse;
 }
 
-function rebuildFormulaIndexWithEngine(
+export function rebuildFormulaIndexWithEngine(
   state: CalcDocsState,
   yamlNodes: YamlNodeEntries,
   yamlRaw: string,
@@ -1562,7 +1477,7 @@ function rebuildFormulaIndex(
   }
 }
 
-function fillMissingYamlValuesFromCppSymbols(state: CalcDocsState): void {
+export function fillMissingYamlValuesFromCppSymbols(state: CalcDocsState): void {
   for (const entry of state.formulaIndex.values()) {
     if (!hasMissingYamlValue(entry)) {
       continue;

@@ -1,0 +1,29 @@
+# Case 22 expected values
+# Used by integration runner for symbol/inline value checks.
+# The physics clustering feature itself is tested separately in test/unit/physicsClustering.test.ts.
+PI:
+  value: 3.14
+GRAVITY:
+  value: 9.81
+MASS_KG:
+  value: 10
+ACCEL:
+  value: 9.81
+FORCE_N:
+  value: 98.1
+FORCE_N_ALT:
+  value: 98.1
+VELOCITY:
+  value: 49.05
+KINETIC_ENERGY_J:
+  value: 12029.5125
+TIME_S:
+  value: 2
+WORK_J:
+  value: 981
+POWER_W:
+  value: 490.5
+AREA_M2:
+  value: 0.5
+PRESSURE_PA:
+  value: 196.2

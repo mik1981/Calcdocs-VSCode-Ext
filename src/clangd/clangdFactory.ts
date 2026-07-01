@@ -4,23 +4,74 @@ import { VsCodeClangdBackend } from "./VsCodeClangdBackend";
 import { ClangdService, type IClangdBackend } from "./ClangdService";
 import type { ColoredOutput } from "../utils/output";
 
-async function hasVsCodeClangd(): Promise<boolean> {
-  const ext = vscode.extensions.getExtension(
-    "llvm-vs-code-extensions.vscode-clangd"
-  );
-  if (!ext) {
-    return false;
-  }
+type CompatibleClangdExtension = {
+    id: string;
+    displayName: string;
+    extension: vscode.Extension<any>;
+};
 
-  if (!ext.isActive) {
-    try {
-      await ext.activate();
-    } catch {
-      return false;
+function isCompatibleClangdExtension(
+    extension: vscode.Extension<any>
+): boolean {
+
+    const pkg = extension.packageJSON;
+
+    if (!pkg) {
+        return false;
     }
-  }
 
-  return true;
+    const searchableText = [
+        pkg.name,
+        pkg.displayName,
+        pkg.description,
+        pkg.publisher,
+    ]
+        .filter((v): v is string => typeof v === "string")
+        .join(" ")
+        .toLowerCase();
+
+    // deve essere chiaramente una distribuzione clangd
+    if (!searchableText.includes("clangd")) {
+        return false;
+    }
+
+    // deve contribuire al supporto C/C++
+    const languages = pkg.contributes?.languages;
+
+    if (!Array.isArray(languages)) {
+        return false;
+    }
+
+    return languages.some((lang: any) =>
+        lang.id === "c" ||
+        lang.id === "cpp"
+    );
+}
+
+async function findCompatibleClangdExtension(): Promise<CompatibleClangdExtension | undefined> {
+
+    for (const extension of vscode.extensions.all) {
+
+        if (!isCompatibleClangdExtension(extension)) {
+            continue;
+        }
+
+        if (!extension.isActive) {
+            try {
+                await extension.activate();
+            } catch {
+                continue;
+            }
+        }
+
+        return {
+            id: extension.id,
+            displayName: extension.packageJSON.displayName ?? extension.id,
+            extension,
+        };
+    }
+
+    return undefined;
 }
 
 function createFallbackBackend(): IClangdBackend {
@@ -45,14 +96,22 @@ async function createClangdBackend(
       return createFallbackBackend();
     }
 
-    if (await hasVsCodeClangd()) {
-      output?.info("[clangd] using vscode-clangd backend");
-      const backend = new VsCodeClangdBackend();
-      await backend.initialize();
-      return backend;
+    const compatibleExtension = await findCompatibleClangdExtension();
+
+    if (compatibleExtension) {
+
+        output?.info(
+            `[clangd] using ${compatibleExtension.displayName} (${compatibleExtension.id})`
+        );
+
+        const backend = new VsCodeClangdBackend();
+
+        await backend.initialize();
+
+        return backend;
     }
 
-    output?.info("[clangd] vscode-clangd not found");
+    output?.info("[clangd] no compatible VSCode clangd extension found");
 
     const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? "";
     const client = new ClangdClient(workspaceRoot, output);

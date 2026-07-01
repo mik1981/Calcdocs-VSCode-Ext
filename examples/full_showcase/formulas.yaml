@@ -1,11 +1,11 @@
-power:
+FS_POWER:
   formula: FS_VIN * FS_CURRENT
   unit: W
 
-efficiency:
-  formula: (power / 72 W)
-  unit: %
+EFFICIENCY:
+  formula: FS_POWER / 72 W
+  unit: "%"
 
-ntc_resistance:
-  formula: csv("data/ntc_10k.csv", "25", "temperature", "resistance")
+NTC_RESISTANCE:
+  formula: csv("data/ntc_10k.csv", "25.03", "temperature", "resistance", "linear")
   unit: ohm

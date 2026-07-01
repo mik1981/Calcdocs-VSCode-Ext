@@ -9,6 +9,9 @@ import {
 import { ClangdStatus } from "./clangd/ClangdClient";
 import { ClangdService } from "./clangd/ClangdService";
 import { runAnalysis, runActiveCppFileAnalysis } from "./core/analysis";
+import { runScopedYamlAnalysis } from "./core/scopedYamlAnalysis";
+import { ensureConfigVarsLoaded } from "./core/scopedConfigVars";
+import { isFormulaYamlFileName } from "./core/formulaYaml";
 import {
   clearInlineCalcDiagnostics,
   refreshInlineCalcDiagnosticsForDocument,
@@ -47,9 +50,14 @@ import { GhostValueProvider } from "./core/ghostValues";
 import { FormulaOutlineProvider } from "./formulaOutline/formulaOutlineProvider";
 import { FormulaRegistry } from "./formulaOutline/formulaRegistry";
 import { registerFormulaCommands } from "./formulaOutline/commands";
+import {
+  FormulaViewMode,
+  FormulaSortOrder,
+} from "./ui/formulaViewTypes";
 import { registerFormulaOutlineHoverProvider } from "./formulaOutline/hoverProvider";
 import { invalidatePriorityCache } from "./core/ghostPolicy";
 import { GuideWebviewProvider } from "./ui/guideWebviewProvider";
+import { registerInspectionFeatures } from "./inspection/formulaInspector";
 
 import { initGuideEngineClient } from "./ui/guideEngineClient";
 
@@ -296,6 +304,90 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(formulaRegistry);
   registerFormulaCommands(context, formulaRegistry);
 
+  // Register formula explorer view commands
+  // Each command shows a quick pick menu when invoked without arguments
+  // (which is the case when clicked from the view/title toolbar).
+  context.subscriptions.push(
+    vscode.commands.registerCommand("calcdocs.formulas.setViewMode", (...args: unknown[]) => {
+      // If called with an argument (programmatic), use it directly
+      if (args.length > 0 && typeof args[0] === "string") {
+        const mode = args[0];
+        if (mode === "flat") {
+          inlineCalcResultsViewProvider.setViewMode(FormulaViewMode.Flat);
+        } else if (mode === "dependencyGroups") {
+          inlineCalcResultsViewProvider.setViewMode(FormulaViewMode.DependencyGroups);
+        }
+        return;
+      }
+      // Otherwise show quick pick (view/title toolbar click)
+      const current = inlineCalcResultsViewProvider.viewMode;
+      const items: vscode.QuickPickItem[] = [
+        { label: "$(list-tree) Flat", description: current === FormulaViewMode.Flat ? "✓ current" : "", picked: current === FormulaViewMode.Flat },
+        { label: "$(graph) Dependency Groups", description: current === FormulaViewMode.DependencyGroups ? "✓ current" : "", picked: current === FormulaViewMode.DependencyGroups },
+      ];
+      vscode.window.showQuickPick(items, { placeHolder: "Select formula view mode" }).then(selected => {
+        if (!selected) return;
+        if (selected.label.includes("Flat")) {
+          inlineCalcResultsViewProvider.setViewMode(FormulaViewMode.Flat);
+        } else {
+          inlineCalcResultsViewProvider.setViewMode(FormulaViewMode.DependencyGroups);
+        }
+      });
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("calcdocs.formulas.setSortOrder", (...args: unknown[]) => {
+      if (args.length > 0 && typeof args[0] === "string") {
+        const order = args[0];
+        if (order === "alpha") {
+          inlineCalcResultsViewProvider.setSortOrder(FormulaSortOrder.Alphabetical);
+        } else if (order === "source") {
+          inlineCalcResultsViewProvider.setSortOrder(FormulaSortOrder.Source);
+        }
+        return;
+      }
+      const current = inlineCalcResultsViewProvider.sortOrder;
+      const items: vscode.QuickPickItem[] = [
+        { label: "$(sort-precedence) Alphabetical", description: current === FormulaSortOrder.Alphabetical ? "✓ current" : "", picked: current === FormulaSortOrder.Alphabetical },
+        { label: "$(list-tree) Source Order", description: current === FormulaSortOrder.Source ? "✓ current" : "", picked: current === FormulaSortOrder.Source },
+      ];
+      vscode.window.showQuickPick(items, { placeHolder: "Select formula sort order" }).then(selected => {
+        if (!selected) return;
+        if (selected.label.includes("Alphabetical")) {
+          inlineCalcResultsViewProvider.setSortOrder(FormulaSortOrder.Alphabetical);
+        } else {
+          inlineCalcResultsViewProvider.setSortOrder(FormulaSortOrder.Source);
+        }
+      });
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("calcdocs.formulas.setFilter", (...args: unknown[]) => {
+      if (args.length > 0 && typeof args[0] === "string") {
+        inlineCalcResultsViewProvider.setFilter(args[0]);
+        return;
+      }
+      // Show input box for filter text
+      const currentFilter = inlineCalcResultsViewProvider.filterText;
+      vscode.window.showInputBox({
+        placeHolder: "Filter formulas by name, expression, description, or unit…",
+        prompt: "Type to filter formulas shown in the explorer",
+        value: currentFilter || "",
+      }).then(text => {
+        if (text === undefined) return; // cancelled
+        inlineCalcResultsViewProvider.setFilter(text || "");
+      });
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("calcdocs.formulas.clearFilter", () => {
+      inlineCalcResultsViewProvider.clearFilter();
+    })
+  );
+
   // Pass formulaRegistry to commands
 
   context.subscriptions.push(
@@ -438,10 +530,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     return state.formulaIndex.size > 0;
   }
 
-  /**
-   * Esegue l'analisi completa del workspace e sincronizza tutti i componenti UI
-   * che dipendono dallo stato corrente.
-   */
+  
   const runAnalysisAndRefreshUi = async (): Promise<void> => {
     try {
       if (!state.enabled) {
@@ -453,11 +542,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         return;
       }
 
-      await runAnalysis(state);
-
       const activeEditor = vscode.window.activeTextEditor;
+      const activeFsPath = activeEditor?.document.uri.fsPath;
+
       if (isCppFileEditor(activeEditor)) {
-        await runActiveCppFileAnalysis(state, activeEditor.document.uri.fsPath);
+        // Active file + its resolved includes only - no workspace scan.
+        await runActiveCppFileAnalysis(state, activeFsPath!);
+        // @config.<hint>.<var> inline-calc references explicitly name a
+        // config.c/config.h file by convention - not something reached via
+        // #include, so it needs its own (cached, filename-only) lookup.
+        await ensureConfigVarsLoaded(state);
+      } else if (activeFsPath && isFormulaYamlFileName(activeFsPath)) {
+        // Self-contained YAML -> zero C/C++ parsing. Otherwise, a targeted
+        // lookup for only the missing symbols (see scopedYamlAnalysis.ts).
+        await runScopedYamlAnalysis(state, activeFsPath);
+      } else if (!state.hasFormulasFile && state.formulaIndex.size === 0) {
+        // One-time bounded discovery pass: only runs before we've ever
+        // established whether a formulas.yaml exists in the workspace at
+        // all (e.g. cold start with a non-C/non-YAML file focused). Once
+        // hasFormulasFile is known, this branch is never hit again.
+        await runAnalysis(state);
       }
 
       refreshUi(state, { editor: activeEditor });
@@ -532,6 +636,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   registerYamlHoverProvider(context, state);
   registerCppCodeLensProvider(context, codeLensProvider);
   registerInlineCalcCodeLensProvider(context, inlineCalcCodeLensProvider);
+  registerInspectionFeatures(context, state);
 
   // Aggiorna i CodeLens quando un documento viene modificato
   context.subscriptions.push(

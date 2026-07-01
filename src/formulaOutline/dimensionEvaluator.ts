@@ -201,6 +201,95 @@ function scaleDim(d: Dim, factor: number): Dim {
   return { M: d.M * factor, L: d.L * factor, T: d.T * factor, I: d.I * factor, K: d.K * factor };
 }
 
+// -------------------- EXTERNAL DIMENSION EVALUATION --------------------
+
+/**
+ * Evaluate the dimension of an expression given a pre-built map of symbol → dimension.
+ * This is used by parametricAnalysis.ts to test hypothetical unit assignments.
+ */
+export function evaluateExpressionDimensions(
+  expr: string,
+  dimMap: Map<string, Dim>
+): { dimension: Dim | null; error?: string } {
+  try {
+    const ast = parseExpression(preprocessExpression(expr));
+    return { dimension: inferNodeDimensionWithMap(ast, dimMap) };
+  } catch (e: any) {
+    return { dimension: null, error: e.message };
+  }
+}
+
+function inferNodeDimensionWithMap(
+  node: ExpressionNode,
+  dimMap: Map<string, Dim>
+): Dim {
+  switch (node.kind) {
+    case "number":
+    case "string":
+      return ZERO_DIM;
+    case "identifier":
+      return dimMap.get(node.name) ?? ZERO_DIM;
+    case "unary":
+      return inferNodeDimensionWithMap(node.argument, dimMap);
+    case "index":
+      if (node.target.kind === "identifier") {
+        return dimMap.get(node.target.name) ?? ZERO_DIM;
+      }
+      return ZERO_DIM;
+    case "binary": {
+      const left = inferNodeDimensionWithMap(node.left, dimMap);
+      const right = inferNodeDimensionWithMap(node.right, dimMap);
+
+      if (node.operator === "+" || node.operator === "-" || node.operator === "%") {
+        if (!sameDim(left, right) && !(node.operator === "%" && sameDim(right, ZERO_DIM))) {
+          throw new Error("ADD_MISMATCH");
+        }
+        return left;
+      }
+
+      if (node.operator === "*") {
+        return multiplyDimensions(left, right);
+      }
+
+      if (node.operator === "/") {
+        return divideDimensions(left, right);
+      }
+
+      if (node.operator === "^") {
+        const exponent = numericLiteralValue(node.right) ?? 1;
+        return scaleDim(left, exponent);
+      }
+
+      return ZERO_DIM;
+    }
+    case "call": {
+      const normalized = node.callee.toLowerCase();
+
+      // preprocessExpression() rewrites quantity literals like "1.25V" into
+      // __unit(1.25, "V") before this AST is built (see engine/evaluator.ts).
+      // Without this case, the generic call-handling below infers ZERO_DIM
+      // for both arguments (a number and a string literal are always
+      // dimensionless on their own), silently discarding the very unit the
+      // author wrote - causing false ADD_MISMATCH errors when that literal
+      // is combined with a properly-dimensioned quantity elsewhere in the
+      // same formula. This is the fix for that: honor the declared unit.
+      if (normalized === "__unit") {
+        const unitArg = node.args[1];
+        const unitToken = unitArg && unitArg.kind === "string" ? unitArg.value : undefined;
+        const dim = getUnitDim(unitToken);
+        return dim ?? ZERO_DIM;
+      }
+
+      if (isLookupFunctionName(normalized)) {
+        return ZERO_DIM;
+      }
+
+      const args = node.args.map((arg) => inferNodeDimensionWithMap(arg, dimMap));
+      return applyFunction(normalized, args);
+    }
+  }
+}
+
 // -------------------- DEBUG --------------------
 
 export function dimToString(d: Dim): string {

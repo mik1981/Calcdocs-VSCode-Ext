@@ -62,7 +62,7 @@ float filteredCurrent = LPF(12.5f, 8.0f);
 
 // @il_vin = 24 mV
 // @il_current = 2.5 A
-// = @il_vin * @il_current -> W
+// @res = @il_vin * @il_current -> W
 
 // YAML formulas are evaluated by CalcDocs inline (not as C variables)
 // power = 60.0 W   (from power: formula: FS_VIN * FS_CURRENT)
