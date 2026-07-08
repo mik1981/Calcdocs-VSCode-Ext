@@ -1,3 +1,4 @@
+import * as vscode from "vscode";
 import { CalcDocsState } from "./state";
 import { LogLevel } from "../utils/output";
 
