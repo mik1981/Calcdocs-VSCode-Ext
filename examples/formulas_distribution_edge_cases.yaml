@@ -469,10 +469,9 @@ CYCLE_B:
   # ERR: circular dependency detected: CYCLE_A -> CYCLE_B -> CYCLE_A
   # BEHAVIOUR: both formulas have undefined range and value
 
-# G4. Using 'ranges:' (legacy per-dep override) instead of 'parameter_tolerances:'
-#     BEHAVIOUR: 'ranges:' is a legacy field, partially supported.
-#     Prefer 'parameter_tolerances:' for the three-level model.
-#     WARN: may or may not produce the expected result depending on parse path.
+# Legacy field.
+# 'ranges:' is accepted by the parser but ignored by the tolerance engine.
+# Use 'parameter_tolerances:' instead.
 SOME_INPUT:
   type: const
   value: 100

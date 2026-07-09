@@ -4,7 +4,7 @@ import { stripComments } from "../utils/text";
 import type { LineTextSource, ViewportLineRange } from "./viewport";
 
 export const DEFINE_DIRECTIVE_RX = /^\s*#\s*define\b/;
-const CONTROL_FLOW_RX = /^\s*(if|while|for|switch|return|do)\b/;
+const CONTROL_FLOW_RX = /^\s*(else\s+if|if|while|for|switch|return|do)\b/;
 const MAX_LOGICAL_LINE_CONTINUATION_LINES = 128;
 
 export type DocumentSymbolDefinition = {
@@ -39,6 +39,18 @@ function isStatementIncomplete(text: string): boolean {
   }
   if (paren > 0 || brace > 0 || bracket > 0) return true;
 
+  // Balanced, complete block-header lines never need continuation merging:
+  // they carry no assignment/declaration on their own, and merging them with
+  // a following '{' only serves to silently consume one extra physical line.
+  // That's harmless when scanning a whole document, but combined with
+  // viewport-range scanning (collectDocumentSymbolDefinitionsInLineRanges)
+  // it can push the scan position one line past a range boundary right as a
+  // block opens - and once past every range, the scan aborts entirely,
+  // dropping the block's body (see BUGFIX: DC / else-block ghost values).
+  if (/^(if|for|while|switch|catch)\s*\([\s\S]*\)\s*$/.test(s)) return false;
+  if (/^else\s+if\s*\([\s\S]*\)\s*$/.test(s)) return false;
+  if (/^(else|do|try)$/.test(s)) return false;
+
   // 2. operatori binari a fine riga
   if (/[+\-*/%&|^=,?:]$/.test(s)) return true;
 
@@ -48,7 +60,7 @@ function isStatementIncomplete(text: string): boolean {
   // 4. chiamata funzione aperta
   if (/^[A-Za-z_]\w*\s*\([^)]*$/.test(s)) return true;
 
-  // 5. nessun ';' ma sembra un'espressione
+  // Block headers are complete statements even without ';'
   if (!s.endsWith(";") && /[A-Za-z0-9_)]$/.test(s)) {
     return true;
   }
@@ -219,11 +231,16 @@ function collectDocumentSymbolDefinitionsFromLineSource(
           // Plain assignments like `screen_state = SCREEN_OFF;` are silently dropped.
           // We still want to resolve and display the RHS as a ghost value.
           const assignMatch = (trimmed + ";").match(
-            /^([A-Za-z_]\w*(?:\s*(?:->|\.)\s*[A-Za-z_]\w*|\s*\[\s*[^\]]+\s*\])*)\s*=(?!=)\s*(.+);$/
+            /^([A-Za-z_]\w*(?:\s*(?:->|\.)\s*[A-Za-z_]\w*|\s*\[\s*[^\]]+\s*\])*)\s*(\+|-|\*|\/|%|&|\||\^|<<|>>)?=(?!=)\s*(.+);$/
           );
           if (assignMatch) {
             const assignName = assignMatch[1].replace(/\s+/g, "");
-            const assignExpr = assignMatch[2].trim();
+            const compoundOp = assignMatch[2];
+            const rhsExpr = assignMatch[3].trim();
+            // Compound assignment (x += y, x <<= y, ...) is expanded to its
+            // plain-assignment equivalent (x + (y)) so it flows through the
+            // exact same downstream expression evaluator as "x = expr;".
+            const assignExpr = compoundOp ? `${assignName} ${compoundOp} (${rhsExpr})` : rhsExpr;
             const isCKeyword =
               /^(if|else|while|for|do|switch|case|break|continue|return|goto|sizeof|typeof|typedef|struct|union|enum|const|volatile|static|extern|inline|int|char|short|long|float|double|unsigned|signed|void|bool)$/.test(
                 assignName

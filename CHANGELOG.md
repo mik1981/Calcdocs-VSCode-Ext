@@ -1,6 +1,13 @@
 # Changelog
 
-## [0.3.8] - 07/xx/2026
+## [0.3.9] - 07/09/2026
+
+- Ghost values ​​are now visible for else if(...) conditions (missing from the control-flow extractor) and for compound assignments +=, -=, *=, /=, %=, &=, |=, ^=, <<=, >>= (previously unrecognized, just simple =). 
+- A line merge bug has also been fixed (if/else/else if incorrectly joined with {) that could cause ghost values ​​to disappear in subsequent blocks during the editor's limited-range scan.
+- Added specific test cases for the above-described bugs that were fixed.
+- Updated readme.md
+
+## [0.3.8] - 07/08/2026
 
 - Expanded clangd backend detection to automatically support compatible VS Code distributions (not only llvm-vs-code-extensions.vscode-clangd).
 - Aligned Formula Explorer with the active C/C++ document context.

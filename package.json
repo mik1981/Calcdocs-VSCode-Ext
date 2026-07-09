@@ -2,11 +2,11 @@
   "name": "calcdocs-vscode-extension",
   "displayName": "CalcDocs - C/C++ Constants & Formula Evaluator",
   "description": "%extension.description%",
-  "version": "0.3.8",
+  "version": "0.3.9",
   "publisher": "convergo-dev",
   "repository": {
     "type": "git",
-    "url": "https://github.com/mik1981/Calcdocs-VSCode-Extension.git"
+    "url": "https://github.com/mik1981/Calcdocs-VSCode-Ext.git"
   },
   "bugs": {
     "url": "https://github.com/mik1981/Calcdocs-VSCode-Extension/issues"

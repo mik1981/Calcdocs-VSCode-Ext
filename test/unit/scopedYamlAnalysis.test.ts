@@ -2,10 +2,11 @@ import * as fsp from "fs/promises";
 import * as os from "os";
 import * as path from "path";
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createCalcDocsState, type CalcDocsState } from "../../src/core/state";
 import { ColoredOutput } from "../../src/utils/output";
+import { isIgnoredFsPath } from "../../src/core/config";
 import { parseFormulaYamlText } from "../../src/core/formulaYaml";
 import {
   findMissingExternalIdentifiers,
@@ -197,33 +198,18 @@ describe("locateDefiningFiles", () => {
     expect(found).toEqual(new Map([["NTC_R", path.join(workspaceRoot, "a_config.h")]]));
   });
 
-  // Skipped: core/config.ts's getConfig() resolves vscode via require("vscode")
-  // internally, while this test can only intercept it via ESM import("vscode").
-  // Under Vitest these are different module instances, so the spy never takes
-  // effect - a test-infra limitation, not a defect in ignored-dirs handling
-  // (which is pre-existing, unrelated to the scoped-yaml-analysis feature).
-  it.skip("respects ignored directories (e.g. build output) when configured", async () => {
-    await fsp.mkdir(path.join(workspaceRoot, "out"), { recursive: true });
-    await fsp.writeFile(path.join(workspaceRoot, "out", "generated.h"), `#define NTC_R 1\n`);
+  it("isIgnoredFsPath correctly matches a bare directory name against a full path", () => {
 
     // locateDefiningFiles calls refreshIgnoredDirs(state, getConfig()) itself,
     // so simulate a user who has configured "out" as an ignored directory
     // (ignoredDirs defaults to [] otherwise - there is no built-in default).
-    const vscode = await import("vscode");
-    const configSpy = vi
-      .spyOn(vscode.workspace, "getConfiguration")
-      .mockReturnValue({
-        get: <T>(key: string, defaultValue: T): T =>
-          key === "ignoredDirs" ? (["out"] as unknown as T) : defaultValue,
-        update: () => Promise.resolve(undefined),
-      } as ReturnType<typeof vscode.workspace.getConfiguration>);
+    state.ignoredDirs = new Set(["out"]);
 
-    try {
-      const found = await locateDefiningFiles(new Set(["NTC_R"]), workspaceRoot, state);
-      expect(found.size).toBe(0);
-    } finally {
-      configSpy.mockRestore();
-    }
+    const ignoredPath = path.join(workspaceRoot, "out", "generated.h");
+    const notIgnoredPath = path.join(workspaceRoot, "src", "config.h");
+
+    expect(isIgnoredFsPath(state, ignoredPath)).toBe(true);
+    expect(isIgnoredFsPath(state, notIgnoredPath)).toBe(false);
   });
 });
 

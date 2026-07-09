@@ -9,8 +9,8 @@
 
 ---
 
-[![Version](https://vsmarketplacebadges.dev/version-short/convergo-dev.calcdocs-vscode-extension.svg)](https://visualstudio.com)
-[![Download](https://vsmarketplacebadges.dev/downloads-short/convergo-dev.calcdocs-vscode-extension.svg)](https://visualstudio.com)
+[![Version](https://vsmarketplacebadges.dev/version-short/convergo-dev.calcdocs-vscode-extension.svg)](https://marketplace.visualstudio.com/items?itemName=convergo-dev.calcdocs-vscode-extension)
+[![Download](https://vsmarketplacebadges.dev/downloads-short/convergo-dev.calcdocs-vscode-extension.svg)](https://marketplace.visualstudio.com/items?itemName=convergo-dev.calcdocs-vscode-extension)
 [![License](./resources/license-badge.png)](./LICENSE.md)
 
 CalcDocs is the first VS Code extension focused on understanding firmware engineering calculations instead of source code syntax.  
@@ -39,10 +39,6 @@ Instead of manually expanding macros, opening Excel files, or mentally resolving
 ✅ Understand firmware logic instantly
 
 No build. No flashing. No debugger required.
-
----
-
-## ⚡ 5-second demo
 
 ---
 
@@ -124,7 +120,10 @@ The same engineering logic can now:
 ✅ propagate through dependencies automatically  
 ✅ stay permanently aligned with the firmware implementation  
 ✅ visualize real output distributions with Monte Carlo sampling and a new Distribution tab  
-✅ can also propagate **tolerances** (e.g. `tol`, `min`/`max`) through your YAML formula dependency graph to compute final **min/max ranges**.
+✅ propagate uncertainty through dependency graphs using probabilistic models
+✅ estimate output distributions via Monte Carlo sampling
+✅ model engineering uncertainty with `uncertainty`, `distribution`, and automatic propagation
+
 
 No duplicated engineering logic.  
 No spreadsheet drift.  
@@ -245,22 +244,6 @@ Detect issues early:
 ---
 
 > CalcDocs is designed for real embedded firmware workflows.
-
----
-
-## 👀 What it looks like in real code
-
-```c
-#define VIN 24
-#define CURRENT 2
-#define POWER (VIN * CURRENT)
-```
-
-CalcDocs shows:
-
-```c
-#define POWER (VIN * CURRENT)   ← 48W
-```
 
 ---
 
