@@ -86,7 +86,7 @@ CalcDocs evaluates everything live:
 * Keep formulas near the actual firmware logic
 * Eliminate scattered Excel and text notes
 
-👉 [Inline Calculations](https://github.com/mik1981/Calcdocs-VSCode-Extension/blob/main/docs/inline-calculations.md)
+👉 [Inline Calculations](https://github.com/mik1981/Calcdocs-VSCode-Ext/blob/main/docs/inline-calculations.md)
 
 ---
 
@@ -131,9 +131,9 @@ No parallel maintenance.
 
 📖 **Learn more**
 
-- 👉 [Interactive Formula Viewer](https://github.com/mik1981/Calcdocs-VSCode-Extension/blob/main/docs/interactive-formula-viewer.md)
-- 👉 [Tolerance propagation & formula ranges](https://github.com/mik1981/Calcdocs-VSCode-Extension/blob/main/docs/tolerance-and-ranges.md)
-- 👉 [Probabilistic Modeling Guide](https://github.com/mik1981/Calcdocs-VSCode-Extension/blob/main/docs/probabilistic-modeling-guide.md)
+- 👉 [Interactive Formula Viewer](https://github.com/mik1981/Calcdocs-VSCode-Ext/blob/main/docs/interactive-formula-viewer.md)
+- 👉 [Tolerance propagation & formula ranges](https://github.com/mik1981/Calcdocs-VSCode-Ext/blob/main/docs/tolerance-and-ranges.md)
+- 👉 [Probabilistic Modeling Guide](https://github.com/mik1981/Calcdocs-VSCode-Ext/blob/main/docs/probabilistic-modeling-guide.md)
 
 ---
 
@@ -144,7 +144,7 @@ No parallel maintenance.
 | Inside ***C code*** | ![Macro Chain Revelation in code](./resources/macro_chain_revelation_code.gif) |
 | Inside **formulas\*.yaml** | ![Macro Chain Revelation in formulas](./resources/macro_chain_revelation_formulas.gif) |
 
-👉 [Interactive Formula Viewer](https://github.com/mik1981/Calcdocs-VSCode-Extension/blob/main/docs/interactive-formula-viewer.md)
+👉 [Interactive Formula Viewer](https://github.com/mik1981/Calcdocs-VSCode-Ext/blob/main/docs/interactive-formula-viewer.md)
 
 ---
 
@@ -226,7 +226,7 @@ CalcDocs:
 ✅ prevents formula drift  
 ✅ shows results inline  
 
-👉 [Formula YAML Guide](https://github.com/mik1981/Calcdocs-VSCode-Extension/blob/main/docs/formulas-yaml.md)
+👉 [Formula YAML Guide](https://github.com/mik1981/Calcdocs-VSCode-Ext/blob/main/docs/formulas-yaml.md)
 
 ---
 
@@ -239,7 +239,7 @@ Detect issues early:
 - Invalid conversions
 - YAML/C inconsistencies
 
-👉 [Features Overview](https://github.com/mik1981/Calcdocs-VSCode-Extension/blob/main/docs/features.md)
+👉 [Features Overview](https://github.com/mik1981/Calcdocs-VSCode-Ext/blob/main/docs/features.md)
 
 ---
 
@@ -267,7 +267,7 @@ Know values before runtime
 
 📖 **Learn more**
 
-- 👉 [Real Use Cases](https://github.com/mik1981/Calcdocs-VSCode-Extension/blob/main/docs/use-cases.md)
+- 👉 [Real Use Cases](https://github.com/mik1981/Calcdocs-VSCode-Ext/blob/main/docs/use-cases.md)
 
 ---
 
@@ -295,7 +295,7 @@ For best results, combine it with:
 
 CalcDocs integrates without conflicts.
 
-👉 [Configuration](https://github.com/mik1981/Calcdocs-VSCode-Extension/blob/main/docs/configuration.md)
+👉 [Configuration](https://github.com/mik1981/Calcdocs-VSCode-Ext/blob/main/docs/configuration.md)
 
 ---
 
@@ -321,19 +321,19 @@ If CalcDocs saves you time:
 
 Start here:
 
-- 👉 [Getting Started](https://github.com/mik1981/Calcdocs-VSCode-Extension/blob/main/docs/getting-started.md)
-- 👉 [Features Overview](https://github.com/mik1981/Calcdocs-VSCode-Extension/blob/main/docs/features.md)
+- 👉 [Getting Started](https://github.com/mik1981/Calcdocs-VSCode-Ext/blob/main/docs/getting-started.md)
+- 👉 [Features Overview](https://github.com/mik1981/Calcdocs-VSCode-Ext/blob/main/docs/features.md)
 
 Reference:
 
-- 👉 [Architecture](https://github.com/mik1981/Calcdocs-VSCode-Extension/blob/main/docs/architecture.md)
-- 👉 [Configuration](https://github.com/mik1981/Calcdocs-VSCode-Extension/blob/main/docs/configuration.md)
-- 👉 [Contributing](https://github.com/mik1981/Calcdocs-VSCode-Extension/blob/main/docs/contributing.md)
+- 👉 [Architecture](https://github.com/mik1981/Calcdocs-VSCode-Ext/blob/main/docs/architecture.md)
+- 👉 [Configuration](https://github.com/mik1981/Calcdocs-VSCode-Ext/blob/main/docs/configuration.md)
+- 👉 [Contributing](https://github.com/mik1981/Calcdocs-VSCode-Ext/blob/main/docs/contributing.md)
 
 Design & Scope:
 
-- 👉 [Project-Scope](https://github.com/mik1981/Calcdocs-VSCode-Extension/blob/main/docs/project-scope.md)
-- 👉 [Design-Philosophy](https://github.com/mik1981/Calcdocs-VSCode-Extension/blob/main/docs/design-philosophy.md)
+- 👉 [Project-Scope](https://github.com/mik1981/Calcdocs-VSCode-Ext/blob/main/docs/project-scope.md)
+- 👉 [Design-Philosophy](https://github.com/mik1981/Calcdocs-VSCode-Ext/blob/main/docs/design-philosophy.md)
 
 ---
 

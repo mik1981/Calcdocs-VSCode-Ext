@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.3.10] - 07/09/2026
+
+- Fixed some erroneous links
+
 ## [0.3.9] - 07/09/2026
 
 - Ghost values ​​are now visible for else if(...) conditions (missing from the control-flow extractor) and for compound assignments +=, -=, *=, /=, %=, &=, |=, ^=, <<=, >>= (previously unrecognized, just simple =). 
