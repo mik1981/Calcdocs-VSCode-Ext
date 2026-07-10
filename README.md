@@ -44,18 +44,9 @@ No build. No flashing. No debugger required.
 
 ## 1️⃣ Coding Evaluator
 
-Write this:
-
-```c
-#define RPM 1000
-#define SPEED (RPM * 0.10472)
-```
-
-CalcDocs instantly shows:
-
-```c
-#define SPEED (RPM * 0.10472)   ← 104.72
-```
+| Write this... | ...and will instantly appear |
+| :---: | :---: |
+| ![Without ghostvalue](./resources/ghostvalue_define_off.png) | ![With ghostvalue](./resources/ghostvalue_define_on.png) |
 
 ✅ Real-time evaluation  
 ✅ Inline resolved values  
@@ -65,21 +56,10 @@ CalcDocs instantly shows:
 
 ## 2️⃣ Realtime Engineering Notes
 
-Write this directly inside your firmware comments:
+| Write this... | ...and will instantly appear |
+| :---: | :---: |
+| ![Without ghostvalue](./resources/ghostvalue_inline_off.png) | ![With ghostvalue](./resources/ghostvalue_inline_on.png) |
 
-```c
-// @rpm = 3000 rpm
-// = @rpm -> rad/s
-// = 13 N * 1 m * @rpm -> W
-```
-
-CalcDocs evaluates everything live:
-
-```c
-// @rpm = 3000 rpm
-// = @rpm -> rad/s <- 314.1592653589793 rad/s
-// = 13 N * 1 m * @rpm -> W <- 4084.0704496667313 W
-```
 
 * Realtime calculations directly in comments
 * Unit conversion (`rpm -> rad/s`, `atm -> Pa`, etc.)

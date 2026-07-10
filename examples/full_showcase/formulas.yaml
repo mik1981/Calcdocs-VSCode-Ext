@@ -1,3 +1,6 @@
+# Demonstrates cross-file symbol resolution:
+# FS_VIN and FS_CURRENT are defined in app.c as C macros.
+# CalcDocs resolves these external C symbols when evaluating YAML formulas.
 FS_POWER:
   formula: FS_VIN * FS_CURRENT
   unit: W

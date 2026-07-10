@@ -1,8 +1,15 @@
 # Changelog
 
+## [0.0.0] - 07/10/2026
+
+- Fixed an issue where include symbols were not resolved correctly in C source files by CalcDocs.
+- Limited include recursion depth to prevent excessive resource usage.
+- Aligned condition resolution with assignment resolution evaluation.
+- Updated docs
+
 ## [0.3.10] - 07/09/2026
 
-- Fixed some erroneous links
+- Fixed some erroneous links in readme.md
 
 ## [0.3.9] - 07/09/2026
 

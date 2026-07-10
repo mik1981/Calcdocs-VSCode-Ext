@@ -250,7 +250,7 @@ Dependency Tree) but **no histogram**, because no sampling population exists:
 
 ## See also
 
-- `docs/TOLERANCE_ARCHITECTURE.md` — engine internals and data flow
+- `docs/tolerance_architecture.md` — engine internals and data flow
 - `examples/formulas_model_modes_expected.yaml` — all propagation modes, annotated
 - `examples/formulas_distribution_edge_cases.yaml` — edge cases and improper use
 - `examples/cases/15_tolerance_propagation/` — realistic component chain example

@@ -107,6 +107,15 @@ export type CalcDocsState = {
   configVars: Map<string, FileConfigVars>;
   /** Mappa delle posizioni delle definizioni dei simboli */
   symbolDefs: Map<string, SymbolDefinitionLocation>;
+  /**
+   * Indice basename(header).toLowerCase() -> lista di path assoluti,
+   * costruito da scanWorkspace() a partire dai file già enumerati da
+   * listFilesRecursive(). Usato come fallback da resolveInclude() quando
+   * l'euristica a directory fisse (Inc/, include/, headers/...) non trova
+   * l'header, tipico nei layout STM32CubeIDE (Core/Src + Core/Inc,
+   * Drivers/<mod>/Inc, ecc.).
+   */
+  headerIndex: Map<string, string[]>;
   /** Mappa delle definizioni condizionali (multiple varianti per simbolo) */
   symbolConditionalDefs: Map<string, SymbolConditionalDefinition[]>;
   /** Mappa delle radici di ambiguità: simbolo ambiguo -> simboli da cui dipende */
@@ -224,6 +233,7 @@ export function createCalcDocsState(
     csvTables: new Map(),
     configVars: new Map<string, FileConfigVars>(),
     symbolDefs: new Map<string, SymbolDefinitionLocation>(),
+    headerIndex: new Map<string, string[]>(),
     symbolConditionalDefs: new Map<string, SymbolConditionalDefinition[]>(),
     symbolAmbiguityRoots: new Map<string, string[]>(),
     allDefines: new Map<string, string>(),

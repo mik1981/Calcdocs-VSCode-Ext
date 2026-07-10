@@ -157,12 +157,26 @@ LOOKUP_R:
   unit: ohm
 ```
 
-**Supported math** (case-insensitive): `sin cos tan asin acos atan atan2 sqrt
-abs int mod min max pow floor ceil round trunc log log10 log2 exp hypot pi e
-deg2rad rad2deg`
+**Supported math** (case-insensitive):
+CalcDocs supports common mathematical functions including:  
+`sin, cos, tan, asin, acos, atan, atan2`,  
+`sqrt, abs, min, max`,  
+`pow, floor, ceil, round`,  
+`log, log10, log2, ln, exp`,  
 
-**CSV lookups**: `csv(table, key, out_col [, in_col [, mode]])`
-Modes: `none` (exact), `linear` (interpolate), `nearest`
+and engineering helpers such as:  
+`deg2rad, rad2deg`.
+
+Additional aliases and extended math functions are also supported. Supported functions:  
+`trunc, expm1, power, hypot`,  
+`mod, modulo, remainder`,  
+`sign`,  
+`sinh, cosh, tanh`,  
+`asinh, acosh, atanh`,  
+`cbrt`,
+
+**CSV lookups**: `csv(table, key, input_name_col [, output_name_col [, mode]])`
+Modes: `none` (only exact), `linear` (interpolate), `nearest`
 
 ### Arrays
 
@@ -294,7 +308,7 @@ R1:
     sigma_level: 2
 ```
 
-See `docs/MIGRATION_GUIDE.md` for a complete conversion table.
+See `docs/migration_guide.md` for a complete conversion table.
 
 ---
 
@@ -318,7 +332,7 @@ Run **CalcDocs: Generate Formula Header** (⇧⌘P) to produce a `.h` file:
 ## See also
 
 - `docs/tolerance-and-ranges.md` — tolerance propagation guide with examples
-- `docs/TOLERANCE_ARCHITECTURE.md` — engine internals and data flow
-- `docs/MIGRATION_GUIDE.md` — converting legacy tolerance fields
+- `docs/tolerance_architecture.md` — engine internals and data flow
+- `docs/migration_guide.md` — converting legacy tolerance fields
 - `examples/formulas_model_modes_expected.yaml` — all propagation modes
 - `examples/formulas_distribution_edge_cases.yaml` — edge cases and improper use

@@ -20,7 +20,7 @@ CalcDocs is organized around 3 macro-functional areas.
 - YAML formula engine (`yamlParser.ts`): Parses `formulas*.yaml` → deps/graph/diagnostics. See [Formula YAML Guide](../formulas-yaml.md).
 - Dimensional/unit engine for consistency checks and output conversion.
 - Realtime inline calculations in comments.
-- Header generator (`headerGenerator.ts`): YAML/C → `#define` macros.
+- Header generator module: YAML/C → `#define` macros.
 
 ## 3) Runtime & Delivery Layer
 

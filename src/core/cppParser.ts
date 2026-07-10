@@ -3,7 +3,7 @@ import * as path from "path";
 
 import { updateBraceDepth } from "../utils/braceDepth";
 import { DEFINE_RX, SRC_EXTS, TOKEN_RX } from "../utils/regex";
-import { stripComments, stripLineContinuations } from "../utils/text";
+import { stripComments, stripLineContinuations, createCommentStripper } from "../utils/text";
 import { type FunctionMacroDefinition, safeEval } from "./expression";
 import {
   SymbolConditionalDefinition,
@@ -33,6 +33,13 @@ export type CollectOptions = {
   output?: ColoredOutput;
   workspaceRoot?: string;
   maxMegaCacheEntries?: number;
+  /**
+   * Indice basename(header).toLowerCase() -> path assoluti, costruito da
+   * scanWorkspace()/ensureHeaderIndexPopulated() in analysis.ts. Usato da
+   * resolveInclude() come fallback quando l'euristica a directory fisse
+   * (Inc/, include/, headers/...) non trova l'header.
+   */
+  headerIndex?: Map<string, string[]>;
 };
 
 type ParsedDefineDirective = {
@@ -206,6 +213,44 @@ function evictOldMegaEntries(maxEntries: number, output?: ColoredOutput): void {
 }
 
 
+/**
+ * Guard-rail contro l'esplosione del mega-content quando la catena di
+ * #include raggiunge un header "ombrello" di un vendor SDK (es. HAL
+ * STM32) che include, senza guardie #ifdef valutate da questo parser
+ * testuale, decine di driver di periferica per volta. remainingChars e
+ * truncated sono condivisi (stesso oggetto) per tutta la ricorsione di
+ * un singolo buildMegaContent(); depth invece viaggia per-livello come
+ * parametro separato, cosi' riflette la profondita' del ramo corrente
+ * e non quella globale.
+ */
+type MegaBudget = {
+  remainingChars: number;
+  truncated: boolean;
+};
+
+const MEGA_CONTENT_MAX_CHARS = 1_000_000; // ~3MB per file analizzato: hard cap
+const MEGA_INCLUDE_MAX_DEPTH = 5;
+
+/**
+ * Rileva directory "a pacchetto versionato" tipiche di package manager
+ * (STM32Cube component packs, vcpkg, NuGet, ecc.), es:
+ *   STMicroelectronics.CMSIS.6.3.0
+ *   STMicroelectronics.stm32c5xx_hal_drivers.2.0.0
+ * Un segmento e' considerato "vendor" se i suoi ultimi 3 token separati
+ * da '.' sono tutti numerici (Major.Minor.Patch).
+ */
+function isVersionedPackageSegment(segment: string): boolean {
+  const parts = segment.split('.');
+  if (parts.length < 3) {
+    return false;
+  }
+  return parts.slice(-3).every((p) => /^\d+$/.test(p));
+}
+
+function isVendorPackagePath(absPath: string): boolean {
+  return absPath.split(path.sep).some(isVersionedPackageSegment);
+}
+
 /*
  * Adapted from analysis.ts createMegaSourceFile logic.
  */
@@ -215,7 +260,10 @@ async function resolveInclude(
   workspaceRoot: string,
   output: ColoredOutput | undefined,
   visited: Set<string>,
-  dependencyTracker: Set<string>
+  dependencyTracker: Set<string>,
+  budget: MegaBudget,
+  depth: number,
+  headerIndex?: Map<string, string[]>
 ): Promise<string> {
 // FIXED: Prioritize inc/test/inc dirs for external headers
   // output?.appendLine(`[ResolveInclude] 🔍 Searching "${relIncludePath}" (baseDir="${path.relative(workspaceRoot, baseDir)}")`);
@@ -247,8 +295,40 @@ async function resolveInclude(
     }
   }
   
+  if (!absIncludePath && headerIndex) {
+    // FALLBACK: le candidateDirs sopra sono un elenco di convenzioni
+    // indovinate (inc/, include/, headers/...) e non coprono layout
+    // comuni come Core/Src + Core/Inc (STM32CubeIDE) o Drivers/<mod>/Inc.
+    // Consultiamo l'indice reale del workspace prima di arrenderci.
+    const basenameKey = path.basename(relIncludePath).toLowerCase();
+    const candidates = headerIndex.get(basenameKey);
+
+    if (candidates?.length === 1) {
+      absIncludePath = candidates[0];
+      output?.appendLine(
+        `[ResolveInclude] ✅ Found via headerIndex: ${relIncludePath} → ${path.relative(workspaceRoot || '.', absIncludePath)}`
+      );
+    } else if (candidates && candidates.length > 1) {
+      // Ambiguo (piu' header con lo stesso basename nel workspace):
+      // scegliamo quello con il path relativo piu' corto rispetto al
+      // file che sta includendo, che e' l'euristica piu' ragionevole
+      // senza un vero preprocessore/compile_commands.json.
+      const sorted = [...candidates].sort((a, b) => {
+        const da = path.relative(baseDir, a).split(path.sep).length;
+        const db = path.relative(baseDir, b).split(path.sep).length;
+        return da - db;
+      });
+      absIncludePath = sorted[0];
+      output?.appendLine(
+        `[ResolveInclude] ⚠️ Ambiguous via headerIndex: ${relIncludePath} has ${candidates.length} matches, using ${path.relative(workspaceRoot || '.', absIncludePath)}`
+      );
+    }
+  }
+
   if (!absIncludePath) {
-    // output?.appendLine(`[ResolveInclude] ❌ NOT FOUND: ${relIncludePath} (tried ${triedPaths.slice(0,5).join(' → ')}${triedPaths.length>5 ? '...' : ''})`);
+    output?.appendLine(
+      `[ResolveInclude] ❌ NOT FOUND: ${relIncludePath} (tried ${triedPaths.slice(0,5).join(' → ')}${triedPaths.length>5 ? '...' : ''}, baseDir=${path.relative(workspaceRoot || '.', baseDir)})`
+    );
     return '';
   }
   
@@ -257,6 +337,26 @@ async function resolveInclude(
 
   if (visited.has(key)) {
     // output?.appendLine(`[ResolveInclude] SKIP recursive include: ${path.basename(relIncludePath)}`);
+    return '';
+  }
+
+  
+  
+  if (budget.truncated) {
+    return '';
+  }
+  if (depth > MEGA_INCLUDE_MAX_DEPTH) {
+    budget.truncated = true;
+    output?.appendLine(
+      `[Mega] ⚠️ Include depth limit (${MEGA_INCLUDE_MAX_DEPTH}) reached at "${relIncludePath}" — interrompo l'espansione di ulteriori #include. Il risultato di CalcDocs potrebbe essere incompleto per questo file.`
+    );
+    return '';
+  }
+  if (budget.remainingChars <= 0) {
+    budget.truncated = true;
+    output?.appendLine(
+      `[Mega] ⚠️ Size limit (${(MEGA_CONTENT_MAX_CHARS / 1_000_000).toFixed(1)}MB) reached prima di "${relIncludePath}" — interrompo l'espansione di ulteriori #include. Il risultato di CalcDocs potrebbe essere incompleto per questo file.`
+    );
     return '';
   }
 
@@ -272,13 +372,25 @@ async function resolveInclude(
     // output?.appendLine(`[ResolveInclude] Failed read ${relIncludePath}: ${err}`);
     return '';
   }
+
+  budget.remainingChars -= content.length;
+
   
+  
+  
+  const skipNestedExpansion = isVendorPackagePath(absIncludePath);
+  if (skipNestedExpansion) {
+    output?.detail(
+      `[Mega] 📦 Vendor package header "${path.relative(workspaceRoot || '.', absIncludePath)}": incluso ma i suoi #include annidati NON vengono espansi (evita l'esplosione dell'intero SDK per header ombrello tipo stm32_hal.h).`
+    );
+  }
+
   const lines = content.split(/\r?\n/);
-  let processedContent = `/* === INCL ${path.relative(workspaceRoot, absIncludePath)} === */\n`;
+  let processedContent = `\n`;
   
   for (const line of lines) {
   const includeMatch = line.match(INCLUDE_RX);
-    if (includeMatch) {
+    if (includeMatch && !skipNestedExpansion) {
       // output?.appendLine(`[ResolveInclude] Found include match: ${includeMatch[1]}`);
       const nested = await resolveInclude(
 
@@ -287,7 +399,10 @@ async function resolveInclude(
         workspaceRoot,
         output,
         visited,
-        dependencyTracker
+        dependencyTracker,
+        budget,
+        depth + 1,
+        headerIndex
       );
       processedContent += nested || line + '\n';
     } else {
@@ -305,7 +420,8 @@ async function buildMegaContent(
   sourcePath: string,
   workspaceRoot: string,
   output: ColoredOutput | undefined,
-  maxMegaCacheEntries: number
+  maxMegaCacheEntries: number,
+  headerIndex?: Map<string, string[]>
 ): Promise<string> {
   // Force clear cache for test files to avoid stale data
   if (sourcePath.includes('test')) {
@@ -337,8 +453,12 @@ async function buildMegaContent(
   const visited = new Set<string>();
   const dependencyTracker = new Set<string>([path.resolve(sourcePath)]);
   const mainDir = path.dirname(sourcePath);
+  const budget: MegaBudget = {
+    remainingChars: MEGA_CONTENT_MAX_CHARS,
+    truncated: false,
+  };
   
-  let megaContent = `/* === MEGA from ${path.relative(workspaceRoot, sourcePath)} === */\n`;
+  let megaContent = `\n`;
   let mainContent: string;
   try {
     mainContent = await fsp.readFile(sourcePath, 'utf8');
@@ -358,7 +478,10 @@ async function buildMegaContent(
         workspaceRoot,
         output,
         visited,
-        dependencyTracker
+        dependencyTracker,
+        budget,
+        0,
+        headerIndex
       );
       if (included) {
       output?.appendLine(`[Mega] included ${includeMatch[1]} in ${mainDir}`);
@@ -367,6 +490,12 @@ async function buildMegaContent(
     } else {
       megaContent += line + '\n';
     }
+  }
+
+  if (budget.truncated) {
+    output?.appendLine(
+      `[Mega] ⚠️ ${path.basename(sourcePath)}: espansione #include troncata per limite di dimensione/profondità. Alcuni simboli potrebbero non essere risolti.`
+    );
   }
 
   const lines = megaContent.split(/\r?\n/);
@@ -1027,7 +1156,7 @@ export async function collectDefinesAndConsts(
   options: CollectOptions = {}
 ): Promise<CollectedCppSymbols> {
 
-  const { resolveIncludes = false, output, maxMegaCacheEntries } = options;
+  const { resolveIncludes = false, output, maxMegaCacheEntries, headerIndex } = options;
   const effectiveCacheLimit = clampMegaCacheEntries(maxMegaCacheEntries);
 
   output?.appendLine(
@@ -1045,9 +1174,8 @@ export async function collectDefinesAndConsts(
   const locations = new Map<string, SymbolDefinitionLocation>();
   const globallyDefinedSymbols = new Set<string>();
 
-  const SOURCES_ONLY_EXTS = new Set([".c", ".cpp", ".cc"]);
   const effectiveFiles = resolveIncludes 
-    ? files.filter(f => SOURCES_ONLY_EXTS.has(path.extname(f).toLowerCase()))
+    ? files.filter(f => SRC_EXTS.has(path.extname(f).toLowerCase()))
     : files;
   output?.appendLine(`[CPP] effectiveFiles (${effectiveFiles.length}): ${effectiveFiles.map(p => path.basename(p)).join(', ')}`);
 
@@ -1062,7 +1190,8 @@ export async function collectDefinesAndConsts(
         filePath,
         workspaceRoot,
         output,
-        effectiveCacheLimit
+        effectiveCacheLimit,
+        headerIndex
       );
     } else {
       try {
@@ -1078,10 +1207,11 @@ export async function collectDefinesAndConsts(
 
     let braceDepth = 0;
     let conditionalDepth = 0;
+    const stripper = createCommentStripper();
 
     for (let i = 0; i < lines.length; i += 1) {
       const line = lines[i];
-      const lineWithoutComments = stripComments(line);
+      const lineWithoutComments = stripper.strip(line);
       const directive = lineWithoutComments.trim();
 
       // IMPORTANT:
@@ -1257,7 +1387,8 @@ export async function collectDefinesAndConsts(
         filePath,
         workspaceRoot,
         output,
-        effectiveCacheLimit
+        effectiveCacheLimit,
+        headerIndex
       );
     } else {
       try {
@@ -1274,10 +1405,11 @@ export async function collectDefinesAndConsts(
     let braceDepth = 0;
     const seenVariants = new Set<string>();
     const activeDefinedSymbols = new Set<string>(globallyDefinedSymbols);
+    const stripper2 = createCommentStripper();
 
     for (let i = 0; i < lines.length; i += 1) {
       const line = lines[i];
-      const lineWithoutComments = stripComments(line);
+      const lineWithoutComments = stripper2.strip(line);
       const directiveLine = lineWithoutComments.trim();
       let isDirectiveLine = false;
 

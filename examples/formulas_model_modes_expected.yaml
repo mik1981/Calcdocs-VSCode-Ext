@@ -22,6 +22,15 @@
 # The Distribution tab shows the SAME empirical histogram for all three methods.
 # Only the confidence bound markers change.
 # ══════════════════════════════════════════════════════════════════════════════
+# Expected values obtained from Monte Carlo sampling are intentionally
+# marked as *_approx because small run-to-run variations are normal.
+# ══════════════════════════════════════════════════════════════════════════════
+# NOTE:
+# In this engine, worst_case represents the minimum and maximum values
+# observed during Monte Carlo simulation.
+#
+# It is not an analytical worst-case bound.
+# ══════════════════════════════════════════════════════════════════════════════
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -257,14 +266,25 @@ Y_nonlinear_rss_normal:
 # ════════════════════════════════════════════════════════════════════════════
 # 4. TWO INPUTS: Y = A + B  (different distributions)
 # ════════════════════════════════════════════════════════════════════════════
-# nominal = 100 + 100 = 200
-
+# NOTE:
+# Worst-case values are computed from the observed Monte Carlo samples,
+# not from an analytical sum of input half-widths.
+#
+# For bounded distributions (e.g. uniform), sampled extremes usually
+# approach the theoretical limits.
+#
+# For unbounded distributions (e.g. normal), sampled extrema may exceed
+# the nominal ±2σ (or other confidence interval) because the distribution
+# has non-zero probability outside that interval.
+#
+# Therefore the reported worst_case range is empirical rather than a
+# guaranteed analytical bound.
+#
 Y_two_wc:
   type: expr
   formula: X_UNIFORM + X_NORMAL_2S
   unit: count
   propagation: worst_case
-  # hw(X_UNIFORM)=5, hw(X_NORMAL_2S)=5 → Δ_wc = 5+5 = 10 → [190, 210]
   expected:
     value: 200
     min: 190
@@ -345,12 +365,19 @@ A_NORM_3S_2:
   uncertainty: { type: percent, value: 5 }
   distribution: { type: normal, sigma_level: 3 }
 
+# NOTE:
+# With multiple independent inputs, the reported worst_case range reflects
+# the minimum and maximum values observed during Monte Carlo sampling.
+#
+# It should not be interpreted as the analytical combination of every
+# input simultaneously reaching its extreme, which is statistically
+# unlikely as the number of variables increases.
+#
 Y_total_wc:
   type: expr
   formula: A_UNIF_1 + A_UNIF_2 + A_NORM_2S_1 + A_NORM_2S_2 + A_NORM_3S_1 + A_NORM_3S_2
   unit: count
   propagation: worst_case
-  # Δ_wc = 5×6 = 30 → [570, 630]
   expected:
     value: 600
     min: 570

@@ -1,6 +1,6 @@
 import { parseCppSymbolDefinition, type CppSymbolDefinition } from "./cppParser";
 import { updateBraceDepth } from "../utils/braceDepth";
-import { stripComments } from "../utils/text";
+import { stripComments, createCommentStripper } from "../utils/text";
 import type { LineTextSource, ViewportLineRange } from "./viewport";
 
 export const DEFINE_DIRECTIVE_RX = /^\s*#\s*define\b/;
@@ -142,6 +142,7 @@ function collectDocumentSymbolDefinitionsFromLineSource(
   const definitions: DocumentSymbolDefinition[] = [];
   let braceDepth = 0;
   let lineIndex = ranges.length > 0 ? ranges[0].startLine : 0;
+  const commentSkip = createCommentStripper();
 
   while (lineIndex < source.lineCount) {
     if (ranges.length > 0 && !isLineInRanges(lineIndex, ranges)) {
@@ -154,8 +155,31 @@ function collectDocumentSymbolDefinitionsFromLineSource(
       continue;
     }
 
+    // ---------------------------------------------------------------
+    // Skip lines that are entirely inside a block comment.
+    // isStatementIncomplete() uses stripComments() which is stateless
+    // and cannot detect multi-line block comments.  If we let comment
+    // lines through, isStatementIncomplete("* test") returns true
+    // (ends with letter, no ";"), which triggers logical-line merging
+    // that consumes the closing "*/" and the first statement line,
+    // producing a merged text like:
+    //
+    //   " * test */ int z1 = PT100_NUM16(3);"
+    //
+    // That text may accidentally be parsed as a valid declaration
+    // but with startLine pointing to the comment line instead of
+    // the actual code line.  The result: every ghost value gets
+    // placed at the wrong source location.
+    // ---------------------------------------------------------------
+    const rawLine = source.lineAt(lineIndex).text;
+    const strippedLine = commentSkip.strip(rawLine);
+    if (!strippedLine.trim()) {
+      lineIndex++;
+      continue;
+    }
+
     const startLine = lineIndex;
-    let lineText = source.lineAt(lineIndex).text;
+    let lineText = rawLine;
     let continuationLines = 0;
 
     while (

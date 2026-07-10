@@ -32,7 +32,7 @@ import { extractUnitsFromCppFiles } from "../engine/cUnitExtractor";
 
 import { type FormulaEntry, type FormulaLabel } from "../types/FormulaEntry";
 import { clampLen } from "../utils/text";
-import { TOKEN_RX } from "../utils/regex";
+import { SRC_EXTS, TOKEN_RX } from "../utils/regex";
 import { localize } from "../utils/localize";
 import { updateBraceDepth } from "../utils/braceDepth";
 import {
@@ -91,8 +91,8 @@ const YAML_LINE_COLUMN_RX = /line\s+(\d+)\s*,\s*column\s+(\d+)/i;
 /** Soglia di mismatch tra define C/C++ e valore formula (1%) */
 const DEFINE_VALUE_MISMATCH_THRESHOLD = 0.01;
 
-/** Estensioni solo per file sorgente C/C++ (no headers) */
-const SOURCES_ONLY_EXTS = new Set([".c", ".cpp", ".cc"]);
+/** Estensioni di file C/C++ che possono essere usati come entry point di analisi. */
+const ANALYSIS_EXTS = SRC_EXTS;
 
 
 
@@ -272,7 +272,7 @@ export async function runActiveCppFileAnalysis(
   sourcePath: string
 ): Promise<void> {
   const normalizedSourcePath = path.resolve(sourcePath);
-  if (!SOURCES_ONLY_EXTS.has(path.extname(normalizedSourcePath).toLowerCase())) {
+  if (!ANALYSIS_EXTS.has(path.extname(normalizedSourcePath).toLowerCase())) {
     return;
   }
 
@@ -280,6 +280,9 @@ export async function runActiveCppFileAnalysis(
 
   try {
     const config = getConfig();
+    
+    await ensureHeaderIndexPopulated(state, config);
+
     const cppSymbols = await collectDefinesAndConsts(
       [normalizedSourcePath],
       state.workspaceRoot,
@@ -287,7 +290,8 @@ export async function runActiveCppFileAnalysis(
         resolveIncludes: true,
         output: state.output,
         maxMegaCacheEntries: config.cppCacheMaxEntries,
-      } as any // TS workaround for optional cache bypass
+        headerIndex: state.headerIndex,
+      } as any 
     );
 
     applyCppSymbols(state, cppSymbols, {
@@ -336,12 +340,75 @@ async function scanWorkspace(state: CalcDocsState): Promise<WorkspaceScan> {
   const previousHasFormulasFile = state.hasFormulasFile;
   state.hasFormulasFile = Boolean(yamlPath);
 
+  rebuildHeaderIndex(state, files);
+
   return {
     files,
     yamlPath,
     hasFormulasFileChanged: previousHasFormulasFile !== state.hasFormulasFile,
   };
 }
+
+
+const HEADER_EXTS = new Set([".h", ".hpp", ".hh"]);
+
+/**
+ * La pipeline scoped (runActiveCppFileAnalysis) gira SENZA passare da
+ * scanWorkspace(), quindi puo' partire con state.headerIndex vuoto
+ * (es. workspace appena aperto direttamente su un file .c, prima di
+ * qualunque full analysis). In quel caso costruiamo l'indice una volta
+ * con un walk leggero (solo elenco file, nessun parsing), cosi'
+ * resolveInclude() ha comunque una mappa affidabile su cui fare
+ * fallback. Le scansioni successive di scanWorkspace() lo terranno
+ * aggiornato.
+ */
+async function ensureHeaderIndexPopulated(
+  state: CalcDocsState,
+  config: ReturnType<typeof getConfig>
+): Promise<void> {
+  if (state.headerIndex.size > 0) {
+    return;
+  }
+
+  refreshIgnoredDirs(state, config);
+  const files = await listFilesRecursive(
+    state.workspaceRoot,
+    (absoluteDirPath) => isIgnoredFsPath(state, absoluteDirPath),
+    state
+  );
+
+  rebuildHeaderIndex(state, files);
+}
+
+/**
+ * Ricostruisce state.headerIndex (basename lowercase -> path assoluti)
+ * a partire dai file già scoperti da listFilesRecursive. Questo indice
+ * viene poi passato a collectDefinesAndConsts/buildMegaContent come
+ * fallback per resolveInclude(), cosi' che la risoluzione di un
+ * `#include "app_errors.h"` non dipenda da una lista fissa di nomi di
+ * cartelle (inc/, include/, headers/...) ma dalla reale posizione del
+ * file nel workspace, indipendentemente dal layout del progetto
+ * (Core/Src + Core/Inc, Drivers/<mod>/Inc, ecc.).
+ */
+function rebuildHeaderIndex(state: CalcDocsState, files: string[]): void {
+  state.headerIndex.clear();
+
+  for (const filePath of files) {
+    const ext = path.extname(filePath).toLowerCase();
+    if (!HEADER_EXTS.has(ext)) {
+      continue;
+    }
+
+    const key = path.basename(filePath).toLowerCase();
+    const existing = state.headerIndex.get(key);
+    if (existing) {
+      existing.push(filePath);
+    } else {
+      state.headerIndex.set(key, [filePath]);
+    }
+  }
+}
+
 
 /**
  * Modalità fallback usata quando non viene trovato nessun formulas*.yaml.
@@ -360,9 +427,9 @@ async function runCppOnlyAnalysis(
     return;
   }
 
-  // Filter only C/C++ source files (no headers)
+  // Filter only C/C++ files that can be used as analysis entry points
   const sourceFiles = files.filter((f) =>
-    SOURCES_ONLY_EXTS.has(path.extname(f).toLowerCase())
+    ANALYSIS_EXTS.has(path.extname(f).toLowerCase())
   ).sort((left, right) => left.localeCompare(right));
 
   if (sourceFiles.length === 0) {
@@ -507,7 +574,7 @@ async function appendDefineMismatchDiagnostics(
   }
 
   const sourceFiles = files.filter((file) =>
-    SOURCES_ONLY_EXTS.has(path.extname(file).toLowerCase())
+    ANALYSIS_EXTS.has(path.extname(file).toLowerCase())
   );
 
   if (sourceFiles.length === 0) {
@@ -869,7 +936,7 @@ async function runYamlAnalysis(
 
   // Filter only C/C++ source files (no headers)
   const sourceFiles = files.filter((f) =>
-    SOURCES_ONLY_EXTS.has(path.extname(f).toLowerCase())
+    ANALYSIS_EXTS.has(path.extname(f).toLowerCase())
   ).sort((left, right) => left.localeCompare(right));
 
   // Collect symbols from source files with include resolution (force fresh for tests)

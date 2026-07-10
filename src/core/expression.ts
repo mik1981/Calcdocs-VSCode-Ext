@@ -39,8 +39,16 @@ export type NumericDisplayFormat = 'decimal' | 'hex' | 'binary' | 'boolean';
 
 const HEX_LITERAL_DETECT_RX = /\b0[xX][0-9a-fA-F]/;
 const BINARY_LITERAL_DETECT_RX = /\b0[bB][01]/;
-// & | ^ ~ e ! (non seguiti da =) e shift << >>
-const BITWISE_OP_DETECT_RX = /[&|^~]|<<|>>/;
+
+// ⚠️ Deve rilevare SOLO operatori bitwise reali (&, |, ^, ~, <<, >>), NON
+// gli operatori logici && e || — che contengono comunque i caratteri '&'/'|'
+// e con una classe di caratteri semplice [&|^~] venivano rilevati come falsi
+// positivi "bitwise". Questo causava, tra l'altro, il blocco del constant-folding
+// (simplifyNumericFragments) e il numericFormat errato (hex invece di boolean)
+// per QUALSIASI espressione contenente && o ||, es. una condizione if con un
+// AND logico che include una chiamata a funzione-macro pienamente risolvibile
+// (es. "cond1 && (x >= fT_to_Timer(10.0))" restava non semplificata).
+const BITWISE_OP_DETECT_RX = /(?<!&)&(?!&)|(?<!\|)\|(?!\|)|\^|~|<<|>>/;
 const LOGICAL_OP_DETECT_RX = /&&|\|\||!(?!=)/;
 const RELATIONAL_OP_DETECT_RX = /==|!=|<=|>=|(?<![<>])[<>](?![=<>])/;
 const SIGNED_CAST_DETECT_RX    =
@@ -1150,7 +1158,7 @@ function isReducibleNumericFragment(fragment: string): boolean {
 }
 
 function simplifyNumericFragments(expr: string, context: EvaluationContext): string {
-  if (/[&|^~]|<<|>>/.test(expr)) {
+  if (BITWISE_OP_DETECT_RX.test(expr)) {
     return expr;
   }
 
