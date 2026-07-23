@@ -650,6 +650,15 @@ function resolveCondition(
   }
 }
 
+// Hard cap on the length of an accumulated #if/#ifdef condition string.
+// In legitimate nested conditionals this is never approached (even 30+
+// levels of nesting stays well under 1-2k chars). It exists purely as a
+// backstop against pathological/cyclical growth (e.g. a malformed or
+// extremely deep vendor SDK conditional tree) that would otherwise
+// eventually throw "RangeError: Invalid string length" deep inside
+// safeEval() and abort the entire analysis for every file.
+const MAX_CONDITION_STRING_LENGTH = 4000;
+
 function combineConditions(parent: string | null, branch: string): string {
   const normalizedBranch = branch.trim() || "1";
 
@@ -661,7 +670,17 @@ function combineConditions(parent: string | null, branch: string): string {
     return parent;
   }
 
-  return `(${parent}) && (${normalizedBranch})`;
+  const combined = `(${parent}) && (${normalizedBranch})`;
+  if (combined.length > MAX_CONDITION_STRING_LENGTH) {
+    // Degrade gracefully: treat the branch as unconditionally active rather
+    // than let the condition string keep growing. This can make CalcDocs
+    // slightly too permissive about which #define is "active" deep inside
+    // a pathological conditional tree, but that's a far better failure
+    // mode than crashing the whole analysis.
+    return parent;
+  }
+
+  return combined;
 }
 
 function negateCondition(condition: string): string {
@@ -1407,50 +1426,24 @@ export async function collectDefinesAndConsts(
     const activeDefinedSymbols = new Set<string>(globallyDefinedSymbols);
     const stripper2 = createCommentStripper();
 
-    for (let i = 0; i < lines.length; i += 1) {
-      const line = lines[i];
-      const lineWithoutComments = stripper2.strip(line);
-      const directiveLine = lineWithoutComments.trim();
-      let isDirectiveLine = false;
+    try {
 
-      // Conditional directives...
-      const ifdefMatch = directiveLine.match(IFDEF_RX);
-      if (ifdefMatch) {
-        const branchCondition = resolveCondition(
-          `defined(${ifdefMatch[1]})`,
-          defines,
-          consts,
-          activeDefinedSymbols,
-          output
-        );
-        const activeCondition = combineConditions(currentCondition, branchCondition);
+      for (let i = 0; i < lines.length; i += 1) {
+        const line = lines[i];
+        const lineWithoutComments = stripper2.strip(line);
+        const directiveLine = lineWithoutComments.trim();
+        let isDirectiveLine = false;
 
-        conditionalStack.push({
-          parentCondition: currentCondition,
-          branchConditions: [branchCondition],
-          activeCondition,
-        });
-
-        currentCondition = activeCondition;
-        isDirectiveLine = true;
-      } else {
-        const ifndefMatch = directiveLine.match(IFNDEF_RX);
-
-        if (ifndefMatch) {
-          const branchCondition = isTopLevelIncludeGuard(
-            lines,
-            i,
-            ifndefMatch[1],
-            conditionalStack.length
-          )
-            ? "1"
-            : resolveCondition(
-                `!defined(${ifndefMatch[1]})`,
-                defines,
-                consts,
-                activeDefinedSymbols,
-                output
-              );
+        // Conditional directives...
+        const ifdefMatch = directiveLine.match(IFDEF_RX);
+        if (ifdefMatch) {
+          const branchCondition = resolveCondition(
+            `defined(${ifdefMatch[1]})`,
+            defines,
+            consts,
+            activeDefinedSymbols,
+            output
+          );
           const activeCondition = combineConditions(currentCondition, branchCondition);
 
           conditionalStack.push({
@@ -1462,17 +1455,23 @@ export async function collectDefinesAndConsts(
           currentCondition = activeCondition;
           isDirectiveLine = true;
         } else {
-          const ifMatch = directiveLine.match(IF_RX);
+          const ifndefMatch = directiveLine.match(IFNDEF_RX);
 
-          if (ifMatch) {
-            const rawCondition = ifMatch[1];
-            const branchCondition = resolveCondition(
-              rawCondition,
-              defines,
-              consts,
-              activeDefinedSymbols,
-              output
-            );
+          if (ifndefMatch) {
+            const branchCondition = isTopLevelIncludeGuard(
+              lines,
+              i,
+              ifndefMatch[1],
+              conditionalStack.length
+            )
+              ? "1"
+              : resolveCondition(
+                  `!defined(${ifndefMatch[1]})`,
+                  defines,
+                  consts,
+                  activeDefinedSymbols,
+                  output
+                );
             const activeCondition = combineConditions(currentCondition, branchCondition);
 
             conditionalStack.push({
@@ -1483,232 +1482,189 @@ export async function collectDefinesAndConsts(
 
             currentCondition = activeCondition;
             isDirectiveLine = true;
+          } else {
+            const ifMatch = directiveLine.match(IF_RX);
+
+            if (ifMatch) {
+              const rawCondition = ifMatch[1];
+              const branchCondition = resolveCondition(
+                rawCondition,
+                defines,
+                consts,
+                activeDefinedSymbols,
+                output
+              );
+              const activeCondition = combineConditions(currentCondition, branchCondition);
+
+              conditionalStack.push({
+                parentCondition: currentCondition,
+                branchConditions: [branchCondition],
+                activeCondition,
+              });
+
+              currentCondition = activeCondition;
+              isDirectiveLine = true;
+            }
           }
         }
-      }
 
-      if (!isDirectiveLine) {
-        const elifMatch = directiveLine.match(ELIF_RX);
-        if (elifMatch) {
-          const frame = conditionalStack[conditionalStack.length - 1];
+        if (!isDirectiveLine) {
+          const elifMatch = directiveLine.match(ELIF_RX);
+          if (elifMatch) {
+            const frame = conditionalStack[conditionalStack.length - 1];
 
-          if (frame) {
-            const previousBranchesCondition = buildElseCondition(frame.branchConditions);
-            const branchTestCondition = resolveCondition(
-              normalizeDirectiveCondition(elifMatch[1]),
-              defines,
-              consts,
-              activeDefinedSymbols,
-              output
-            );
-            const branchCondition = combineConditions(
-              previousBranchesCondition,
-              branchTestCondition
-            );
-            const activeCondition = combineConditions(
-              frame.parentCondition,
-              branchCondition
-            );
+            if (frame) {
+              const previousBranchesCondition = buildElseCondition(frame.branchConditions);
+              const branchTestCondition = resolveCondition(
+                normalizeDirectiveCondition(elifMatch[1]),
+                defines,
+                consts,
+                activeDefinedSymbols,
+                output
+              );
+              const branchCondition = combineConditions(
+                previousBranchesCondition,
+                branchTestCondition
+              );
+              const activeCondition = combineConditions(
+                frame.parentCondition,
+                branchCondition
+              );
 
-            frame.branchConditions.push(branchCondition);
-            frame.activeCondition = activeCondition;
-            currentCondition = activeCondition;
-          }
-
-          isDirectiveLine = true;
-        } else if (ELSE_RX.test(directiveLine)) {
-          const frame = conditionalStack[conditionalStack.length - 1];
-
-          if (frame) {
-            const branchCondition = buildElseCondition(frame.branchConditions);
-            const activeCondition = combineConditions(
-              frame.parentCondition,
-              branchCondition
-            );
-
-            frame.branchConditions.push(branchCondition);
-            frame.activeCondition = activeCondition;
-            currentCondition = activeCondition;
-          }
-
-          isDirectiveLine = true;
-        } else if (ENDIF_RX.test(directiveLine)) {
-          const frame = conditionalStack.pop();
-          currentCondition = frame?.parentCondition ?? null;
-          isDirectiveLine = true;
-        } else {
-          const undefMatch = directiveLine.match(UNDEF_RX);
-
-          if (undefMatch) {
-            let isActiveDirective = true;
-
-            if (currentCondition) {
-              try {
-                isActiveDirective = safeEval(currentCondition) !== 0;
-              } catch {
-                isActiveDirective = true;
-              }
+              frame.branchConditions.push(branchCondition);
+              frame.activeCondition = activeCondition;
+              currentCondition = activeCondition;
             }
-
-            if (isActiveDirective) {
-              const undefName = undefMatch[1];
-              activeDefinedSymbols.delete(undefName);
-              defines.delete(undefName);
-              consts.delete(undefName);
-              defineConditions.delete(undefName);
-              locations.delete(undefName);
-              // Remove from seenDefinesInFile so a subsequent #define
-              // in the same file can be processed (e.g. #undef + #define
-              // inside an active conditional branch).
-              seenDefinesInFile.delete(undefName);
-              defineVariants.delete(undefName);
-            }
-
 
             isDirectiveLine = true;
-          }
-        }
-      }
+          } else if (ELSE_RX.test(directiveLine)) {
+            const frame = conditionalStack[conditionalStack.length - 1];
 
-      // ------------------------------------------------------------------
-      // Parse active content
-      // ------------------------------------------------------------------
+            if (frame) {
+              const branchCondition = buildElseCondition(frame.branchConditions);
+              const activeCondition = combineConditions(
+                frame.parentCondition,
+                branchCondition
+              );
 
-      if (!isDirectiveLine) {
-        let isActiveBranch = true;
-
-        if (currentCondition) {
-          // output?.appendLine(`[CPP2] Eval condition "${currentCondition}"`);
-          try {
-            const evalResult = safeEval(currentCondition);
-            // output?.appendLine(`[CPP2] condition eval = ${evalResult} (active=${evalResult !== 0})`);
-            isActiveBranch = evalResult !== 0;
-          } catch (e) {
-            // output?.error(`[CPP2] condition eval FAILED: ${e}`);
-            isActiveBranch = true;
-          }
-        }
-
-        const definitionCondition = isActiveBranch
-          ? (currentCondition && currentCondition !== "1" ? currentCondition : "always")
-          : "0";
-
-        if (!isActiveBranch) {
-          continue;
-        }
-
-        const activeDefineName = parseDefineNameDirective(line);
-        if (activeDefineName) {
-          activeDefinedSymbols.add(activeDefineName);
-        }
-
-        const parsedDefine = parseDefineDirective(line);
-
-        if (parsedDefine && !seenDefinesInFile.has(parsedDefine.name)) {
-          seenDefinesInFile.add(parsedDefine.name);
-          const { name, expr, params } = parsedDefine;
-          // output?.appendLine(`[CPP2] Parsed define ${name}=${expr} cond=${definitionCondition} active=${isActiveBranch}`);
-
-          if (params) {
-            if (!functionDefines.has(name)) {
-              functionDefines.set(name, {
-                params,
-                body: expr,
-              });
+              frame.branchConditions.push(branchCondition);
+              frame.activeCondition = activeCondition;
+              currentCondition = activeCondition;
             }
+
+            isDirectiveLine = true;
+          } else if (ENDIF_RX.test(directiveLine)) {
+            const frame = conditionalStack.pop();
+            currentCondition = frame?.parentCondition ?? null;
+            isDirectiveLine = true;
           } else {
-            if (!defines.has(name)) {
-              defines.set(name, expr);
-            }
+            const undefMatch = directiveLine.match(UNDEF_RX);
 
-            const unitMatch = line.match(UNIT_COMMENT_RX);
-            if (unitMatch) {
-              units.set(name, unitMatch[1]);
-            }
+            if (undefMatch) {
+              let isActiveDirective = true;
 
-            defineConditions.set(name, definitionCondition);
-
-            const location: SymbolDefinitionLocation = {
-              file: path.relative(workspaceRoot ?? '.', filePath),
-              line: i + 1 // 1-based
-            };
-
-            const variantKey = `${name}:${location.file}:${location.line}`;
-
-            if (!seenVariants.has(variantKey)) {
-              seenVariants.add(variantKey);
-
-              const variants = defineVariants.get(name) ?? [];
-              variants.push({
-                ...location,
-                expr,
-                condition: definitionCondition
-              });
-              defineVariants.set(name, variants);
-            }
-
-            if (!locations.has(name)) {
-              locations.set(name, location);
-            }
-          }
-        }
-
-        // ------------------------------------------------------------------
-        // ONLY collect GLOBAL constant definitions.
-        // Ignore local/runtime variables.
-        // ------------------------------------------------------------------
-
-        else if (braceDepth === 0 && currentCondition === null) {
-          const parsedValueDeclaration = parseValueDeclaration(line);
-
-          if (
-            parsedValueDeclaration &&
-            parsedValueDeclaration.isDefinition &&
-            !seenDefinesInFile.has(parsedValueDeclaration.name)
-          ) {
-            seenDefinesInFile.add(parsedValueDeclaration.name);
-
-            const { name, expr, isStatic } = parsedValueDeclaration;
-
-            // Ignore ALL static variables, including static const
-            if (!isStatic) {
-              if (!defines.has(name)) {
-                defines.set(name, expr);
-                if (parsedValueDeclaration.comment) {
-                  defineComments.set(name, parsedValueDeclaration.comment);
+              if (currentCondition) {
+                try {
+                  isActiveDirective = safeEval(currentCondition) !== 0;
+                } catch {
+                  isActiveDirective = true;
                 }
               }
 
-              const unitMatch = line.match(UNIT_COMMENT_RX);
+              if (isActiveDirective) {
+                const undefName = undefMatch[1];
+                activeDefinedSymbols.delete(undefName);
+                defines.delete(undefName);
+                consts.delete(undefName);
+                defineConditions.delete(undefName);
+                locations.delete(undefName);
+                // Remove from seenDefinesInFile so a subsequent #define
+                // in the same file can be processed (e.g. #undef + #define
+                // inside an active conditional branch).
+                seenDefinesInFile.delete(undefName);
+                defineVariants.delete(undefName);
+              }
 
+
+              isDirectiveLine = true;
+            }
+          }
+        }
+
+        // ------------------------------------------------------------------
+        // Parse active content
+        // ------------------------------------------------------------------
+
+        if (!isDirectiveLine) {
+          let isActiveBranch = true;
+
+          if (currentCondition) {
+            // output?.appendLine(`[CPP2] Eval condition "${currentCondition}"`);
+            try {
+              const evalResult = safeEval(currentCondition);
+              // output?.appendLine(`[CPP2] condition eval = ${evalResult} (active=${evalResult !== 0})`);
+              isActiveBranch = evalResult !== 0;
+            } catch (e) {
+              // output?.error(`[CPP2] condition eval FAILED: ${e}`);
+              isActiveBranch = true;
+            }
+          }
+
+          const definitionCondition = isActiveBranch
+            ? (currentCondition && currentCondition !== "1" ? currentCondition : "always")
+            : "0";
+
+          if (!isActiveBranch) {
+            continue;
+          }
+
+          const activeDefineName = parseDefineNameDirective(line);
+          if (activeDefineName) {
+            activeDefinedSymbols.add(activeDefineName);
+          }
+
+          const parsedDefine = parseDefineDirective(line);
+
+          if (parsedDefine && !seenDefinesInFile.has(parsedDefine.name)) {
+            seenDefinesInFile.add(parsedDefine.name);
+            const { name, expr, params } = parsedDefine;
+            // output?.appendLine(`[CPP2] Parsed define ${name}=${expr} cond=${definitionCondition} active=${isActiveBranch}`);
+
+            if (params) {
+              if (!functionDefines.has(name)) {
+                functionDefines.set(name, {
+                  params,
+                  body: expr,
+                });
+              }
+            } else {
+              if (!defines.has(name)) {
+                defines.set(name, expr);
+              }
+
+              const unitMatch = line.match(UNIT_COMMENT_RX);
               if (unitMatch) {
                 units.set(name, unitMatch[1]);
               }
 
               defineConditions.set(name, definitionCondition);
 
-              try {
-                consts.set(name, safeEval(expr));
-              } catch {}
-
               const location: SymbolDefinitionLocation = {
-                file: path.relative(workspaceRoot, filePath),
-                line: i + 1
+                file: path.relative(workspaceRoot ?? '.', filePath),
+                line: i + 1 // 1-based
               };
 
-              const variantKey = `${location.file}:${location.line}`;
+              const variantKey = `${name}:${location.file}:${location.line}`;
 
               if (!seenVariants.has(variantKey)) {
                 seenVariants.add(variantKey);
 
                 const variants = defineVariants.get(name) ?? [];
-
                 variants.push({
                   ...location,
                   expr,
                   condition: definitionCondition
                 });
-
                 defineVariants.set(name, variants);
               }
 
@@ -1717,10 +1673,83 @@ export async function collectDefinesAndConsts(
               }
             }
           }
-        }
-      }
 
-      braceDepth = updateBraceDepth(braceDepth, lineWithoutComments);
+          // ------------------------------------------------------------------
+          // ONLY collect GLOBAL constant definitions.
+          // Ignore local/runtime variables.
+          // ------------------------------------------------------------------
+
+          else if (braceDepth === 0 && currentCondition === null) {
+            const parsedValueDeclaration = parseValueDeclaration(line);
+
+            if (
+              parsedValueDeclaration &&
+              parsedValueDeclaration.isDefinition &&
+              !seenDefinesInFile.has(parsedValueDeclaration.name)
+            ) {
+              seenDefinesInFile.add(parsedValueDeclaration.name);
+
+              const { name, expr, isStatic } = parsedValueDeclaration;
+
+              // Ignore ALL static variables, including static const
+              if (!isStatic) {
+                if (!defines.has(name)) {
+                  defines.set(name, expr);
+                  if (parsedValueDeclaration.comment) {
+                    defineComments.set(name, parsedValueDeclaration.comment);
+                  }
+                }
+
+                const unitMatch = line.match(UNIT_COMMENT_RX);
+
+                if (unitMatch) {
+                  units.set(name, unitMatch[1]);
+                }
+
+                defineConditions.set(name, definitionCondition);
+
+                try {
+                  consts.set(name, safeEval(expr));
+                } catch {}
+
+                const location: SymbolDefinitionLocation = {
+                  file: path.relative(workspaceRoot, filePath),
+                  line: i + 1
+                };
+
+                const variantKey = `${location.file}:${location.line}`;
+
+                if (!seenVariants.has(variantKey)) {
+                  seenVariants.add(variantKey);
+
+                  const variants = defineVariants.get(name) ?? [];
+
+                  variants.push({
+                    ...location,
+                    expr,
+                    condition: definitionCondition
+                  });
+
+                  defineVariants.set(name, variants);
+                }
+
+                if (!locations.has(name)) {
+                  locations.set(name, location);
+                }
+              }
+            }
+          }
+        }
+
+        braceDepth = updateBraceDepth(braceDepth, lineWithoutComments);
+      }
+    } catch (err) {
+      // A failure while processing ONE file's conditional tree (e.g. a
+      // pathological #ifdef nesting) must not abort analysis for the
+      // entire workspace — that would silently kill every formula ghost
+      // value, not just the ones depending on this file. Log and move on.
+      const message = err instanceof Error ? err.message : String(err);
+      output?.warn(`[CPP2] ⚠️ Skipping ${path.relative(workspaceRoot ?? '.', filePath)}: ${message}`);
     }
   }
 

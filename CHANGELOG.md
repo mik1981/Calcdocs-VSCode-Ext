@@ -1,6 +1,12 @@
 # Changelog
 
-## [0.0.0] - 07/10/2026
+## [0.4.1] - 07/23/2026
+
+- Improved stability when analyzing projects with very large or deeply nested preprocessor conditional blocks.
+- Prevented rare crashes caused by excessively complex conditional expressions during code analysis.
+- Improved error handling so issues in a single source file no longer interrupt analysis of the entire workspace.
+
+## [0.4.0] - 07/10/2026
 
 - Fixed an issue where include symbols were not resolved correctly in C source files by CalcDocs.
 - Limited include recursion depth to prevent excessive resource usage.
