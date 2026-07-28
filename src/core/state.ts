@@ -17,6 +17,7 @@ import type {
   YamlEvaluationDiagnostic,
 } from "../engine/yamlEngine";
 import { getConfig } from "./config";
+import type { MegaBudgetOverrides } from "./cppParser";
 import { OutlineFormula } from "../formulaOutline/formulaParser";
 
 
@@ -107,16 +108,52 @@ export type CalcDocsState = {
   configVars: Map<string, FileConfigVars>;
   /** Mappa delle posizioni delle definizioni dei simboli */
   symbolDefs: Map<string, SymbolDefinitionLocation>;
+
   /**
-   * Indice basename(header).toLowerCase() -> lista di path assoluti,
-   * costruito da scanWorkspace() a partire dai file già enumerati da
-   * listFilesRecursive(). Usato come fallback da resolveInclude() quando
-   * l'euristica a directory fisse (Inc/, include/, headers/...) non trova
-   * l'header, tipico nei layout STM32CubeIDE (Core/Src + Core/Inc,
-   * Drivers/<mod>/Inc, ecc.).
+   * Indice basename(header).toLowerCase() -> path assoluti. Costruito da
+   * scanWorkspace()/ensureHeaderIndexPopulated() in analysis.ts, usato da
+   * resolveInclude() in cppParser.ts come fallback quando l'euristica a
+   * directory fisse non trova l'header. Puo' essere idratato da un cache
+   * su disco (vedi headerIndexCachePath) per evitare di rifare l'intero
+   * listFilesRecursive() ad ogni avvio di VS Code.
    */
   headerIndex: Map<string, string[]>;
-  /** Mappa delle definizioni condizionali (multiple varianti per simbolo) */
+
+  /**
+   * Path assoluto del file di cache persistente per headerIndex (dentro
+   * lo storage privato dell'estensione, non nel workspace dell'utente).
+   * undefined se non ancora inizializzato da extension.ts (es. nessun
+   * workspace aperto).
+   */
+  headerIndexCachePath?: string;
+
+  /**
+   * Directory (storage privato dell'estensione) dove persistere il
+   * mega-content espanso di ogni file analizzato tra una sessione di
+   * VS Code e l'altra — un file JSON per sorgente (vedi MegaDiskCacheEntry
+   * in core/cppParser.ts), invalidato automaticamente se una dipendenza
+   * cambia (stesso mtime+size check della cache in RAM) o se cambia il
+   * budget adattivo effettivo. undefined = nessuna persistenza su disco,
+   * solo cache in RAM (comportamento pre-esistente).
+   */
+  megaContentCacheDir?: string;
+
+  /** True per una sessione dopo aver idratato headerIndex dalla cache su
+   * disco, finche' non e' stato rinfrescato almeno una volta dal vivo. */
+  headerIndexNeedsLiveRefresh: boolean;
+
+  /**
+   * Fonte unica di verità per il budget adattivo di buildMegaContent()
+   * (vedi core/cppParser.ts). Calcolato UNA VOLTA in applyConfigToState()
+   * (extension.ts) da CalcDocsConfig e tenuto qui, cosi' ogni chiamata a
+   * collectDefinesAndConsts() nel codebase (presente o futura) lo passa
+   * semplicemente come `megaBudgetOverrides: state.megaBudgetOverrides`
+   * invece di ricostruirlo ogni volta da `getConfig()` — niente più
+   * oggetti duplicati che possono disallinearsi tra loro.
+   * Tutti i campi a 0 = calcolo automatico dalla RAM/CPU della macchina.
+   */
+  megaBudgetOverrides: MegaBudgetOverrides;
+  
   symbolConditionalDefs: Map<string, SymbolConditionalDefinition[]>;
   /** Mappa delle radici di ambiguità: simbolo ambiguo -> simboli da cui dipende */
   symbolAmbiguityRoots: Map<string, string[]>;
@@ -234,6 +271,8 @@ export function createCalcDocsState(
     configVars: new Map<string, FileConfigVars>(),
     symbolDefs: new Map<string, SymbolDefinitionLocation>(),
     headerIndex: new Map<string, string[]>(),
+    headerIndexNeedsLiveRefresh: false,
+    megaBudgetOverrides: { maxChars: 0, maxTimeMs: 0, maxDepth: 0 },
     symbolConditionalDefs: new Map<string, SymbolConditionalDefinition[]>(),
     symbolAmbiguityRoots: new Map<string, string[]>(),
     allDefines: new Map<string, string>(),

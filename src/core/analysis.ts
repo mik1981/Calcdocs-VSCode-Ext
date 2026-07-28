@@ -280,7 +280,7 @@ export async function runActiveCppFileAnalysis(
 
   try {
     const config = getConfig();
-    
+
     await ensureHeaderIndexPopulated(state, config);
 
     const cppSymbols = await collectDefinesAndConsts(
@@ -291,6 +291,7 @@ export async function runActiveCppFileAnalysis(
         output: state.output,
         maxMegaCacheEntries: config.cppCacheMaxEntries,
         headerIndex: state.headerIndex,
+        megaBudgetOverrides: state.megaBudgetOverrides,
       } as any 
     );
 
@@ -341,6 +342,8 @@ async function scanWorkspace(state: CalcDocsState): Promise<WorkspaceScan> {
   state.hasFormulasFile = Boolean(yamlPath);
 
   rebuildHeaderIndex(state, files);
+  state.headerIndexNeedsLiveRefresh = false;
+  void saveHeaderIndexToDisk(state);
 
   return {
     files,
@@ -352,15 +355,33 @@ async function scanWorkspace(state: CalcDocsState): Promise<WorkspaceScan> {
 
 const HEADER_EXTS = new Set([".h", ".hpp", ".hh"]);
 
+function rebuildHeaderIndex(state: CalcDocsState, files: string[]): void {
+  state.headerIndex.clear();
+
+  for (const filePath of files) {
+    const ext = path.extname(filePath).toLowerCase();
+    if (!HEADER_EXTS.has(ext)) {
+      continue;
+    }
+    const key = path.basename(filePath).toLowerCase();
+    const existing = state.headerIndex.get(key);
+    if (existing) {
+      existing.push(filePath);
+    } else {
+      state.headerIndex.set(key, [filePath]);
+    }
+  }
+}
+
 /**
- * La pipeline scoped (runActiveCppFileAnalysis) gira SENZA passare da
- * scanWorkspace(), quindi puo' partire con state.headerIndex vuoto
- * (es. workspace appena aperto direttamente su un file .c, prima di
- * qualunque full analysis). In quel caso costruiamo l'indice una volta
- * con un walk leggero (solo elenco file, nessun parsing), cosi'
- * resolveInclude() ha comunque una mappa affidabile su cui fare
- * fallback. Le scansioni successive di scanWorkspace() lo terranno
- * aggiornato.
+ * La pipeline scoped (runActiveCppFileAnalysis) gira senza passare da
+ * scanWorkspace(). Per non pagare un listFilesRecursive() completo ad ogni
+ * avvio di VS Code prima ancora di poter mostrare un ghost value, proviamo
+ * prima a idratare l'indice da una cache su disco (stile clang: un indice
+ * persistente, aggiornato quando conviene, non ricostruito da zero ogni
+ * volta). Se la cache non c'e'/e' inutilizzabile, ripieghiamo su un walk
+ * live come prima. In entrambi i casi pianifichiamo UN SOLO refresh live
+ * in background per sessione, cosi' la cache non resta stantia per sempre.
  */
 async function ensureHeaderIndexPopulated(
   state: CalcDocsState,
@@ -370,42 +391,112 @@ async function ensureHeaderIndexPopulated(
     return;
   }
 
+  const fromDisk = await loadHeaderIndexFromDisk(state);
+  if (fromDisk) {
+    state.headerIndexNeedsLiveRefresh = true;
+    scheduleHeaderIndexLiveRefresh(state, config);
+    return;
+  }
+
   refreshIgnoredDirs(state, config);
   const files = await listFilesRecursive(
     state.workspaceRoot,
     (absoluteDirPath) => isIgnoredFsPath(state, absoluteDirPath),
     state
   );
-
   rebuildHeaderIndex(state, files);
+  void saveHeaderIndexToDisk(state);
 }
 
-/**
- * Ricostruisce state.headerIndex (basename lowercase -> path assoluti)
- * a partire dai file già scoperti da listFilesRecursive. Questo indice
- * viene poi passato a collectDefinesAndConsts/buildMegaContent come
- * fallback per resolveInclude(), cosi' che la risoluzione di un
- * `#include "app_errors.h"` non dipenda da una lista fissa di nomi di
- * cartelle (inc/, include/, headers/...) ma dalla reale posizione del
- * file nel workspace, indipendentemente dal layout del progetto
- * (Core/Src + Core/Inc, Drivers/<mod>/Inc, ecc.).
- */
-function rebuildHeaderIndex(state: CalcDocsState, files: string[]): void {
-  state.headerIndex.clear();
+let headerIndexLiveRefreshScheduled = false;
 
-  for (const filePath of files) {
-    const ext = path.extname(filePath).toLowerCase();
-    if (!HEADER_EXTS.has(ext)) {
-      continue;
+function scheduleHeaderIndexLiveRefresh(
+  state: CalcDocsState,
+  config: ReturnType<typeof getConfig>
+): void {
+  if (headerIndexLiveRefreshScheduled) {
+    return;
+  }
+  headerIndexLiveRefreshScheduled = true;
+
+  setTimeout(() => {
+    void (async () => {
+      try {
+        refreshIgnoredDirs(state, config);
+        const files = await listFilesRecursive(
+          state.workspaceRoot,
+          (absoluteDirPath) => isIgnoredFsPath(state, absoluteDirPath),
+          state
+        );
+        rebuildHeaderIndex(state, files);
+        state.headerIndexNeedsLiveRefresh = false;
+        await saveHeaderIndexToDisk(state);
+        state.output?.appendLine(
+          `[HeaderIndex] 🔄 Refresh live completato in background (${state.headerIndex.size} basename indicizzati).`
+        );
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        state.output?.warn(`[HeaderIndex] ⚠️ Refresh live fallito: ${message}`);
+      }
+    })();
+  }, 2500); // fuori dalla strada critica: la cache da disco ha già risposto
+}
+
+const HEADER_INDEX_CACHE_VERSION = 1;
+
+async function loadHeaderIndexFromDisk(state: CalcDocsState): Promise<boolean> {
+  if (!state.headerIndexCachePath) {
+    return false;
+  }
+  try {
+    const raw = await fsp.readFile(state.headerIndexCachePath, "utf8");
+    const parsed = JSON.parse(raw) as {
+      version?: number;
+      workspaceRoot?: string;
+      entries?: Record<string, string[]>;
+    };
+
+    if (
+      parsed.version !== HEADER_INDEX_CACHE_VERSION ||
+      parsed.workspaceRoot !== state.workspaceRoot ||
+      !parsed.entries
+    ) {
+      return false;
     }
 
-    const key = path.basename(filePath).toLowerCase();
-    const existing = state.headerIndex.get(key);
-    if (existing) {
-      existing.push(filePath);
-    } else {
-      state.headerIndex.set(key, [filePath]);
+    state.headerIndex.clear();
+    for (const [key, paths] of Object.entries(parsed.entries)) {
+      state.headerIndex.set(key, paths);
     }
+    state.output?.appendLine(
+      `[HeaderIndex] 💾 Caricato da cache su disco (${state.headerIndex.size} basename) — refresh live in coda.`
+    );
+    return state.headerIndex.size > 0;
+  } catch {
+    return false;
+  }
+}
+
+async function saveHeaderIndexToDisk(state: CalcDocsState): Promise<void> {
+  if (!state.headerIndexCachePath) {
+    return;
+  }
+  try {
+    const entries: Record<string, string[]> = {};
+    for (const [key, paths] of state.headerIndex.entries()) {
+      entries[key] = paths;
+    }
+    const payload = JSON.stringify({
+      version: HEADER_INDEX_CACHE_VERSION,
+      workspaceRoot: state.workspaceRoot,
+      savedAt: new Date().toISOString(),
+      entries,
+    });
+    await fsp.mkdir(path.dirname(state.headerIndexCachePath), { recursive: true });
+    await fsp.writeFile(state.headerIndexCachePath, payload, "utf8");
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    state.output?.warn(`[HeaderIndex] ⚠️ Salvataggio cache su disco fallito: ${message}`);
   }
 }
 
@@ -441,9 +532,12 @@ async function runCppOnlyAnalysis(
   const config = getConfig();
   const cppSymbols = await collectDefinesAndConsts(sourceFiles, state.workspaceRoot, {
     resolveIncludes: true,
+    output: state.output,
     maxMegaCacheEntries: config.cppCacheMaxEntries,
+    headerIndex: state.headerIndex,
+    megaBudgetOverrides: state.megaBudgetOverrides,
   });
-  // const cppSymbols = await collectDefinesAndConsts(files, state.workspaceRoot);
+  
   applyCppSymbols(state, cppSymbols, {
     resetSymbolValues: true,
     applyConstsBeforeResolve: false,
@@ -945,6 +1039,9 @@ async function runYamlAnalysis(
     resolveIncludes: true,
     output: state.output,
     maxMegaCacheEntries: config.cppCacheMaxEntries,
+    headerIndex: state.headerIndex,
+    megaBudgetOverrides: state.megaBudgetOverrides,
+    megaContentCacheDir: state.megaContentCacheDir,
   };
   if (sourceFiles.some(f => f.includes('test'))) {
     // state.output.appendLine('[Analysis] 🔄 Test files detected - forcing fresh C parse (cache bypassed)');

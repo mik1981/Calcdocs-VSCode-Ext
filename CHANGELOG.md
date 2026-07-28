@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.4.2] - 07/28/2026
+
+- Added persistent header index caching to dramatically reduce startup time for large workspaces.
+- Header indexes are now refreshed in the background to keep the cache up to date without impacting responsiveness.
+- Improved consistency across all analysis modes by using the same cache and configuration pipeline.
+
 ## [0.4.1] - 07/23/2026
 
 - Improved stability when analyzing projects with very large or deeply nested preprocessor conditional blocks.

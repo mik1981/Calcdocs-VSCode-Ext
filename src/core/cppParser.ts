@@ -1,5 +1,7 @@
 import * as fsp from "fs/promises";
 import * as path from "path";
+import * as os from "os";
+import * as crypto from "crypto";
 
 import { updateBraceDepth } from "../utils/braceDepth";
 import { DEFINE_RX, SRC_EXTS, TOKEN_RX } from "../utils/regex";
@@ -40,6 +42,13 @@ export type CollectOptions = {
    * (Inc/, include/, headers/...) non trova l'header.
    */
   headerIndex?: Map<string, string[]>;
+  /** 0/undefined su ciascun campo = calcolato automaticamente in base
+   * alla macchina (RAM totale) invece di costanti fisse. */
+  megaBudgetOverrides?: MegaBudgetOverrides;
+  /** Directory (storage privato dell'estensione) dove persistere il
+   * mega-content espanso tra una sessione di VS Code e l'altra.
+   * undefined = nessuna persistenza su disco, solo cache in RAM. */
+  megaContentCacheDir?: string;
 };
 
 type ParsedDefineDirective = {
@@ -160,20 +169,33 @@ async function getFileStamp(filePath: string, output?: ColoredOutput): Promise<F
 }
 
 async function isMegaCacheEntryValid(entry: MegaCacheEntry, output?: ColoredOutput): Promise<boolean> {
-  for (const [dependencyPath, previousStamp] of entry.dependencies) {
-    const currentStamp = await getFileStamp(dependencyPath, output);
-    if (!currentStamp) {
-      output?.appendLine(`[MegaValid] ❌ Invalid cache (missing dep): ${path.basename(dependencyPath)}`);
-      return false;
-    }
+  // Le dipendenze vengono controllate in PARALLELO (non una alla volta):
+  // per un file con centinaia di header coinvolti (tipico con HAL+CMSIS),
+  // farlo in sequenza significava centinaia di syscall stat() una dopo
+  // l'altra solo per confermare che la cache fosse valida — il costo
+  // cresceva linearmente col numero di dipendenze anche a cache HIT.
+  const checks = await Promise.all(
+    Array.from(entry.dependencies, async ([dependencyPath, previousStamp]) => {
+      const currentStamp = await getFileStamp(dependencyPath, output);
+      if (!currentStamp) {
+        return { dependencyPath, reason: "missing" as const };
+      }
+      if (
+        currentStamp.mtimeMs !== previousStamp.mtimeMs ||
+        currentStamp.size !== previousStamp.size
+      ) {
+        return { dependencyPath, reason: "changed" as const };
+      }
+      return null;
+    })
+  );
 
-    if (
-      currentStamp.mtimeMs !== previousStamp.mtimeMs ||
-      currentStamp.size !== previousStamp.size
-    ) {
-      output?.appendLine(`[MegaValid] ❌ Invalid cache (changed): ${path.basename(dependencyPath)}`);
-      return false;
-    }
+  const firstInvalid = checks.find((c) => c !== null);
+  if (firstInvalid) {
+    output?.appendLine(
+      `[MegaValid] ❌ Invalid cache (${firstInvalid.reason}): ${path.basename(firstInvalid.dependencyPath)}`
+    );
+    return false;
   }
 
   return true;
@@ -212,24 +234,329 @@ function evictOldMegaEntries(maxEntries: number, output?: ColoredOutput): void {
   }
 }
 
+/**
+ * ---------------------------------------------------------------------
+ * Persistenza su disco del mega-content (non solo dell'elenco header).
+ * ---------------------------------------------------------------------
+ * L'in-memory megaCache sopra si svuota ad ogni riavvio di VS Code: se
+ * riapri lo stesso file .c dopo un restart, si ricostruisce da zero
+ * l'intera espansione #include anche se NESSUNA dipendenza è cambiata
+ * dall'ultima sessione. Questo layer aggiunge un file JSON per sorgente
+ * (dentro lo storage privato dell'estensione, mai nel workspace
+ * dell'utente) con lo STESSO meccanismo di validità già usato in memoria
+ * (mtime+size di ogni dipendenza) — se anche un solo header è cambiato,
+ * la entry viene scartata e ricostruita normalmente.
+ *
+ * In più, un budgetSignature: se cambiano i parametri effettivi del
+ * budget adattivo (RAM diversa, config utente modificata, ecc.) tra una
+ * sessione e l'altra, la entry su disco viene invalidata anche se le
+ * dipendenze non sono cambiate — evita di riusare per sempre un
+ * mega-content tagliato con un budget più stretto di quello attuale.
+ */
+
+type MegaDiskCacheEntry = {
+  version: number;
+  content: string;
+  dependencies: Array<[string, FileStamp]>;
+  byteSize: number;
+  savedAt: number;
+  budgetSignature: string;
+};
+
+// v2: le build TRONCATE (budget adattivo esaurito a metà #include) non
+// vengono più persistite su disco (vedi buildMegaContent). Il bump della
+// versione invalida automaticamente qualunque entry scritta prima di
+// questo fix, che potrebbe contenere una build incompleta "congelata" —
+// nessun bisogno di svuotare la cache a mano.
+const MEGA_DISK_CACHE_VERSION = 2;
+
+function megaBudgetSignature(budget: MegaBudget): string {
+  // remainingChars al momento della creazione del budget è il TOTALE
+  // disponibile (non ancora consumato), quindi è stabile per sessione e
+  // rappresentativo del "profilo" di budget usato per costruire l'entry.
+  return `${MEGA_DISK_CACHE_VERSION}:${budget.remainingChars}:${budget.maxDepth}`;
+}
+
+function megaDiskCacheFilePath(cacheDir: string, cacheKey: string): string {
+  const hash = crypto.createHash("sha1").update(cacheKey).digest("hex");
+  return path.join(cacheDir, `${hash}.json`);
+}
+
+async function loadMegaContentFromDisk(
+  cacheDir: string,
+  cacheKey: string,
+  expectedBudgetSignature: string,
+  output?: ColoredOutput
+): Promise<MegaCacheEntry | null> {
+  const filePath = megaDiskCacheFilePath(cacheDir, cacheKey);
+  let raw: string;
+  try {
+    raw = await fsp.readFile(filePath, "utf8");
+  } catch {
+    return null; // nessuna entry su disco, normale
+  }
+
+  let parsed: MegaDiskCacheEntry;
+  try {
+    parsed = JSON.parse(raw) as MegaDiskCacheEntry;
+  } catch {
+    output?.warn(`[MegaDisk] ⚠️ Cache corrotta per ${path.basename(cacheKey)}, la ignoro.`);
+    return null;
+  }
+
+  if (parsed.version !== MEGA_DISK_CACHE_VERSION || parsed.budgetSignature !== expectedBudgetSignature) {
+    return null; // formato o budget diversi da quelli correnti: ricostruisci
+  }
+
+  const dependencies = new Map<string, FileStamp>(parsed.dependencies);
+  const candidate: MegaCacheEntry = {
+    content: parsed.content,
+    dependencies,
+    byteSize: parsed.byteSize,
+    lastAccessed: Date.now(),
+  };
+
+  const isValid = await isMegaCacheEntryValid(candidate, output);
+  if (!isValid) {
+    return null; // una dipendenza è cambiata dall'ultima sessione
+  }
+
+  output?.appendLine(
+    `[MegaDisk] 💾 Idratato da cache su disco: ${path.basename(cacheKey)} (${(candidate.byteSize / 1024).toFixed(1)}kB)`
+  );
+  return candidate;
+}
+
+// La scrittura su disco viene DEBOUNCED per singolo cacheKey, non
+// eseguita subito ad ogni rebuild. Motivo: il file sorgente è tra le
+// proprie dipendenze (dependencyTracker include sourcePath), quindi ogni
+// singolo salvataggio del file attivo invalida la sua stessa entry su
+// disco — senza debounce, ogni Ctrl+S durante l'editing attivo
+// serializzerebbe e scriverebbe di nuovo un JSON potenzialmente da
+// diversi MB, per un beneficio nullo (tanto verrebbe invalidato al
+// prossimo salvataggio). Con il debounce, durante una sessione di editing
+// continuo si scrive solo quando l'attività si placa per qualche secondo.
+const MEGA_DISK_WRITE_DEBOUNCE_MS = 4000;
+type PendingMegaDiskWrite = {
+  timer: NodeJS.Timeout;
+  perform: () => Promise<void>;
+};
+const megaDiskWriteTimers = new Map<string, PendingMegaDiskWrite>();
+
+function scheduleMegaContentDiskWrite(
+  cacheDir: string,
+  cacheKey: string,
+  entry: MegaCacheEntry,
+  budgetSignature: string,
+  maxDiskEntries: number,
+  output?: ColoredOutput
+): void {
+  const existing = megaDiskWriteTimers.get(cacheKey);
+  if (existing) {
+    clearTimeout(existing.timer);
+  }
+  const perform = () => saveMegaContentToDisk(cacheDir, cacheKey, entry, budgetSignature, maxDiskEntries, output);
+  const timer = setTimeout(() => {
+    megaDiskWriteTimers.delete(cacheKey);
+    void perform();
+  }, MEGA_DISK_WRITE_DEBOUNCE_MS);
+  megaDiskWriteTimers.set(cacheKey, { timer, perform });
+}
+
+/**
+ * Da chiamare da deactivate(): scrive subito su disco tutte le entry che
+ * erano in attesa nel debounce, cosi' l'ultima versione analizzata prima
+ * della chiusura di VS Code non va persa per la prossima sessione.
+ */
+export async function flushPendingMegaContentDiskWrites(): Promise<void> {
+  const pending = [...megaDiskWriteTimers.values()];
+  megaDiskWriteTimers.clear();
+  for (const { timer } of pending) {
+    clearTimeout(timer);
+  }
+  await Promise.all(pending.map((p) => p.perform()));
+}
+
+async function saveMegaContentToDisk(
+  cacheDir: string,
+  cacheKey: string,
+  entry: MegaCacheEntry,
+  budgetSignature: string,
+  maxDiskEntries: number,
+  output?: ColoredOutput
+): Promise<void> {
+  try {
+    await fsp.mkdir(cacheDir, { recursive: true });
+    const payload: MegaDiskCacheEntry = {
+      version: MEGA_DISK_CACHE_VERSION,
+      content: entry.content,
+      dependencies: [...entry.dependencies.entries()],
+      byteSize: entry.byteSize,
+      savedAt: Date.now(),
+      budgetSignature,
+    };
+    const filePath = megaDiskCacheFilePath(cacheDir, cacheKey);
+    await fsp.writeFile(filePath, JSON.stringify(payload), "utf8");
+    await pruneMegaDiskCache(cacheDir, maxDiskEntries, output);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    output?.warn(`[MegaDisk] ⚠️ Salvataggio fallito per ${path.basename(cacheKey)}: ${message}`);
+  }
+}
+
+/**
+ * Evizione LRU per la cache su disco, analoga a evictOldMegaEntries() ma
+ * basata sull'mtime dei file invece che su un Map ordinato in memoria.
+ * Usa lo stesso limite (maxMegaCacheEntries) della cache in RAM: non ha
+ * senso persistere più entry di quante ne teniamo comunque "calde".
+ */
+async function pruneMegaDiskCache(cacheDir: string, maxEntries: number, output?: ColoredOutput): Promise<void> {
+  let entries: string[];
+  try {
+    entries = (await fsp.readdir(cacheDir)).filter((f) => f.endsWith(".json"));
+  } catch {
+    return;
+  }
+
+  if (entries.length <= maxEntries) {
+    return;
+  }
+
+  const stamped = await Promise.all(
+    entries.map(async (name) => {
+      const full = path.join(cacheDir, name);
+      try {
+        const stat = await fsp.stat(full);
+        return { full, mtimeMs: stat.mtimeMs };
+      } catch {
+        return null;
+      }
+    })
+  );
+
+  const valid = stamped.filter((s): s is { full: string; mtimeMs: number } => s !== null);
+  valid.sort((a, b) => a.mtimeMs - b.mtimeMs); // più vecchi prima
+
+  const toDelete = valid.slice(0, valid.length - maxEntries);
+  for (const { full } of toDelete) {
+    try {
+      await fsp.unlink(full);
+    } catch {
+      // non fatale: al più resta un file orfano su disco
+    }
+  }
+  if (toDelete.length > 0) {
+    output?.detail(`[MegaDisk] 🧹 Rimosse ${toDelete.length} entry vecchie dalla cache su disco.`);
+  }
+}
+
 
 /**
  * Guard-rail contro l'esplosione del mega-content quando la catena di
  * #include raggiunge un header "ombrello" di un vendor SDK (es. HAL
  * STM32) che include, senza guardie #ifdef valutate da questo parser
- * testuale, decine di driver di periferica per volta. remainingChars e
- * truncated sono condivisi (stesso oggetto) per tutta la ricorsione di
- * un singolo buildMegaContent(); depth invece viaggia per-livello come
- * parametro separato, cosi' riflette la profondita' del ramo corrente
- * e non quella globale.
+ * testuale, decine di driver di periferica per volta.
+ *
+ * Il budget NON e' più una costante fissa "indovinata" su un singolo PC:
+ * remainingChars e deadline sono calcolati da computeAdaptiveMegaBudget()
+ * a partire dalla RAM totale della macchina e da un tempo massimo per
+ * file. Questo si adatta automaticamente a hardware diversi: su una
+ * macchina con poca RAM il budget in caratteri si restringe da solo; su
+ * una CPU lenta il budget di tempo scade prima (in termini di lavoro
+ * svolto) senza bisogno di ritoccare nessuna costante a mano.
+ *
+ * remainingChars/truncated/deadline/resolvedCount sono condivisi (stesso
+ * oggetto) per tutta la ricorsione di un singolo buildMegaContent();
+ * depth invece viaggia per-livello come parametro separato, cosi'
+ * riflette la profondita' del ramo corrente e non quella globale.
  */
-type MegaBudget = {
+export type MegaBudget = {
   remainingChars: number;
   truncated: boolean;
+  deadline: number;
+  maxDepth: number;
+  resolvedCount: number;
 };
 
-const MEGA_CONTENT_MAX_CHARS = 1_000_000; // ~3MB per file analizzato: hard cap
-const MEGA_INCLUDE_MAX_DEPTH = 5;
+export type MegaBudgetOverrides = {
+  /** 0/undefined = calcolato automaticamente dalla RAM disponibile. */
+  maxChars?: number;
+  /** 0/undefined = default adattivo (vedi DEFAULT_MEGA_TIME_BUDGET_MS). */
+  maxTimeMs?: number;
+  /** 0/undefined = default generoso (vedi DEFAULT_MEGA_INCLUDE_MAX_DEPTH). */
+  maxDepth?: number;
+};
+
+// Pavimento/tetto di sicurezza per il budget in caratteri: anche il
+// calcolo "adattivo" resta dentro questi limiti, cosi' non scende mai
+// sotto una soglia che romperebbe progetti reali ne' sale abbastanza da
+// vanificare lo scopo del guard-rail su una macchina con tantissima RAM.
+const MEGA_CHARS_FLOOR = 150_000;
+const MEGA_CHARS_CEILING = 4_000_000;
+const MEGA_CHARS_RAM_FRACTION = 0.02; // usa al più il 2% della RAM totale
+const BYTES_PER_JS_CHAR = 2; // stringhe JS in UTF-16
+
+const DEFAULT_MEGA_TIME_BUDGET_MS = 1200;
+const DEFAULT_MEGA_INCLUDE_MAX_DEPTH = 40;
+
+// Ogni tot #include risolti, cede il controllo all'event loop invece di
+// bloccarlo per l'intera durata del budget di tempo. Questo è ciò che
+// impedisce a VS Code di mostrare "Extension host not responding" anche
+// quando il lavoro (legittimo, dentro budget) richiede diverse centinaia
+// di millisecondi: l'estensione resta reattiva ad hover/keystroke nel
+// frattempo, invece di monopolizzare il thread.
+const YIELD_EVERY_N_INCLUDES = 15;
+
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
+/**
+ * Calcola un budget di caratteri "sicuro" per macchina, invece di una
+ * costante fissa. cacheEntries tiene conto che possono coesistere fino a
+ * quel numero di mega-content in cache contemporaneamente (megaCache),
+ * quindi il budget per singolo file viene ripartito di conseguenza.
+ */
+function computeAdaptiveMegaCharBudget(cacheEntries: number): number {
+  const totalMemBytes = os.totalmem() || 2 * 1024 * 1024 * 1024; // fallback 2GB
+  const totalBudgetBytes = totalMemBytes * MEGA_CHARS_RAM_FRACTION;
+  const perEntryBudgetBytes = totalBudgetBytes / Math.max(1, cacheEntries);
+  const computedChars = Math.floor(perEntryBudgetBytes / BYTES_PER_JS_CHAR);
+  return Math.min(MEGA_CHARS_CEILING, Math.max(MEGA_CHARS_FLOOR, computedChars));
+}
+
+/**
+ * Punto unico da cui parte il budget di un buildMegaContent(). Espone il
+ * calcolo adattivo separatamente cosi' e' testabile/ispezionabile senza
+ * dover invocare l'intera pipeline di parsing.
+ */
+export function computeMegaBudget(
+  cacheEntries: number,
+  overrides?: MegaBudgetOverrides
+): MegaBudget {
+  const remainingChars =
+    overrides?.maxChars && overrides.maxChars > 0
+      ? overrides.maxChars
+      : computeAdaptiveMegaCharBudget(cacheEntries);
+
+  const timeBudgetMs =
+    overrides?.maxTimeMs && overrides.maxTimeMs > 0
+      ? overrides.maxTimeMs
+      : DEFAULT_MEGA_TIME_BUDGET_MS;
+
+  const maxDepth =
+    overrides?.maxDepth && overrides.maxDepth > 0
+      ? overrides.maxDepth
+      : DEFAULT_MEGA_INCLUDE_MAX_DEPTH;
+
+  return {
+    remainingChars,
+    truncated: false,
+    deadline: Date.now() + timeBudgetMs,
+    maxDepth,
+    resolvedCount: 0,
+  };
+}
 
 /**
  * Rileva directory "a pacchetto versionato" tipiche di package manager
@@ -309,15 +636,9 @@ async function resolveInclude(
         `[ResolveInclude] ✅ Found via headerIndex: ${relIncludePath} → ${path.relative(workspaceRoot || '.', absIncludePath)}`
       );
     } else if (candidates && candidates.length > 1) {
-      // Ambiguo (piu' header con lo stesso basename nel workspace):
-      // scegliamo quello con il path relativo piu' corto rispetto al
-      // file che sta includendo, che e' l'euristica piu' ragionevole
-      // senza un vero preprocessore/compile_commands.json.
-      const sorted = [...candidates].sort((a, b) => {
-        const da = path.relative(baseDir, a).split(path.sep).length;
-        const db = path.relative(baseDir, b).split(path.sep).length;
-        return da - db;
-      });
+      const sorted = [...candidates].sort((a, b) =>
+        path.relative(baseDir, a).split(path.sep).length - path.relative(baseDir, b).split(path.sep).length
+      );
       absIncludePath = sorted[0];
       output?.appendLine(
         `[ResolveInclude] ⚠️ Ambiguous via headerIndex: ${relIncludePath} has ${candidates.length} matches, using ${path.relative(workspaceRoot || '.', absIncludePath)}`
@@ -326,9 +647,7 @@ async function resolveInclude(
   }
 
   if (!absIncludePath) {
-    output?.appendLine(
-      `[ResolveInclude] ❌ NOT FOUND: ${relIncludePath} (tried ${triedPaths.slice(0,5).join(' → ')}${triedPaths.length>5 ? '...' : ''}, baseDir=${path.relative(workspaceRoot || '.', baseDir)})`
-    );
+    // output?.appendLine(`[ResolveInclude] ❌ NOT FOUND: ${relIncludePath} (tried ${triedPaths.slice(0,5).join(' → ')}${triedPaths.length>5 ? '...' : ''})`);
     return '';
   }
   
@@ -340,22 +659,27 @@ async function resolveInclude(
     return '';
   }
 
-  
-  
   if (budget.truncated) {
     return '';
   }
-  if (depth > MEGA_INCLUDE_MAX_DEPTH) {
+  if (depth > budget.maxDepth) {
     budget.truncated = true;
     output?.appendLine(
-      `[Mega] ⚠️ Include depth limit (${MEGA_INCLUDE_MAX_DEPTH}) reached at "${relIncludePath}" — interrompo l'espansione di ulteriori #include. Il risultato di CalcDocs potrebbe essere incompleto per questo file.`
+      `[Mega] ⚠️ Include depth limit (${budget.maxDepth}) reached at "${relIncludePath}" — interrompo l'espansione di ulteriori #include.`
     );
     return '';
   }
   if (budget.remainingChars <= 0) {
     budget.truncated = true;
     output?.appendLine(
-      `[Mega] ⚠️ Size limit (${(MEGA_CONTENT_MAX_CHARS / 1_000_000).toFixed(1)}MB) reached prima di "${relIncludePath}" — interrompo l'espansione di ulteriori #include. Il risultato di CalcDocs potrebbe essere incompleto per questo file.`
+      `[Mega] ⚠️ Char budget esaurito prima di "${relIncludePath}" — interrompo l'espansione di ulteriori #include.`
+    );
+    return '';
+  }
+  if (Date.now() > budget.deadline) {
+    budget.truncated = true;
+    output?.appendLine(
+      `[Mega] ⚠️ Time budget esaurito prima di "${relIncludePath}" — interrompo l'espansione di ulteriori #include (macchina lenta o albero #include molto ampio: normale, non è un errore).`
     );
     return '';
   }
@@ -363,6 +687,13 @@ async function resolveInclude(
   visited.add(key);
   dependencyTracker.add(absIncludePath);
 
+  budget.resolvedCount += 1;
+  if (budget.resolvedCount % YIELD_EVERY_N_INCLUDES === 0) {
+    // Cede il controllo all'event loop cosi' VS Code resta reattivo
+    // (hover, keystroke, ecc.) anche durante un'espansione legittima ma
+    // corposa, invece di bloccare l'extension host per l'intera durata.
+    await yieldToEventLoop();
+  }
 
   let content: string;
   try {
@@ -375,16 +706,13 @@ async function resolveInclude(
 
   budget.remainingChars -= content.length;
 
-  
-  
-  
   const skipNestedExpansion = isVendorPackagePath(absIncludePath);
   if (skipNestedExpansion) {
     output?.detail(
       `[Mega] 📦 Vendor package header "${path.relative(workspaceRoot || '.', absIncludePath)}": incluso ma i suoi #include annidati NON vengono espansi (evita l'esplosione dell'intero SDK per header ombrello tipo stm32_hal.h).`
     );
   }
-
+  
   const lines = content.split(/\r?\n/);
   let processedContent = `\n`;
   
@@ -421,7 +749,9 @@ async function buildMegaContent(
   workspaceRoot: string,
   output: ColoredOutput | undefined,
   maxMegaCacheEntries: number,
-  headerIndex?: Map<string, string[]>
+  headerIndex?: Map<string, string[]>,
+  budgetOverrides?: MegaBudgetOverrides,
+  cacheDir?: string
 ): Promise<string> {
   // Force clear cache for test files to avoid stale data
   if (sourcePath.includes('test')) {
@@ -447,16 +777,33 @@ async function buildMegaContent(
     megaCache.delete(cacheKey);
     output?.appendLine(`[Mega] CACHE STALE: ${path.basename(sourcePath)} → rebuilding`);
   }
+
+  // Il budget va calcolato PRIMA di poter controllare la cache su disco:
+  // la firma del budget (budgetSignature) fa parte della validità di
+  // un'eventuale entry persistita — vedi commento su MegaDiskCacheEntry.
+  const budget: MegaBudget = computeMegaBudget(maxMegaCacheEntries, budgetOverrides);
+  const budgetSignature = megaBudgetSignature(budget);
+
+  if (cacheDir) {
+    const fromDisk = await loadMegaContentFromDisk(cacheDir, cacheKey, budgetSignature, output);
+    if (fromDisk) {
+      touchMegaCacheEntry(cacheKey, fromDisk); // idrata anche la cache in RAM per i prossimi hit di questa sessione
+      output?.appendLine(
+        `[Mega] CACHE HIT (disco): ${path.basename(sourcePath)} (${(fromDisk.byteSize / 1024).toFixed(1)}kB)`
+      );
+      return fromDisk.content;
+    }
+  }
+
   output?.appendLine(`[Mega] CACHE MISS: ${path.basename(sourcePath)} → building fresh`);
 
 
   const visited = new Set<string>();
   const dependencyTracker = new Set<string>([path.resolve(sourcePath)]);
   const mainDir = path.dirname(sourcePath);
-  const budget: MegaBudget = {
-    remainingChars: MEGA_CONTENT_MAX_CHARS,
-    truncated: false,
-  };
+  output?.detail(
+    `[Mega] 🧮 Budget adattivo per ${path.basename(sourcePath)}: ${(budget.remainingChars / 1000).toFixed(0)}k caratteri, profondità max ${budget.maxDepth}, tempo max ${Math.round(budget.deadline - Date.now())}ms (RAM totale macchina: ${(os.totalmem() / (1024 ** 3)).toFixed(1)}GB)`
+  );
   
   let megaContent = `\n`;
   let mainContent: string;
@@ -494,7 +841,7 @@ async function buildMegaContent(
 
   if (budget.truncated) {
     output?.appendLine(
-      `[Mega] ⚠️ ${path.basename(sourcePath)}: espansione #include troncata per limite di dimensione/profondità. Alcuni simboli potrebbero non essere risolti.`
+      `[Mega] ⚠️ ${path.basename(sourcePath)}: espansione #include troncata per limite di dimensione/profondità.`
     );
   }
 
@@ -517,6 +864,30 @@ async function buildMegaContent(
   };
   megaCache.set(cacheKey, cacheEntry);
   evictOldMegaEntries(maxMegaCacheEntries, output);
+
+  if (cacheDir && !budget.truncated) {
+    // MAI persistere una build TRONCATA: se il budget adattivo scade a
+    // metà (es. per un momento di carico elevato all'avvio, pura
+    // sfortuna di timing), il risultato è incompleto — potrebbe mancare
+    // un #include raggiunto tardi nella catena (es. l'header che
+    // definisce una macro usata più avanti). Prima della cache su disco
+    // una build troncata veniva ricostruita al prossimo trigger e
+    // spesso "andava bene" la volta dopo; con la persistenza su disco,
+    // se la salvassimo comunque, quel risultato incompleto resterebbe
+    // "congelato" e riusato per sempre — anche tra sessioni diverse di
+    // VS Code — perché dependency mtime e budgetSignature combaciano
+    // comunque (il budget TOTALE disponibile è lo stesso, non riflette
+    // se QUESTA build specifica lo ha effettivamente esaurito).
+    // Debounced (non immediato): vedi commento su scheduleMegaContentDiskWrite.
+    // Un mancato salvataggio su disco non deve mai rallentare o far
+    // fallire l'analisi in corso, e' solo un'ottimizzazione per la
+    // PROSSIMA sessione di VS Code.
+    scheduleMegaContentDiskWrite(cacheDir, cacheKey, cacheEntry, budgetSignature, maxMegaCacheEntries, output);
+  } else if (cacheDir && budget.truncated) {
+    output?.appendLine(
+      `[MegaDisk] ⏭️ ${path.basename(sourcePath)}: build troncata, NON persistita su disco (verrà ritentata al prossimo trigger).`
+    );
+  }
 
   output?.appendLine(`[Mega] Built ${path.basename(sourcePath)}: lines=${lines.length}, size=${sizeKB}kB`);
   return megaContent;
@@ -650,13 +1021,6 @@ function resolveCondition(
   }
 }
 
-// Hard cap on the length of an accumulated #if/#ifdef condition string.
-// In legitimate nested conditionals this is never approached (even 30+
-// levels of nesting stays well under 1-2k chars). It exists purely as a
-// backstop against pathological/cyclical growth (e.g. a malformed or
-// extremely deep vendor SDK conditional tree) that would otherwise
-// eventually throw "RangeError: Invalid string length" deep inside
-// safeEval() and abort the entire analysis for every file.
 const MAX_CONDITION_STRING_LENGTH = 4000;
 
 function combineConditions(parent: string | null, branch: string): string {
@@ -672,11 +1036,6 @@ function combineConditions(parent: string | null, branch: string): string {
 
   const combined = `(${parent}) && (${normalizedBranch})`;
   if (combined.length > MAX_CONDITION_STRING_LENGTH) {
-    // Degrade gracefully: treat the branch as unconditionally active rather
-    // than let the condition string keep growing. This can make CalcDocs
-    // slightly too permissive about which #define is "active" deep inside
-    // a pathological conditional tree, but that's a far better failure
-    // mode than crashing the whole analysis.
     return parent;
   }
 
@@ -1175,7 +1534,7 @@ export async function collectDefinesAndConsts(
   options: CollectOptions = {}
 ): Promise<CollectedCppSymbols> {
 
-  const { resolveIncludes = false, output, maxMegaCacheEntries, headerIndex } = options;
+  const { resolveIncludes = false, output, maxMegaCacheEntries, headerIndex, megaBudgetOverrides, megaContentCacheDir } = options;
   const effectiveCacheLimit = clampMegaCacheEntries(maxMegaCacheEntries);
 
   output?.appendLine(
@@ -1210,7 +1569,9 @@ export async function collectDefinesAndConsts(
         workspaceRoot,
         output,
         effectiveCacheLimit,
-        headerIndex
+        headerIndex,
+        megaBudgetOverrides,
+        megaContentCacheDir
       );
     } else {
       try {
@@ -1407,7 +1768,9 @@ export async function collectDefinesAndConsts(
         workspaceRoot,
         output,
         effectiveCacheLimit,
-        headerIndex
+        headerIndex,
+        megaBudgetOverrides,
+        megaContentCacheDir
       );
     } else {
       try {
@@ -1427,7 +1790,6 @@ export async function collectDefinesAndConsts(
     const stripper2 = createCommentStripper();
 
     try {
-
       for (let i = 0; i < lines.length; i += 1) {
         const line = lines[i];
         const lineWithoutComments = stripper2.strip(line);
@@ -1744,10 +2106,6 @@ export async function collectDefinesAndConsts(
         braceDepth = updateBraceDepth(braceDepth, lineWithoutComments);
       }
     } catch (err) {
-      // A failure while processing ONE file's conditional tree (e.g. a
-      // pathological #ifdef nesting) must not abort analysis for the
-      // entire workspace — that would silently kill every formula ghost
-      // value, not just the ones depending on this file. Log and move on.
       const message = err instanceof Error ? err.message : String(err);
       output?.warn(`[CPP2] ⚠️ Skipping ${path.relative(workspaceRoot ?? '.', filePath)}: ${message}`);
     }

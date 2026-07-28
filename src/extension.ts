@@ -9,6 +9,8 @@ import {
 import { ClangdStatus } from "./clangd/ClangdClient";
 import { ClangdService } from "./clangd/ClangdService";
 import { runAnalysis, runActiveCppFileAnalysis } from "./core/analysis";
+import { flushPendingMegaContentDiskWrites } from "./core/cppParser";
+import { createLatestWinsGuard, type LatestWinsToken } from "./utils/latestWins";
 import { runScopedYamlAnalysis } from "./core/scopedYamlAnalysis";
 import { ensureConfigVarsLoaded } from "./core/scopedConfigVars";
 import { isFormulaYamlFileName } from "./core/formulaYaml";
@@ -88,6 +90,11 @@ function applyConfigToState(state: ReturnType<typeof createCalcDocsState>, confi
   state.cppHover = { ...config.cppHover };
   state.inlineCodeLens = { ...config.inlineCodeLens };
   state.inlineHover = { ...config.inlineHover };
+  state.megaBudgetOverrides = {
+    maxChars: config.megaContentMaxCharsPerFile,
+    maxTimeMs: config.megaContentMaxTimeMsPerFile,
+    maxDepth: config.megaContentMaxIncludeDepth,
+  };
 }
 
 function getErrorMessage(error: unknown): string {
@@ -248,7 +255,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const state = createCalcDocsState(workspaceRoot || process.cwd(), coloredOutput); // Fallback to cwd if no workspace
   applyConfigToState(state, config);
 
-  // Create diagnostics collection for YAML errors/discrepancies
+  
+  // Cache su disco per headerIndex (vedi core/analysis.ts): usiamo lo
+  // storage privato dell'estensione, mai il workspace dell'utente.
+  // storageUri e' specifico del workspace corrente (ripulito da VS Code se
+  // il workspace viene rimosso); globalStorageUri e' il fallback quando
+  // storageUri non e' disponibile (nessun workspace aperto).
+  const cacheStorageUri = context.storageUri ?? context.globalStorageUri;
+  state.headerIndexCachePath = vscode.Uri.joinPath(
+    cacheStorageUri,
+    "header-index-cache.json"
+  ).fsPath;
+  state.megaContentCacheDir = vscode.Uri.joinPath(
+    cacheStorageUri,
+    "mega-content-cache"
+  ).fsPath;
+
+  
   state.diagnostics = vscode.languages.createDiagnosticCollection("calcdocs");
   context.subscriptions.push(state.diagnostics);
   state.inlineCalcDiagnostics = vscode.languages.createDiagnosticCollection(
@@ -376,7 +399,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         prompt: "Type to filter formulas shown in the explorer",
         value: currentFilter || "",
       }).then(text => {
-        if (text === undefined) return; // cancelled
+        if (text === undefined) return; 
         inlineCalcResultsViewProvider.setFilter(text || "");
       });
     })
@@ -531,13 +554,75 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }
 
   
+  // La full workspace scan (formule non ancora indicizzate, nessun file
+  // rilevante aperto) non deve mai bloccare né l'attivazione dell'estensione
+  // né l'analisi del file attivo. Viene pianificata con un piccolo ritardo
+  // (per dare priorità a un eventuale editor rilevante aperto nel frattempo)
+  // ed eseguita una sola volta in background; al termine la UI viene
+  // aggiornata per riflettere i dati nel frattempo diventati disponibili.
+  let backgroundScanTimer: NodeJS.Timeout | undefined;
+  let backgroundScanInFlight = false;
+  context.subscriptions.push({
+    dispose: () => {
+      if (backgroundScanTimer) {
+        clearTimeout(backgroundScanTimer);
+        backgroundScanTimer = undefined;
+      }
+    },
+  });
+
+  function scheduleBackgroundFullScan(token: LatestWinsToken): void {
+    if (backgroundScanInFlight || backgroundScanTimer) {
+      return;
+    }
+    backgroundScanTimer = setTimeout(() => {
+      backgroundScanTimer = undefined;
+      void (async () => {
+        // Se nel frattempo è arrivato un risultato utile (es. l'utente ha
+        // aperto/salvato un file YAML di formule che ha già popolato
+        // l'indice), la scansione completa non serve più: risparmiamo il
+        // lavoro.
+        if (state.hasFormulasFile || state.formulaIndex.size > 0) {
+          return;
+        }
+        backgroundScanInFlight = true;
+        try {
+          await runAnalysis(state);
+          if (token.isStale()) {
+            // Una richiesta più recente (es. un toggle enable/disable nel
+            // frattempo) ha già preso il sopravvento: non tocchiamo la UI.
+            return;
+          }
+          refreshUi(state, { editor: vscode.window.activeTextEditor });
+        } catch (error: unknown) {
+          const message = getErrorMessage(error);
+          state.output.warn(`[background full scan] errore inatteso: ${message}`);
+        } finally {
+          backgroundScanInFlight = false;
+        }
+      })();
+    }, 300);
+  }
+
+  // "Latest wins": se due chiamate a runAnalysisAndRefreshUi() sono in
+  // volo contemporaneamente (es. toggle disable→enable in rapida
+  // successione, o un secondo toggle prima che il primo abbia finito),
+  // quella più vecchia potrebbe risolversi DOPO quella più recente e
+  // sovrascriverne il risultato (ghost appena ripopolati che spariscono
+  // di nuovo). Logica estratta in utils/latestWins.ts (testata in
+  // isolamento, senza dipendenze da vscode).
+  const analysisGuard = createLatestWinsGuard();
+
   const runAnalysisAndRefreshUi = async (): Promise<void> => {
+    const token = analysisGuard.start();
+
     try {
       if (!state.enabled) {
         clearComputedState(state);
         clearDiagnostics(state);
         clearInlineCalcDiagnostics(state);
 
+        if (token.isStale()) return;
         refreshUi(state);
         return;
       }
@@ -548,22 +633,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (isCppFileEditor(activeEditor)) {
         // Active file + its resolved includes only - no workspace scan.
         await runActiveCppFileAnalysis(state, activeFsPath!);
+        if (token.isStale()) return; // una richiesta più recente ha già preso il sopravvento
         // @config.<hint>.<var> inline-calc references explicitly name a
         // config.c/config.h file by convention - not something reached via
         // #include, so it needs its own (cached, filename-only) lookup.
         await ensureConfigVarsLoaded(state);
+        if (token.isStale()) return; // una richiesta più recente ha già preso il sopravvento
       } else if (activeFsPath && isFormulaYamlFileName(activeFsPath)) {
         // Self-contained YAML -> zero C/C++ parsing. Otherwise, a targeted
         // lookup for only the missing symbols (see scopedYamlAnalysis.ts).
         await runScopedYamlAnalysis(state, activeFsPath);
+        if (token.isStale()) return; // una richiesta più recente ha già preso il sopravvento
       } else if (!state.hasFormulasFile && state.formulaIndex.size === 0) {
-        // One-time bounded discovery pass: only runs before we've ever
-        // established whether a formulas.yaml exists in the workspace at
-        // all (e.g. cold start with a non-C/non-YAML file focused). Once
-        // hasFormulasFile is known, this branch is never hit again.
-        await runAnalysis(state);
+       
+        
+        
+        
+        scheduleBackgroundFullScan(token);
       }
 
+      if (token.isStale()) return;
       refreshUi(state, { editor: activeEditor });
 
     } catch (error: unknown) {
@@ -638,7 +727,33 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   registerInlineCalcCodeLensProvider(context, inlineCalcCodeLensProvider);
   registerInspectionFeatures(context, state);
 
-  // Aggiorna i CodeLens quando un documento viene modificato
+  
+  // Debounce leggero e indipendente dallo scheduler di analisi: qui
+  // vogliamo solo evitare che ghostProvider.update()/refreshUi() (che
+  // riparsano l'intero documento attivo) girino ad ogni singolo carattere
+  // digitato. 120ms è impercettibile per l'utente ma coalesce raffiche di
+  // keystroke in un'unica ricomputazione.
+  let refreshUiTimer: NodeJS.Timeout | undefined;
+  const REFRESH_UI_DEBOUNCE_MS = 120;
+  context.subscriptions.push({
+    dispose: () => {
+      if (refreshUiTimer) {
+        clearTimeout(refreshUiTimer);
+        refreshUiTimer = undefined;
+      }
+    },
+  });
+
+  function scheduleRefreshUi(editor: vscode.TextEditor): void {
+    if (refreshUiTimer) {
+      clearTimeout(refreshUiTimer);
+    }
+    refreshUiTimer = setTimeout(() => {
+      refreshUiTimer = undefined;
+      refreshUi(state, { editor, refreshDiagnostics: true });
+    }, REFRESH_UI_DEBOUNCE_MS);
+  }
+
   context.subscriptions.push(
     vscode.workspace.onDidChangeTextDocument((event) => {
       if (!state.enabled) return;
@@ -647,7 +762,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
       const editor = vscode.window.activeTextEditor;
       if (editor && event.document === editor.document) {
-        refreshUi(state, { editor, refreshDiagnostics: true });
+        scheduleRefreshUi(editor);
       }
 
       const isYamlDocument =
@@ -761,7 +876,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       inlineCalcResultsViewProvider.refresh();
       refreshInlineCalcDiagnosticsForVisibleEditors(state);
       const activeEditor = vscode.window.activeTextEditor;
-      if (activeEditor && state.inlineGhostEnabled ) {
+      // Quando cambia "calcdocs.enabled" NON ridisegniamo qui: i dati
+      // (state.symbolValues ecc.) potrebbero non essere ancora stati
+      // ripopolati/svuotati per il nuovo stato, quindi disegneremmo ghost
+      // "vuoti" o stantii per un istante. runAnalysisAndRefreshUi() più
+      // sotto gestisce già correttamente questo caso (con generation
+      // token anti-race) e chiama ghostProvider.update() a dati pronti.
+      // Per tutti gli ALTRI cambi di configurazione (es. toggle della
+      // sola visibilità dei ghost) non serve una nuova analisi: qui
+      // ridisegniamo subito con i dati correnti, che sono già validi.
+      if (
+        activeEditor &&
+        state.inlineGhostEnabled &&
+        !event.affectsConfiguration("calcdocs.enabled")
+      ) {
         ghostProvider.update(activeEditor);
       }
 
@@ -790,6 +918,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 export async function deactivate(): Promise<void> {
   // Ferma lo scheduler e related timers
   scheduler?.dispose();
+  
+  await flushPendingMegaContentDiskWrites();
 
   // Chiude il canale di output
   if (outputChannel && coloredOutput) {

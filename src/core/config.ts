@@ -118,7 +118,27 @@ export type CalcDocsConfig = {
   internalDebugMode: LogLevel;
   /** Numero massimo di file C/C++ preprocessati mantenuti in cache LRU */
   cppCacheMaxEntries: number;
-  /** Abilita integrazione clangd come backend LSP opzionale */
+  /**
+   * Budget per il mega-content espanso di un singolo file .c (dopo la
+   * risoluzione degli #include). 0 = calcolato automaticamente dalla RAM
+   * disponibile sulla macchina (vedi computeAdaptiveMegaBudget in
+   * cppParser.ts) invece di una costante fissa uguale per tutti.
+   * Impostare un valore esplicito qui serve solo per casi limite (es. una
+   * macchina con RAM riportata in modo scorretto dal SO) — normalmente
+   * "0" (automatico) è la scelta giusta su qualunque hardware.
+   */
+  megaContentMaxCharsPerFile: number;
+  /** Budget di tempo (ms) per l'espansione #include di un singolo file.
+   * 0 = default adattivo. A differenza del budget in caratteri, questo
+   * si adatta da solo alla velocità della CPU: una macchina lenta si
+   * ferma prima (in termini di lavoro svolto), una veloce fa di più, ma
+   * nessuna delle due resta bloccata più a lungo del previsto. */
+  megaContentMaxTimeMsPerFile: number;
+  /** Profondità massima di annidamento #include. 0 = default generoso
+   * (il budget di tempo/memoria e' la protezione primaria; questo resta
+   * solo un backstop strutturale contro cicli/ricorsioni patologiche). */
+  megaContentMaxIncludeDepth: number;
+    /** Abilita integrazione clangd come backend LSP opzionale */
   useClangd: boolean;
   /** Abilita/disabilita i CodeLens per inline calc nei commenti */
   inlineCalcEnableCodeLens: boolean;
@@ -284,6 +304,9 @@ function getDefaultConfig(): CalcDocsConfig {
     thousandsSeparator: "space",
     internalDebugMode: "off" as LogLevel,
     cppCacheMaxEntries: 24,
+    megaContentMaxCharsPerFile: 0,
+    megaContentMaxTimeMsPerFile: 0,
+    megaContentMaxIncludeDepth: 0,
     useClangd: true,
     inlineGhostEnable: true,
     inlineCalcEnableCodeLens: true,
@@ -346,6 +369,21 @@ export function getConfig(): CalcDocsConfig {
   const cppCacheMaxEntries = Number.isFinite(rawCppCacheMaxEntries)
     ? Math.max(1, Math.floor(rawCppCacheMaxEntries))
     : 24;
+
+  const rawMegaContentMaxCharsPerFile = Number(cfg.get<number>("megaContentMaxCharsPerFile", 0));
+  const megaContentMaxCharsPerFile = Number.isFinite(rawMegaContentMaxCharsPerFile) && rawMegaContentMaxCharsPerFile >= 0
+    ? Math.floor(rawMegaContentMaxCharsPerFile)
+    : 0;
+
+  const rawMegaContentMaxTimeMsPerFile = Number(cfg.get<number>("megaContentMaxTimeMsPerFile", 0));
+  const megaContentMaxTimeMsPerFile = Number.isFinite(rawMegaContentMaxTimeMsPerFile) && rawMegaContentMaxTimeMsPerFile >= 0
+    ? Math.floor(rawMegaContentMaxTimeMsPerFile)
+    : 0;
+
+  const rawMegaContentMaxIncludeDepth = Number(cfg.get<number>("megaContentMaxIncludeDepth", 0));
+  const megaContentMaxIncludeDepth = Number.isFinite(rawMegaContentMaxIncludeDepth) && rawMegaContentMaxIncludeDepth >= 0
+    ? Math.floor(rawMegaContentMaxIncludeDepth)
+    : 0;
 
   const uiInvasiveness = normalizeUiInvasiveness(
     cfg.get<string>("ui.invasiveness", DEFAULT_UI_PROFILE)
@@ -521,6 +559,9 @@ export function getConfig(): CalcDocsConfig {
     thousandsSeparator,
     internalDebugMode,
     cppCacheMaxEntries,
+    megaContentMaxCharsPerFile,
+    megaContentMaxTimeMsPerFile,
+    megaContentMaxIncludeDepth,
     useClangd: cfg.get<boolean>("useClangd", true),
     inlineGhostEnable,
     inlineCalcEnableCodeLens,
