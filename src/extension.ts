@@ -587,7 +587,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         }
         backgroundScanInFlight = true;
         try {
-          await runAnalysis(state);
+          await runAnalysis(state, clangdService);
           if (token.isStale()) {
             // Una richiesta più recente (es. un toggle enable/disable nel
             // frattempo) ha già preso il sopravvento: non tocchiamo la UI.
@@ -632,7 +632,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
       if (isCppFileEditor(activeEditor)) {
         // Active file + its resolved includes only - no workspace scan.
-        await runActiveCppFileAnalysis(state, activeFsPath!);
+        await runActiveCppFileAnalysis(state, activeFsPath!, clangdService);
         if (token.isStale()) return; // una richiesta più recente ha già preso il sopravvento
         // @config.<hint>.<var> inline-calc references explicitly name a
         // config.c/config.h file by convention - not something reached via
@@ -642,7 +642,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       } else if (activeFsPath && isFormulaYamlFileName(activeFsPath)) {
         // Self-contained YAML -> zero C/C++ parsing. Otherwise, a targeted
         // lookup for only the missing symbols (see scopedYamlAnalysis.ts).
-        await runScopedYamlAnalysis(state, activeFsPath);
+        await runScopedYamlAnalysis(state, activeFsPath, clangdService);
         if (token.isStale()) return; // una richiesta più recente ha già preso il sopravvento
       } else if (!state.hasFormulasFile && state.formulaIndex.size === 0) {
        
@@ -670,7 +670,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         return;
       }
 
-      await runActiveCppFileAnalysis(state, editor.document.uri.fsPath);
+      await runActiveCppFileAnalysis(state, editor.document.uri.fsPath, clangdService);
 
       refreshUi(state, { editor });
 

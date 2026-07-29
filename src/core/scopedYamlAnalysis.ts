@@ -2,6 +2,7 @@ import * as fsp from "fs/promises";
 import * as path from "path";
 
 import {
+  augmentCppSymbolsWithClangd,
   applyCppSymbols,
   fillMissingYamlValuesFromCppSymbols,
   getYamlNodeEntries,
@@ -9,6 +10,7 @@ import {
   rebuildFormulaIndexWithEngine,
   seedSymbolValuesFromYaml,
 } from "./analysis";
+import type { ClangdService } from "../clangd/ClangdService";
 import { getConfig, isIgnoredFsPath, refreshIgnoredDirs } from "./config";
 import { collectDefinesAndConsts } from "./cppParser";
 import { loadAdjacentCsvTables } from "./csvTables";
@@ -72,7 +74,8 @@ const definedNamesCache = new Map<string, DefinedNamesCacheEntry>();
 
 export async function runScopedYamlAnalysis(
   state: CalcDocsState,
-  yamlPath: string
+  yamlPath: string,
+  clangdService?: ClangdService
 ): Promise<void> {
   const loadedYaml = await loadYamlOrReportError(state, yamlPath);
   if (!loadedYaml) {
@@ -102,7 +105,12 @@ export async function runScopedYamlAnalysis(
   let usedWorkspaceSearch = false;
 
   if (missing.size > 0) {
-    const outcome = await resolveMissingExternalSymbols(state, yamlPath, missing);
+    const outcome = await resolveMissingExternalSymbols(
+      state,
+      yamlPath,
+      missing,
+      clangdService
+    );
     usedWorkspaceSearch = outcome.usedWorkspaceSearch;
     for (const [name, value] of outcome.values) {
       if (!state.symbolValues.has(name)) {
@@ -150,7 +158,8 @@ export async function runScopedYamlAnalysis(
 async function resolveMissingExternalSymbols(
   state: CalcDocsState,
   yamlPath: string,
-  missing: Set<string>
+  missing: Set<string>,
+  clangdService?: ClangdService
 ): Promise<{
   values: Map<string, number>;
   units: Map<string, string>;
@@ -178,7 +187,12 @@ async function resolveMissingExternalSymbols(
 
     // Something in the remembered closure changed - re-parse just that
     // closure (no workspace search yet).
-    const refreshed = await reparseClosureForSymbol(state, symbol, cached);
+    const refreshed = await reparseClosureForSymbol(
+      state,
+      symbol,
+      cached,
+      clangdService
+    );
     if (refreshed) {
       state.yamlSymbolLocations.set(cacheKey, refreshed);
       values.set(symbol, refreshed.value);
@@ -209,11 +223,17 @@ async function resolveMissingExternalSymbols(
       const expandedFiles = await expandWithLocalIncludes(foundFiles, state.workspaceRoot, 5);
 
       const stats = createSymbolResolutionStats();
-      const cppSymbols = await collectDefinesAndConsts(expandedFiles, state.workspaceRoot, {
+      let cppSymbols = await collectDefinesAndConsts(expandedFiles, state.workspaceRoot, {
         resolveIncludes: false,
         output: state.output,
         maxMegaCacheEntries: config.cppCacheMaxEntries,
       });
+      cppSymbols = await augmentCppSymbolsWithClangd(
+        state,
+        cppSymbols,
+        expandedFiles,
+        clangdService
+      );
 
       applyCppSymbols(state, cppSymbols, {
         resetSymbolValues: false,
@@ -292,7 +312,8 @@ async function isClosureUnchanged(rememberedMtimes: Map<string, number>): Promis
 async function reparseClosureForSymbol(
   state: CalcDocsState,
   symbol: string,
-  cached: YamlSymbolLocationEntry
+  cached: YamlSymbolLocationEntry,
+  clangdService?: ClangdService
 ): Promise<YamlSymbolLocationEntry | null> {
   const config = getConfig();
   const closureFiles = await expandWithLocalIncludes(
@@ -302,11 +323,17 @@ async function reparseClosureForSymbol(
   );
 
   const stats = createSymbolResolutionStats();
-  const cppSymbols = await collectDefinesAndConsts(closureFiles, state.workspaceRoot, {
+  let cppSymbols = await collectDefinesAndConsts(closureFiles, state.workspaceRoot, {
     resolveIncludes: false,
     output: state.output,
     maxMegaCacheEntries: config.cppCacheMaxEntries,
   });
+  cppSymbols = await augmentCppSymbolsWithClangd(
+    state,
+    cppSymbols,
+    closureFiles,
+    clangdService
+  );
 
   applyCppSymbols(state, cppSymbols, {
     resetSymbolValues: false,

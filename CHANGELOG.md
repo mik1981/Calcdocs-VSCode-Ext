@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.4.3] - 07/29/2026
+
+- Improved clangd integration with smarter compile database detection, hover request optimization, and enhanced value extraction.
+- Improved overall responsiveness and scalability for very large C/C++ projects.
+- Added comprehensive automated test coverage for caching, performance, parser robustness, clangd integration, and expression evaluation.
+
 ## [0.4.2] - 07/28/2026
 
 - Added persistent header index caching to dramatically reduce startup time for large workspaces.

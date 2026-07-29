@@ -50,18 +50,34 @@ export class HybridSymbolProvider {
     }
 
     if (clangdSymbol && parserSymbol) {
+      const clangdPrimaryForValue =
+        hasCompileCommands &&
+        (clangdSymbol.kind === "macro" || clangdSymbol.kind === "enum") &&
+        clangdSymbol.value != null;
+      const clangdPrimaryForExpression =
+        hasCompileCommands &&
+        clangdSymbol.kind === "macro" &&
+        clangdSymbol.expression != null;
       const merged: CSymbol = {
         name: parserSymbol.name || clangdSymbol.name,
         kind: mergeKinds(clangdSymbol, parserSymbol),
-        value: parserSymbol.value ?? clangdSymbol.value,
+        value: clangdPrimaryForValue
+          ? clangdSymbol.value
+          : parserSymbol.value ?? clangdSymbol.value,
         unit: parserSymbol.unit ?? clangdSymbol.unit,
         type: clangdSymbol.type ?? parserSymbol.type,
         location: clangdSymbol.location ?? parserSymbol.location,
-        expression: parserSymbol.expression ?? clangdSymbol.expression,
+        expression: clangdPrimaryForExpression
+          ? clangdSymbol.expression
+          : parserSymbol.expression ?? clangdSymbol.expression,
         source: "mixed",
         confidence: 0,
         fieldSources: {
-          value: parserSymbol.value != null ? "parser" : "clangd",
+          value: clangdPrimaryForValue
+            ? "clangd"
+            : parserSymbol.value != null
+              ? "parser"
+              : "clangd",
           unit: parserSymbol.unit != null ? "parser" : clangdSymbol.unit != null ? "clangd" : undefined,
           type: clangdSymbol.type != null ? "clangd" : parserSymbol.type != null ? "parser" : undefined,
           location:
@@ -71,11 +87,13 @@ export class HybridSymbolProvider {
                 ? "parser"
                 : undefined,
           expression:
-            parserSymbol.expression != null
-              ? "parser"
-              : clangdSymbol.expression != null
-                ? "clangd"
-                : undefined,
+            clangdPrimaryForExpression
+              ? "clangd"
+              : parserSymbol.expression != null
+                ? "parser"
+                : clangdSymbol.expression != null
+                  ? "clangd"
+                  : undefined,
         },
         notes: [],
       };

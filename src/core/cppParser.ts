@@ -1455,11 +1455,22 @@ export function parseCppSymbolDefinition(
 /**
  * Extracts enum member name/value pairs from comment-stripped C source text.
  * Handles explicit assignments and auto-increment (e.g. SCREEN_OFF = 0, SCREEN_ON).
+ *
+ * When an explicit initializer can't be folded eagerly (e.g. it references
+ * another enum member, like `MODE_ACTIVE = MODE_BASE + 4`), we no longer
+ * guess by silently reusing the previous member's auto-increment value.
+ * Instead we keep the raw expression text so the caller can hand it to the
+ * same recursive define resolver used for macros, which can fold it once
+ * the referenced symbol is known. If it truly can't be resolved (e.g. an
+ * external/unknown symbol), `value` and `expr` are both left undefined for
+ * that member rather than reporting a fabricated number, and any implicit
+ * (no-initializer) members that follow inherit that same "unresolved"
+ * chain instead of quietly continuing from a wrong base.
  */
 function extractEnumMembers(
   strippedText: string
-): Array<{ name: string; value: number; line: number }> {
-  const results: Array<{ name: string; value: number; line: number }> = [];
+): Array<{ name: string; value?: number; expr?: string; line: number }> {
+  const results: Array<{ name: string; value?: number; expr?: string; line: number }> = [];
   const enumOpenRx = /\benum\b[^{;]*\{/g;
   let startMatch: RegExpExecArray | null;
 
@@ -1480,7 +1491,16 @@ function extractEnumMembers(
     const blockText = strippedText.slice(openPos + 1, pos - 1);
     const baseLineNum = (strippedText.slice(0, openPos + 1).match(/\n/g) ?? []).length;
 
-    let autoValue = 0;
+    // `knownValue` tracks the running auto-increment base once it is
+    // actually known (starts at 0, per C semantics for an enum with no
+    // explicit initializers). `unresolvedAnchor` names the most recent
+    // member whose value we could NOT fold; while it is set, subsequent
+    // implicit members are expressed relative to it (e.g. "NAME + 2")
+    // instead of being guessed, so resolution can still succeed later if
+    // that anchor eventually resolves.
+    let knownValue: number | undefined = 0;
+    let unresolvedAnchor: string | undefined;
+    let stepsSinceAnchor = 0;
     const blockLines = blockText.split('\n');
 
     for (let li = 0; li < blockLines.length; li++) {
@@ -1498,17 +1518,45 @@ function extractEnumMembers(
           continue;
         }
 
+        let value: number | undefined;
+        let expr: string | undefined;
+
         if (m[2] !== undefined) {
+          const rawExpr = m[2].trim();
           try {
-            const val = safeEval(m[2].trim());
-            if (Number.isFinite(val)) autoValue = Math.trunc(val);
+            const val = safeEval(rawExpr);
+            if (Number.isFinite(val)) {
+              value = Math.trunc(val);
+            }
           } catch {
-            // Keep current autoValue when expression can't be evaluated
+            // Cannot fold eagerly (e.g. references another enum member).
           }
+
+          if (value !== undefined) {
+            knownValue = value;
+            unresolvedAnchor = undefined;
+            stepsSinceAnchor = 0;
+          } else {
+            // Defer resolution instead of fabricating a value: keep the raw
+            // expression so the recursive define resolver can retry it once
+            // its dependencies are known, and anchor subsequent implicit
+            // members to this (currently unresolved) member.
+            expr = rawExpr;
+            knownValue = undefined;
+            unresolvedAnchor = name;
+            stepsSinceAnchor = 0;
+          }
+        } else if (knownValue !== undefined) {
+          value = knownValue;
+          knownValue += 1;
+        } else if (unresolvedAnchor !== undefined) {
+          stepsSinceAnchor += 1;
+          expr = stepsSinceAnchor === 1
+            ? unresolvedAnchor
+            : `${unresolvedAnchor} + ${stepsSinceAnchor - 1}`;
         }
 
-        results.push({ name, value: autoValue, line: baseLineNum + li });
-        autoValue++;
+        results.push({ name, value, expr, line: baseLineNum + li });
       }
     }
   }
@@ -1738,15 +1786,25 @@ export async function collectDefinesAndConsts(
 
       seenDefinesInFile.add(member.name);
 
-      if (!defines.has(member.name)) {
-        defines.set(member.name, String(member.value));
-      }
+      // Prefer the folded numeric value; otherwise fall back to the raw
+      // (possibly symbolic) expression so the recursive define resolver can
+      // retry it later once its dependencies are known. If neither is
+      // available the member is left out of `defines`/`consts` entirely
+      // instead of recording a fabricated value.
+      const definitionExpr =
+        member.value !== undefined ? String(member.value) : member.expr;
 
-      if (!consts.has(member.name)) {
-        consts.set(member.name, member.value);
-      }
+      if (definitionExpr !== undefined) {
+        if (!defines.has(member.name)) {
+          defines.set(member.name, definitionExpr);
+        }
 
-      defineConditions.set(member.name, "always");
+        if (member.value !== undefined && !consts.has(member.name)) {
+          consts.set(member.name, member.value);   // consts SOLO se davvero piegato
+        }
+
+        defineConditions.set(member.name, "always");
+      }
 
       if (!locations.has(member.name)) {
         locations.set(member.name, {

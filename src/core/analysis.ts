@@ -22,12 +22,17 @@ import { loadYaml, buildFormulaEntry, type LoadedYaml } from "./yamlParser";
 import { getConfig, isIgnoredFsPath, refreshIgnoredDirs } from "./config";
 import * as vscode from "vscode";
 import { Uri } from "vscode";
+import type { ClangdService } from "../clangd/ClangdService";
 import { CalcDocsState, type YamlParseErrorInfo, clearDiagnostics } from "./state";
 import {
   evaluateYamlDocument,
   type EvaluatedYamlSymbol,
 } from "../engine/yamlEngine";
 import { extractUnitsFromCppFiles } from "../engine/cUnitExtractor";
+import {
+  mergeClangdResolvedSymbols,
+  resolveClangdValuesForFiles,
+} from "../symbols/ClangdValueResolver";
 
 
 import { type FormulaEntry, type FormulaLabel } from "../types/FormulaEntry";
@@ -172,6 +177,49 @@ function logStackUsageIfNeeded(
   }
 }
 
+export async function augmentCppSymbolsWithClangd(
+  state: CalcDocsState,
+  cppSymbols: CollectedCppSymbols,
+  files: readonly string[],
+  clangdService?: ClangdService
+): Promise<CollectedCppSymbols> {
+  const status = clangdService?.getStatus();
+  if (!clangdService?.isAvailable() || !status?.available || !status.hasCompileCommands) {
+    return cppSymbols;
+  }
+
+  const clangdSymbols = await resolveClangdValuesForFiles(
+    files,
+    state.workspaceRoot,
+    clangdService,
+    {
+      headerIndex: state.headerIndex,
+    }
+  );
+
+  if (clangdSymbols.truncated) {
+    state.output.detail(
+      `[clangd] value augmentation stopped early (file/time budget reached) after ${clangdSymbols.queriedCandidates} candidate(s) — normale su progetti molto grandi con molte inclusioni, non è un errore.`
+    );
+  }
+
+  if (clangdSymbols.symbols.size === 0) {
+    return cppSymbols;
+  }
+
+  state.output.detail(
+    `[clangd] resolved ${clangdSymbols.symbols.size} value symbol(s) from ${clangdSymbols.queriedCandidates} candidate(s)`
+  );
+
+  if (clangdSymbols.skippedConflicts.length > 0) {
+    state.output.detail(
+      `[clangd] skipped conflicting value symbols: ${clangdSymbols.skippedConflicts.join(", ")}`
+    );
+  }
+
+  return mergeClangdResolvedSymbols(cppSymbols, clangdSymbols);
+}
+
 /**
  * Orchestrazione principale dell'analisi del workspace.
  * Scansiona i file, decide la modalità (YAML vs solo C/C++) e popola le mappe di stato condivise.
@@ -179,7 +227,10 @@ function logStackUsageIfNeeded(
  * @param state - Stato corrente dell'estensione
  * @returns Risultato dell'analisi con indicazione di cambiamento del file YAML
  */
-export async function runAnalysis(state: CalcDocsState): Promise<AnalysisResult> {
+export async function runAnalysis(
+  state: CalcDocsState,
+  clangdService?: ClangdService
+): Promise<AnalysisResult> {
   clearFormulaDiagnostics(state);
   state.configVars.clear();
 
@@ -206,7 +257,7 @@ export async function runAnalysis(state: CalcDocsState): Promise<AnalysisResult>
     if (!workspaceScan.yamlPath) {
       state.yamlDiagnostics = [];
       state.missingYamlSuggestions = [];
-      await runCppOnlyAnalysis(state, workspaceScan.files, stackStats);
+      await runCppOnlyAnalysis(state, workspaceScan.files, stackStats, clangdService);
       updateStateStackUsage(state, stackStats);
       logStackUsageIfNeeded(state, stackStats);
       return {
@@ -231,7 +282,8 @@ export async function runAnalysis(state: CalcDocsState): Promise<AnalysisResult>
       workspaceScan.files,
       workspaceScan.yamlPath,
       loadedYaml,
-      stackStats
+      stackStats,
+      clangdService
     );
     
     // Report formula discrepancies after analysis
@@ -269,7 +321,8 @@ export async function runAnalysis(state: CalcDocsState): Promise<AnalysisResult>
  */
 export async function runActiveCppFileAnalysis(
   state: CalcDocsState,
-  sourcePath: string
+  sourcePath: string,
+  clangdService?: ClangdService
 ): Promise<void> {
   const normalizedSourcePath = path.resolve(sourcePath);
   if (!ANALYSIS_EXTS.has(path.extname(normalizedSourcePath).toLowerCase())) {
@@ -283,7 +336,7 @@ export async function runActiveCppFileAnalysis(
 
     await ensureHeaderIndexPopulated(state, config);
 
-    const cppSymbols = await collectDefinesAndConsts(
+    let cppSymbols = await collectDefinesAndConsts(
       [normalizedSourcePath],
       state.workspaceRoot,
       {
@@ -293,6 +346,12 @@ export async function runActiveCppFileAnalysis(
         headerIndex: state.headerIndex,
         megaBudgetOverrides: state.megaBudgetOverrides,
       } as any 
+    );
+    cppSymbols = await augmentCppSymbolsWithClangd(
+      state,
+      cppSymbols,
+      [normalizedSourcePath],
+      clangdService
     );
 
     applyCppSymbols(state, cppSymbols, {
@@ -512,7 +571,8 @@ async function saveHeaderIndexToDisk(state: CalcDocsState): Promise<void> {
 async function runCppOnlyAnalysis(
   state: CalcDocsState,
   files: string[],
-  stackStats: SymbolResolutionStats
+  stackStats: SymbolResolutionStats,
+  clangdService?: ClangdService
 ): Promise<void> {
   if (files.length === 0) {
     return;
@@ -530,13 +590,19 @@ async function runCppOnlyAnalysis(
 
   // Collect symbols from source files with include resolution
   const config = getConfig();
-  const cppSymbols = await collectDefinesAndConsts(sourceFiles, state.workspaceRoot, {
+  let cppSymbols = await collectDefinesAndConsts(sourceFiles, state.workspaceRoot, {
     resolveIncludes: true,
     output: state.output,
     maxMegaCacheEntries: config.cppCacheMaxEntries,
     headerIndex: state.headerIndex,
     megaBudgetOverrides: state.megaBudgetOverrides,
   });
+  cppSymbols = await augmentCppSymbolsWithClangd(
+    state,
+    cppSymbols,
+    sourceFiles,
+    clangdService
+  );
   
   applyCppSymbols(state, cppSymbols, {
     resetSymbolValues: true,
@@ -1019,7 +1085,8 @@ async function runYamlAnalysis(
   files: string[],
   yamlPath: string,
   loadedYaml: LoadedYaml,
-  stackStats: SymbolResolutionStats
+  stackStats: SymbolResolutionStats,
+  clangdService?: ClangdService
 ): Promise<void> {
   state.lastYamlPath = yamlPath;
   state.lastYamlRaw = loadedYaml.rawText;
@@ -1047,7 +1114,13 @@ async function runYamlAnalysis(
     // state.output.appendLine('[Analysis] 🔄 Test files detected - forcing fresh C parse (cache bypassed)');
     collectOpts.clearTestCache = true; // Trigger cache clear in cppParser
   }
-  const cppSymbols = await collectDefinesAndConsts(sourceFiles, state.workspaceRoot, collectOpts);
+  let cppSymbols = await collectDefinesAndConsts(sourceFiles, state.workspaceRoot, collectOpts);
+  cppSymbols = await augmentCppSymbolsWithClangd(
+    state,
+    cppSymbols,
+    sourceFiles,
+    clangdService
+  );
 
   applyCppSymbols(state, cppSymbols, {
     resetSymbolValues: false,

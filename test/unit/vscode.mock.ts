@@ -1,4 +1,5 @@
 // Minimal vscode mock for vitest unit tests
+import * as fsp from "fs/promises";
 
 class ConfigurationValue {
   private data: Record<string, unknown>;
@@ -92,6 +93,35 @@ export const workspace = {
   }),
   asRelativePath: (pathOrUri: unknown) => String(pathOrUri),
   findFiles: async () => [],
+  openTextDocument: async (uriOrPath: unknown) => {
+    const uri =
+      uriOrPath instanceof Uri
+        ? uriOrPath
+        : typeof uriOrPath === "string"
+          ? Uri.file(uriOrPath)
+          : Uri.file(String((uriOrPath as { fsPath?: string })?.fsPath ?? ""));
+    const text = await fsp.readFile(uri.fsPath, "utf8");
+    const lines = text.split(/\r?\n/);
+    return {
+      uri,
+      languageId: /\.(h|hh|hpp|hxx)$/i.test(uri.fsPath) ? "cpp" : "c",
+      lineCount: lines.length,
+      lineAt: (line: number) => ({ text: lines[line] ?? "" }),
+      getText: () => text,
+      positionAt: (offset: number) => {
+        const safeOffset = Math.max(0, Math.min(offset, text.length));
+        let line = 0;
+        let lineStart = 0;
+        for (let i = 0; i < safeOffset; i += 1) {
+          if (text.charCodeAt(i) === 10) {
+            line += 1;
+            lineStart = i + 1;
+          }
+        }
+        return new Position(line, safeOffset - lineStart);
+      },
+    };
+  },
 };
 
 export const window = {

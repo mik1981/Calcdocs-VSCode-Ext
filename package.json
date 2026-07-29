@@ -2,7 +2,7 @@
   "name": "calcdocs-vscode-extension",
   "displayName": "CalcDocs - C/C++ Constants & Formula Evaluator",
   "description": "%extension.description%",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "publisher": "convergo-dev",
   "repository": {
     "type": "git",
@@ -67,12 +67,7 @@
   "activationEvents": [
     "onLanguage:c",
     "onLanguage:cpp",
-    "onLanguage:yaml",
-    "onCommand:calcdocs.openTestFolder",
-    "onCommand:calcdocs.inspection.openInspector",
-    "onCommand:calcdocs.inspection.explainFormula",
-    "onCommand:calcdocs.inspection.healthCheck",
-    "onCommand:calcdocs.inspection.exportReport"
+    "onLanguage:yaml"
   ],
   "contributes": {
     "configuration": {
