@@ -348,6 +348,7 @@ export function clearComputedState(state: CalcDocsState): void {
   state.symbolAmbiguityRoots.clear();
   state.allDefines.clear();
   state.defineConditions.clear();
+  state.defineComments.clear();
   state.functionDefines.clear();
   state.lastAnalysisStackUsage = createDefaultAnalysisStackUsage();
   state.lastYamlParseError = null;

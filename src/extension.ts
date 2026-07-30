@@ -97,6 +97,33 @@ function applyConfigToState(state: ReturnType<typeof createCalcDocsState>, confi
   };
 }
 
+/**
+ * Re-reads calcdocs.* settings and re-applies them to every config-driven
+ * piece of the running extension: state flags, the analysis scheduler's
+ * watchers/periodic timer, and the resource monitor's thresholds.
+ *
+ * This is the same "settings changed, react to it" recipe used by the
+ * onDidChangeConfiguration handler in activate() and by "Restart CalcDocs"
+ * (see commands.ts's reapplyConfig callback) — extracted once so the two
+ * can't quietly drift apart from each other. Deliberately leaves clangd
+ * reconfiguration and cache invalidation to their own call sites: this
+ * function's only job is "make runtime config match calcdocs.* settings",
+ * nothing more.
+ */
+function reapplyRuntimeConfig(
+  context: vscode.ExtensionContext,
+  state: ReturnType<typeof createCalcDocsState>
+): CalcDocsConfig {
+  const nextConfig = getConfig();
+  applyConfigToState(state, nextConfig);
+  scheduler?.applyConfiguration(context, nextConfig);
+  resourceMonitor?.applyConfiguration({
+    mode: nextConfig.resourceStatusMode,
+    cpuThreshold: nextConfig.resourceCpuThreshold,
+  });
+  return nextConfig;
+}
+
 function getErrorMessage(error: unknown): string {
   if (error instanceof Error) {
     return error.stack ?? error.message;
@@ -429,6 +456,27 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     shouldShowStatus: true,
   };
 
+  // Contatore (non booleano) perché più analisi possono sovrapporsi per
+  // qualche istante (es. un full workspace scan in background mentre
+  // l'utente ha appena salvato il file attivo): la status bar deve
+  // restare "working" finché l'ULTIMA di queste non è terminata, non
+  // finché la prima ritorna. beginAnalysisWork()/endAnalysisWork() sono
+  // l'unico posto che tocca questo contatore: ogni punto di ingresso
+  // dell'analisi (runAnalysisAndRefreshUi, lo scan di background) li
+  // richiama in coppia invece di gestire un proprio stato "sto
+  // lavorando" duplicato.
+  let analysisBusyCount = 0;
+
+  function beginAnalysisWork(): void {
+    analysisBusyCount += 1;
+    refreshRuntimeStatus();
+  }
+
+  function endAnalysisWork(): void {
+    analysisBusyCount = Math.max(0, analysisBusyCount - 1);
+    refreshRuntimeStatus();
+  }
+
   /**
    * Returns dynamic clangd status label based on live service status and active editor.
    */
@@ -475,7 +523,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       lastResourceSnapshot.memoryRssMb,
       config.resourceCpuThreshold,
       state.lastAnalysisStackUsage,
-      runtimeBackendLabel
+      runtimeBackendLabel,
+      analysisBusyCount > 0
     );
 
     const shouldShow = !state.enabled || lastResourceSnapshot.shouldShowStatus;
@@ -508,7 +557,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       diagnosticsProvider.mergeForVisibleEditors();
     }
 
-    if (editor && state.enabled && state.inlineGhostEnabled) {
+    if (editor && state.inlineGhostEnabled) {
       ghostProvider.update(editor);
     }
 
@@ -586,6 +635,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           return;
         }
         backgroundScanInFlight = true;
+        beginAnalysisWork();
         try {
           await runAnalysis(state, clangdService);
           if (token.isStale()) {
@@ -599,6 +649,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           state.output.warn(`[background full scan] errore inatteso: ${message}`);
         } finally {
           backgroundScanInFlight = false;
+          endAnalysisWork();
         }
       })();
     }, 300);
@@ -615,6 +666,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const runAnalysisAndRefreshUi = async (): Promise<void> => {
     const token = analysisGuard.start();
+    beginAnalysisWork();
+    const activeEditor = vscode.window.activeTextEditor;
 
     try {
       if (!state.enabled) {
@@ -623,11 +676,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         clearInlineCalcDiagnostics(state);
 
         if (token.isStale()) return;
-        refreshUi(state);
+        refreshUi(state, { editor: activeEditor });
         return;
       }
-
-      const activeEditor = vscode.window.activeTextEditor;
       const activeFsPath = activeEditor?.document.uri.fsPath;
 
       if (isCppFileEditor(activeEditor)) {
@@ -645,38 +696,35 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         await runScopedYamlAnalysis(state, activeFsPath, clangdService);
         if (token.isStale()) return; // una richiesta più recente ha già preso il sopravvento
       } else if (!state.hasFormulasFile && state.formulaIndex.size === 0) {
-       
-        
-        
-        
         scheduleBackgroundFullScan(token);
       }
 
       if (token.isStale()) return;
       refreshUi(state, { editor: activeEditor });
-
     } catch (error: unknown) {
       const message = getErrorMessage(error);
       state.output.warn(`[runAnalysisAndRefreshUi] errore inatteso: ${message}`);
+    } finally {
+      endAnalysisWork();
     }
   };
-
 
   const runActiveCppAnalysisAndRefreshUi = async (
     editor: vscode.TextEditor | undefined
   ): Promise<void> => {
+    if (!state.enabled || !isCppFileEditor(editor)) {
+      return;
+    }
+
+    beginAnalysisWork();
     try {
-      if (!state.enabled || !isCppFileEditor(editor)) {
-        return;
-      }
-
       await runActiveCppFileAnalysis(state, editor.document.uri.fsPath, clangdService);
-
       refreshUi(state, { editor });
-
     } catch (error: unknown) {
       const message = getErrorMessage(error);
       state.output.warn(`[runActiveCppAnalysisAndRefreshUi] errore inatteso: ${message}`);
+    } finally {
+      endAnalysisWork();
     }
   };
 
@@ -809,6 +857,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Registra i comandi della guida interattiva
   registerGuideCommands(context);
 
+  // Chiusura usata da "Restart CalcDocs" (vedi commands.ts) per
+  // rileggere calcdocs.* e riallineare stato/scheduler/resource monitor
+  // esattamente come fa il gestore onDidChangeConfiguration qui sotto -
+  // aggiorna anche `config` (variabile locale di activate()), non solo
+  // `state`, cosi' refreshRuntimeStatus() non resta con la soglia CPU
+  // vecchia dopo un restart.
+  const reapplyConfig = (): void => {
+    config = reapplyRuntimeConfig(context, state);
+  };
+
   // Registra i comandi dell'estensione (toggleEnabled, etc.)
   registerCommands({
     context,
@@ -816,6 +874,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     scheduler,
     runAnalysisAndRefreshUi,
     formulaRegistry,
+    reapplyConfig,
   });
 
   // Gestisce i cambi di configurazione dell'estensione
@@ -827,9 +886,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
 
       const previousConfig = config;
-      const nextConfig = getConfig();
+      const nextConfig = reapplyRuntimeConfig(context, state);
       config = nextConfig;
-      applyConfigToState(state, nextConfig);
 
       if (
         event.affectsConfiguration("calcdocs.useClangd") &&
@@ -863,12 +921,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         clearInlineCalcDiagnostics(state);
       }
 
-      // Aggiorna la configurazione dello scheduler e del monitor risorse
-      scheduler?.applyConfiguration(context, nextConfig);
-      resourceMonitor?.applyConfiguration({
-        mode: nextConfig.resourceStatusMode,
-        cpuThreshold: nextConfig.resourceCpuThreshold,
-      });
+      // Scheduler e resource monitor sono già stati riallineati da
+      // reapplyRuntimeConfig() qui sopra.
       refreshRuntimeStatus();
       invalidatePriorityCache();
       codeLensProvider.refresh();
@@ -887,7 +941,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       // ridisegniamo subito con i dati correnti, che sono già validi.
       if (
         activeEditor &&
-        state.inlineGhostEnabled &&
         !event.affectsConfiguration("calcdocs.enabled")
       ) {
         ghostProvider.update(activeEditor);

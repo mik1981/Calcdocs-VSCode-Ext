@@ -72,6 +72,16 @@ interface DefinedNamesCacheEntry {
 /** Per-file cache of "cheaply detected" identifier names, keyed by absolute path. */
 const definedNamesCache = new Map<string, DefinedNamesCacheEntry>();
 
+/**
+ * Full RAM invalidation for this module's per-file cache. Used by
+ * "Force Recompute"/"Restart CalcDocs" (see core/cacheManager.ts) so a
+ * manually-triggered full refresh isn't quietly served stale per-file
+ * identifier lists left over from a previous analysis pass.
+ */
+export function clearScopedYamlAnalysisCache(): void {
+  definedNamesCache.clear();
+}
+
 export async function runScopedYamlAnalysis(
   state: CalcDocsState,
   yamlPath: string,

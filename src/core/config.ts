@@ -293,31 +293,103 @@ function normalizePositiveInt(value: number, fallback: number): number {
 }
 
 /** Ritorna la configurazione di default quando vscode non è disponibile (es. test) */
+/**
+ * Unica fonte di verità per i default "flat", cioè quelli che NON
+ * dipendono dal profilo ui.invasiveness (per quelli vedi
+ * UI_PROFILE_DEFAULTS sopra). Vanno tenuti sincronizzati a mano con i
+ * "default" dichiarati in package.json sotto
+ * contributes.configuration.properties — VS Code non offre un modo per
+ * leggerli programmaticamente da dentro l'estensione, quindi qualche
+ * duplicazione qui è inevitabile.
+ *
+ * Il motivo per cui questa costante esiste: prima ogni valore era
+ * scritto due volte in punti diversi di questo file (una volta in
+ * getDefaultConfig(), un'altra come fallback dentro ogni cfg.get(...) in
+ * getConfig()), e poteva capitare che le due copie divergessero senza
+ * che nessuno se ne accorgesse. È successo davvero: ignoredDirs
+ * ricadeva su un array vuoto invece della lista reale in package.json,
+ * thousandsSeparator su "space" invece di "apostrophe", internalDebugMode
+ * su "off"/"" invece di "info" (e le due copie non erano nemmeno
+ * coerenti tra loro). Ora c'è un solo posto da aggiornare.
+ */
+const FLAT_DEFAULTS = {
+  enabled: true,
+  scanInterval: 0,
+  ignoredDirs: [
+    ".git",
+    ".gitHub",
+    "node_modules",
+    "dist",
+    "build",
+    "out",
+    "__pycache__",
+    ".vscode",
+    ".idea",
+    "Debug*",
+    "Release*",
+    ".vscode-test",
+    ".cache",
+    ".clangd",
+    ".settings",
+  ],
+  enableCppProviders: true,
+  useClangd: true,
+  resourceStatusMode: "always" as ResourceStatusMode,
+  resourceCpuThreshold: 70,
+  thousandsSeparator: "apostrophe" as ThousandsSeparator,
+  internalDebugMode: "info" as LogLevel,
+  cppCacheMaxEntries: 24,
+  megaContentMaxCharsPerFile: 0,
+  megaContentMaxTimeMsPerFile: 0,
+  megaContentMaxIncludeDepth: 0,
+  formulaHeaderOutputPath: "macro_generate.h",
+  formulaHeaderIncludeResolvedValues: true,
+} satisfies {
+  enabled: boolean;
+  scanInterval: number;
+  ignoredDirs: string[];
+  enableCppProviders: boolean;
+  useClangd: boolean;
+  resourceStatusMode: ResourceStatusMode;
+  resourceCpuThreshold: number;
+  thousandsSeparator: ThousandsSeparator;
+  internalDebugMode: LogLevel;
+  cppCacheMaxEntries: number;
+  megaContentMaxCharsPerFile: number;
+  megaContentMaxTimeMsPerFile: number;
+  megaContentMaxIncludeDepth: number;
+  formulaHeaderOutputPath: string;
+  formulaHeaderIncludeResolvedValues: boolean;
+};
+
 function getDefaultConfig(): CalcDocsConfig {
   return {
-    enabled: true,
-    scanInterval: 0,
-    ignoredDirs: [],
-    enableCppProviders: true,
-    resourceStatusMode: "always",
-    resourceCpuThreshold: 70,
-    thousandsSeparator: "space",
-    internalDebugMode: "off" as LogLevel,
-    cppCacheMaxEntries: 24,
-    megaContentMaxCharsPerFile: 0,
-    megaContentMaxTimeMsPerFile: 0,
-    megaContentMaxIncludeDepth: 0,
-    useClangd: true,
+    enabled: FLAT_DEFAULTS.enabled,
+    scanInterval: FLAT_DEFAULTS.scanInterval,
+    ignoredDirs: [...FLAT_DEFAULTS.ignoredDirs],
+    enableCppProviders: FLAT_DEFAULTS.enableCppProviders,
+    resourceStatusMode: FLAT_DEFAULTS.resourceStatusMode,
+    resourceCpuThreshold: FLAT_DEFAULTS.resourceCpuThreshold,
+    thousandsSeparator: FLAT_DEFAULTS.thousandsSeparator,
+    internalDebugMode: FLAT_DEFAULTS.internalDebugMode,
+    cppCacheMaxEntries: FLAT_DEFAULTS.cppCacheMaxEntries,
+    megaContentMaxCharsPerFile: FLAT_DEFAULTS.megaContentMaxCharsPerFile,
+    megaContentMaxTimeMsPerFile: FLAT_DEFAULTS.megaContentMaxTimeMsPerFile,
+    megaContentMaxIncludeDepth: FLAT_DEFAULTS.megaContentMaxIncludeDepth,
+    useClangd: FLAT_DEFAULTS.useClangd,
     inlineGhostEnable: true,
     inlineCalcEnableCodeLens: true,
     inlineCalcEnableHover: true,
     inlineCalcDiagnosticsLevel: "warnings",
-    uiInvasiveness: "standard",
-    formulaHeader: { outputPath: "macro_generate.h", includeResolvedValues: true },
-    cppCodeLens: { enabled: true, maxItemsPerViewport: 40, showAmbiguity: true, showCastOverflow: true, showMismatch: true, showOpenFormula: true, showResolvedValue: true, showExpandedPreview: true },
-    cppHover: { enabled: true, maxConditionalDefinitions: 8, maxInDocumentDefinitions: 6, showConditionalDefinitions: true, showInDocumentDefinitions: true, showCastOverflow: true, showInheritedAmbiguity: true, showFormulaSection: true, showKnownValue: true, showLiveRegisterDecoder: true },
-    inlineCodeLens: { enabled: true, maxItemsPerViewport: 30 },
-    inlineHover: { enabled: true, showDimension: true, showWarnings: true, showErrors: true },
+    uiInvasiveness: DEFAULT_UI_PROFILE,
+    formulaHeader: {
+      outputPath: FLAT_DEFAULTS.formulaHeaderOutputPath,
+      includeResolvedValues: FLAT_DEFAULTS.formulaHeaderIncludeResolvedValues,
+    },
+    cppCodeLens: { enabled: true, ...UI_PROFILE_DEFAULTS[DEFAULT_UI_PROFILE].cppCodeLens, maxItemsPerFile: UI_PROFILE_DEFAULTS[DEFAULT_UI_PROFILE].cppCodeLens.maxItemsPerViewport },
+    cppHover: { enabled: true, ...UI_PROFILE_DEFAULTS[DEFAULT_UI_PROFILE].cppHover },
+    inlineCodeLens: { enabled: true, ...UI_PROFILE_DEFAULTS[DEFAULT_UI_PROFILE].inlineCodeLens, maxItemsPerFile: UI_PROFILE_DEFAULTS[DEFAULT_UI_PROFILE].inlineCodeLens.maxItemsPerViewport },
+    inlineHover: { enabled: true, ...UI_PROFILE_DEFAULTS[DEFAULT_UI_PROFILE].inlineHover },
     inlineDiagnostics: { level: "warnings" },
   };
 }
@@ -336,13 +408,13 @@ export function getConfig(): CalcDocsConfig {
   const cfg = v.workspace.getConfiguration("calcdocs");
   
   // Leggi l'intervallo di scansione
-  const scanInterval = Number(cfg.get<number>("scanInterval", 0));
+  const scanInterval = Number(cfg.get<number>("scanInterval", FLAT_DEFAULTS.scanInterval));
   
   // Leggi la modalità di visualizzazione risorse
-  const resourceStatusModeValue = cfg.get<string>("resourceStatusMode", "always");
+  const resourceStatusModeValue = cfg.get<string>("resourceStatusMode", FLAT_DEFAULTS.resourceStatusMode);
   
   // Leggi la soglia CPU
-  const rawCpuThreshold = Number(cfg.get<number>("resourceCpuThreshold", 70));
+  const rawCpuThreshold = Number(cfg.get<number>("resourceCpuThreshold", FLAT_DEFAULTS.resourceCpuThreshold));
 
   // Normalizza la modalità risorse
   const resourceStatusMode: ResourceStatusMode =
@@ -353,37 +425,37 @@ export function getConfig(): CalcDocsConfig {
   // Normalizza la soglia CPU (tra 0 e 100)
   const resourceCpuThreshold = Number.isFinite(rawCpuThreshold)
     ? Math.min(100, Math.max(0, rawCpuThreshold))
-    : 70;
+    : FLAT_DEFAULTS.resourceCpuThreshold;
 
   // Leggi il separatore delle migliaia
-  const thousandsSeparatorValue = cfg.get<string>("thousandsSeparator", "space");
+  const thousandsSeparatorValue = cfg.get<string>("thousandsSeparator", FLAT_DEFAULTS.thousandsSeparator);
   const thousandsSeparator: ThousandsSeparator = 
     ["none", "space", "dot", "comma", "apostrophe", "narrowNoBreakSpace"].includes(thousandsSeparatorValue)
       ? thousandsSeparatorValue as ThousandsSeparator
-      : "space";
+      : FLAT_DEFAULTS.thousandsSeparator;
 
   // Leggi il livello di log
-  const internalDebugModeValue = cfg.get<string>("internalDebugMode", "");
+  const internalDebugModeValue = cfg.get<string>("internalDebugMode", FLAT_DEFAULTS.internalDebugMode);
   const internalDebugMode: LogLevel = internalDebugModeValue as LogLevel;
-  const rawCppCacheMaxEntries = Number(cfg.get<number>("cppCacheMaxEntries", 24));
+  const rawCppCacheMaxEntries = Number(cfg.get<number>("cppCacheMaxEntries", FLAT_DEFAULTS.cppCacheMaxEntries));
   const cppCacheMaxEntries = Number.isFinite(rawCppCacheMaxEntries)
     ? Math.max(1, Math.floor(rawCppCacheMaxEntries))
-    : 24;
+    : FLAT_DEFAULTS.cppCacheMaxEntries;
 
-  const rawMegaContentMaxCharsPerFile = Number(cfg.get<number>("megaContentMaxCharsPerFile", 0));
+  const rawMegaContentMaxCharsPerFile = Number(cfg.get<number>("megaContentMaxCharsPerFile", FLAT_DEFAULTS.megaContentMaxCharsPerFile));
   const megaContentMaxCharsPerFile = Number.isFinite(rawMegaContentMaxCharsPerFile) && rawMegaContentMaxCharsPerFile >= 0
     ? Math.floor(rawMegaContentMaxCharsPerFile)
-    : 0;
+    : FLAT_DEFAULTS.megaContentMaxCharsPerFile;
 
-  const rawMegaContentMaxTimeMsPerFile = Number(cfg.get<number>("megaContentMaxTimeMsPerFile", 0));
+  const rawMegaContentMaxTimeMsPerFile = Number(cfg.get<number>("megaContentMaxTimeMsPerFile", FLAT_DEFAULTS.megaContentMaxTimeMsPerFile));
   const megaContentMaxTimeMsPerFile = Number.isFinite(rawMegaContentMaxTimeMsPerFile) && rawMegaContentMaxTimeMsPerFile >= 0
     ? Math.floor(rawMegaContentMaxTimeMsPerFile)
-    : 0;
+    : FLAT_DEFAULTS.megaContentMaxTimeMsPerFile;
 
-  const rawMegaContentMaxIncludeDepth = Number(cfg.get<number>("megaContentMaxIncludeDepth", 0));
+  const rawMegaContentMaxIncludeDepth = Number(cfg.get<number>("megaContentMaxIncludeDepth", FLAT_DEFAULTS.megaContentMaxIncludeDepth));
   const megaContentMaxIncludeDepth = Number.isFinite(rawMegaContentMaxIncludeDepth) && rawMegaContentMaxIncludeDepth >= 0
     ? Math.floor(rawMegaContentMaxIncludeDepth)
-    : 0;
+    : FLAT_DEFAULTS.megaContentMaxIncludeDepth;
 
   const uiInvasiveness = normalizeUiInvasiveness(
     cfg.get<string>("ui.invasiveness", DEFAULT_UI_PROFILE)
@@ -391,8 +463,8 @@ export function getConfig(): CalcDocsConfig {
   const uiDefaults = UI_PROFILE_DEFAULTS[uiInvasiveness];
 
   const formulaHeader = {
-    outputPath: cfg.get<string>("formulaHeader.outputPath", "macro_generate.h"),
-    includeResolvedValues: cfg.get<boolean>("formulaHeader.includeResolvedValues", true)
+    outputPath: cfg.get<string>("formulaHeader.outputPath", FLAT_DEFAULTS.formulaHeaderOutputPath),
+    includeResolvedValues: cfg.get<boolean>("formulaHeader.includeResolvedValues", FLAT_DEFAULTS.formulaHeaderIncludeResolvedValues)
   };
 
   const cppCodeLensEnabled = cfg.get<boolean>("cpp.codeLens.enabled", true);
@@ -549,11 +621,11 @@ export function getConfig(): CalcDocsConfig {
   const inlineCalcDiagnosticsLevel = inlineDiagnostics.level;
 
   return {
-    enabled: cfg.get<boolean>("enabled", true),
+    enabled: cfg.get<boolean>("enabled", FLAT_DEFAULTS.enabled),
     scanInterval:
-      Number.isFinite(scanInterval) && scanInterval >= 0 ? scanInterval : 0,
-    ignoredDirs: cfg.get<string[]>("ignoredDirs", []),
-    enableCppProviders: cfg.get<boolean>("enableCppProviders", true),
+      Number.isFinite(scanInterval) && scanInterval >= 0 ? scanInterval : FLAT_DEFAULTS.scanInterval,
+    ignoredDirs: cfg.get<string[]>("ignoredDirs", FLAT_DEFAULTS.ignoredDirs),
+    enableCppProviders: cfg.get<boolean>("enableCppProviders", FLAT_DEFAULTS.enableCppProviders),
     resourceStatusMode,
     resourceCpuThreshold,
     thousandsSeparator,
@@ -562,7 +634,7 @@ export function getConfig(): CalcDocsConfig {
     megaContentMaxCharsPerFile,
     megaContentMaxTimeMsPerFile,
     megaContentMaxIncludeDepth,
-    useClangd: cfg.get<boolean>("useClangd", true),
+    useClangd: cfg.get<boolean>("useClangd", FLAT_DEFAULTS.useClangd),
     inlineGhostEnable,
     inlineCalcEnableCodeLens,
     inlineCalcEnableHover,

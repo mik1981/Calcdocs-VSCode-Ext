@@ -19,6 +19,19 @@ export function invalidatePriorityCache(): void {
   currentDataTick++;
 }
 
+/**
+ * Hard reset (not just tick bump): actually releases the Map entries.
+ * invalidatePriorityCache() is the cheap, everyday version used after
+ * every analysis pass (stale entries just get overwritten lazily); this
+ * is for "Force Recompute"/"Restart CalcDocs" where a genuinely empty
+ * cache is part of what "invalidate everything" means to the user,
+ * including reclaiming memory for files that are no longer open.
+ */
+export function clearGhostPriorityCache(): void {
+  priorityCache.clear();
+  currentDataTick++;
+}
+
 function isGhostReplaceableItem(item: CppCodeLensItem): boolean {
   return (
     item.kind === "resolvedValue" ||

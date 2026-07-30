@@ -2,8 +2,8 @@ import * as fsp from "fs/promises";
 import * as path from "path";
 import * as vscode from "vscode";
 
-import { clearCppParserCache } from "../core/cppParser";
 import { getConfig } from "../core/config";
+import { invalidateAllCalcDocsCaches } from "../core/cacheManager";
 import { CalcDocsState, SymbolDefinitionLocation } from "../core/state";
 import { AnalysisScheduler } from "../infra/watchers";
 import { pickWord } from "../utils/editor";
@@ -19,6 +19,14 @@ type RegisterCommandsParams = {
   scheduler: AnalysisScheduler;
   runAnalysisAndRefreshUi: () => Promise<void>;
   formulaRegistry: FormulaRegistry;
+  /**
+   * Re-reads calcdocs.* settings and re-applies them onto `state`, exactly
+   * like activation does. Passed in from extension.ts (where the state
+   * object and applyConfigToState() already live) so "Restart CalcDocs"
+   * can genuinely simulate a fresh activation instead of only clearing
+   * caches and re-running analysis with possibly-stale runtime config.
+   */
+  reapplyConfig: () => void;
 };
 
 /**
@@ -31,7 +39,44 @@ export function registerCommands({
   scheduler,
   runAnalysisAndRefreshUi,
   formulaRegistry,
+  reapplyConfig,
 }: RegisterCommandsParams): void {
+  /**
+   * "Restart CalcDocs": the closest an extension can safely get to
+   * re-running its own activation without VS Code's help. It cannot
+   * re-register commands/providers (that would throw on the duplicate
+   * registration or leak the old ones), so instead it does everything
+   * that's actually safe and useful to redo in place:
+   *   1. Invalidate every cache, RAM + disk (same as Force Recompute).
+   *   2. Also forget session-scoped "done once" bookkeeping (e.g. header
+   *      index live-refresh already scheduled), which Force Recompute
+   *      deliberately leaves alone.
+   *   3. Re-read calcdocs.* settings onto state, like a fresh activation.
+   *   4. Re-arm the file watchers / periodic scan from that config.
+   *   5. Run a full analysis and refresh every provider/view.
+   * For the rare case where even that isn't enough (e.g. clangd itself
+   * got into a bad state), a genuine "Reload Window" is offered as a
+   * one-click follow-up instead of being forced on every restart.
+   */
+  async function performRestart(): Promise<void> {
+    await invalidateAllCalcDocsCaches(state, {
+      includeDisk: true,
+      resetSessionFlags: true,
+    });
+    reapplyConfig();
+    scheduler.applyConfiguration(context, getConfig());
+    await runAnalysisAndRefreshUi();
+
+    const reloadAction = localize("command.restart.reloadWindowAction");
+    const choice = await vscode.window.showInformationMessage(
+      localize("command.restart.done"),
+      reloadAction
+    );
+    if (choice === reloadAction) {
+      await vscode.commands.executeCommand("workbench.action.reloadWindow");
+    }
+  }
+
   context.subscriptions.push(
     vscode.commands.registerCommand("calcdocs.recompute", async () => {
       if (!state.enabled) {
@@ -41,8 +86,11 @@ export function registerCommands({
         return;
       }
 
+      // "Force" means force: an actually-empty cache, not just "run the
+      // analysis again and hope something changed". See cacheManager.ts.
+      await invalidateAllCalcDocsCaches(state, { includeDisk: true });
       await runAnalysisAndRefreshUi();
-      await vscode.window.showInformationMessage("CalcDocs analysis updated.");
+      await vscode.window.showInformationMessage(localize("command.recompute.success"));
     }),
 
     vscode.commands.registerCommand("calcdocs.generateFormulaHeader", async () => {
@@ -108,9 +156,7 @@ export function registerCommands({
     }),
 
     vscode.commands.registerCommand("calcdocs.restart", async () => {
-      clearCppParserCache();
-      await runAnalysisAndRefreshUi();
-      await vscode.window.showInformationMessage(localize("command.restart.done"));
+      await performRestart();
     }),
 
     vscode.commands.registerCommand("calcdocs.setUiInvasiveness", async () => {
@@ -118,7 +164,7 @@ export function registerCommands({
     }),
 
     vscode.commands.registerCommand("calcdocs.runtimeMenu", async () => {
-      await openRuntimeQuickMenu(runAnalysisAndRefreshUi);
+      await openRuntimeQuickMenu();
     }),
 
     vscode.commands.registerCommand("calcdocs.goToCounterpart", async () => {
@@ -227,9 +273,7 @@ export function registerCommands({
     })
   );
 
-  async function openRuntimeQuickMenu(
-    refresh: () => Promise<void>
-  ): Promise<void> {
+  async function openRuntimeQuickMenu(): Promise<void> {
     const config = getConfig();
     const picks: Array<
       vscode.QuickPickItem & {
@@ -251,12 +295,12 @@ export function registerCommands({
     > = [
       {
         label: "$(refresh) Force Recompute",
-        description: "Full analysis refresh (Ctrl+Alt+R)",
+        description: "Clear all caches (RAM + disk) and reanalyze (Ctrl+Alt+R)",
         action: "recompute",
       },
       {
         label: "$(sync~spin) Restart CalcDocs",
-        description: "Clear parser cache and rebuild analysis",
+        description: "Force Recompute",
         action: "restart",
       },
       {
@@ -344,9 +388,7 @@ export function registerCommands({
         await vscode.commands.executeCommand("calcdocs.recompute");
         return;
       case "restart":
-        clearCppParserCache();
-        await refresh();
-        await vscode.window.showInformationMessage(localize("command.restart.done"));
+        await vscode.commands.executeCommand("calcdocs.restart");
         return;
       case "generateFormulaHeader":
         const outputPath = getConfig().formulaHeader.outputPath || 'macro_generate.h';

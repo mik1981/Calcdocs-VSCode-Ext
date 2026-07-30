@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.4.4] - 07/30/2026
+
+- Fixed a minor issue with the Force command and Restart command.
+- Added a "CalcDocs working..." progress indicator during analysis.
+- Added comprehensive automated test coverage for the quick menu.
+
 ## [0.4.3] - 07/29/2026
 
 - Improved clangd integration with smarter compile database detection, hover request optimization, and enhanced value extraction.

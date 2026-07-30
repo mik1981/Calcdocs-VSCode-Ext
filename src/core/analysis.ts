@@ -559,6 +559,36 @@ async function saveHeaderIndexToDisk(state: CalcDocsState): Promise<void> {
   }
 }
 
+/**
+ * Full invalidation of the header index: RAM map, optional on-disk
+ * mirror, and (only when explicitly asked) the module-level "already
+ * scheduled a live refresh this session" flag. Used by
+ * core/cacheManager.ts on behalf of "Force Recompute" (RAM+disk only —
+ * the next analysis pass will naturally rebuild it) and "Restart
+ * CalcDocs" (also forgets the once-per-session flag, since a restart
+ * should behave like a genuinely fresh session, not remember bookkeeping
+ * from before the restart).
+ */
+export async function invalidateHeaderIndex(
+  state: CalcDocsState,
+  options: { includeDisk?: boolean; resetSessionFlags?: boolean } = {}
+): Promise<void> {
+  state.headerIndex.clear();
+  state.headerIndexNeedsLiveRefresh = false;
+
+  if (options.resetSessionFlags) {
+    headerIndexLiveRefreshScheduled = false;
+  }
+
+  if (options.includeDisk && state.headerIndexCachePath) {
+    try {
+      await fsp.unlink(state.headerIndexCachePath);
+    } catch {
+      // già assente: nulla da fare, stato normale
+    }
+  }
+}
+
 
 /**
  * Modalità fallback usata quando non viene trovato nessun formulas*.yaml.

@@ -517,7 +517,8 @@ function parseEnumHover(
     const namedAssignment = line.match(
       new RegExp(`\\b${escapedName}\\b\\s*=\\s*([^,;)]+)`)
     );
-    // clangd nella pratica reale rende questo come "Value = N", non "value: N"
+    // clangd's real hover output typically renders this as "Value = N",
+    // but also tolerate a "value: N" spelling for robustness.
     const valueAssignment = line.match(/^value\s*[:=]\s*(.+)$/i);
     const expression = normalizeExpressionFromHover(
       namedAssignment?.[1] ?? valueAssignment?.[1] ?? ""

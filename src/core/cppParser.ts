@@ -142,8 +142,11 @@ const MIN_MEGA_CACHE_ENTRIES = 1;
 const megaCache = new Map<string, MegaCacheEntry>();
 
 /**
- * Clears internal preprocessing cache used for mega translation units.
- * Useful for explicit "restart" actions from UI commands.
+ * Clears the in-RAM mega-content cache only (not the on-disk mirror, not
+ * any of the other per-module caches elsewhere in the codebase). For a
+ * complete "invalidate everything" (RAM + disk, all caches), use
+ * invalidateAllCalcDocsCaches() in core/cacheManager.ts instead — that's
+ * what "Force Recompute" and "Restart CalcDocs" actually call.
  */
 export function clearCppParserCache(): void {
   megaCache.clear();
@@ -375,6 +378,59 @@ export async function flushPendingMegaContentDiskWrites(): Promise<void> {
     clearTimeout(timer);
   }
   await Promise.all(pending.map((p) => p.perform()));
+}
+
+/**
+ * Da chiamare quando si sta per invalidare esplicitamente la cache su
+ * disco ("Force Recompute"/"Restart CalcDocs"): annulla le scritture
+ * debounced in attesa SENZA eseguirle. A differenza di
+ * flushPendingMegaContentDiskWrites(), qui eseguirle sarebbe controproducente:
+ * ricreerebbero pochi istanti dopo un file che l'utente ha appena chiesto
+ * di cancellare, vanificando l'invalidazione.
+ */
+export function cancelPendingMegaContentDiskWrites(): void {
+  for (const { timer } of megaDiskWriteTimers.values()) {
+    clearTimeout(timer);
+  }
+  megaDiskWriteTimers.clear();
+}
+
+/**
+ * Cancella tutte le entry della cache su disco per il mega-content
+ * espanso. Usata da "Force Recompute"/"Restart CalcDocs" per garantire
+ * un'invalidazione realmente completa (RAM + disco), non solo della
+ * megaCache in memoria come faceva la vecchia clearCppParserCache() da
+ * sola. Non fatale se la directory non esiste ancora: nessuna entry da
+ * cancellare è uno stato normale, non un errore.
+ */
+export async function clearMegaContentDiskCache(
+  cacheDir: string | undefined,
+  output?: ColoredOutput
+): Promise<void> {
+  if (!cacheDir) {
+    return;
+  }
+
+  let entries: string[];
+  try {
+    entries = (await fsp.readdir(cacheDir)).filter((f) => f.endsWith(".json"));
+  } catch {
+    return;
+  }
+
+  await Promise.all(
+    entries.map(async (name) => {
+      try {
+        await fsp.unlink(path.join(cacheDir, name));
+      } catch {
+        // non fatale: al più resta un file orfano su disco
+      }
+    })
+  );
+
+  if (entries.length > 0) {
+    output?.detail(`[MegaDisk] 🧹 Cache su disco svuotata (${entries.length} file rimossi).`);
+  }
 }
 
 async function saveMegaContentToDisk(
