@@ -466,14 +466,34 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // richiama in coppia invece di gestire un proprio stato "sto
   // lavorando" duplicato.
   let analysisBusyCount = 0;
+  // Timestamp di quando il contatore è salito sopra zero l'ultima volta
+  // (undefined quando è a zero). Usato dal watchdog nel polling del
+  // resource monitor più sotto: se un singolo await nella catena di
+  // analisi restasse sospeso per sempre (es. una chiamata LSP che non
+  // risponde né risolve né rigetta - scenario più probabile su progetti
+  // reali di grandi dimensioni, o sotto un debugger con un breakpoint
+  // su "tutte le eccezioni" che congela l'intero extension host), il
+  // finally che decrementa non scatterebbe mai e la status bar
+  // resterebbe bloccata su "working" a tempo indeterminato anche se
+  // tutte le analisi successive completano correttamente. Il watchdog
+  // se ne accorge e si autocorregge invece di mentire per sempre
+  // all'utente.
+  let analysisBusySince: number | undefined;
+  const STUCK_BUSY_THRESHOLD_MS = 30_000;
 
   function beginAnalysisWork(): void {
     analysisBusyCount += 1;
+    if (analysisBusyCount === 1) {
+      analysisBusySince = Date.now();
+    }
     refreshRuntimeStatus();
   }
 
   function endAnalysisWork(): void {
     analysisBusyCount = Math.max(0, analysisBusyCount - 1);
+    if (analysisBusyCount === 0) {
+      analysisBusySince = undefined;
+    }
     refreshRuntimeStatus();
   }
 
@@ -557,11 +577,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       diagnosticsProvider.mergeForVisibleEditors();
     }
 
-    if (editor && state.inlineGhostEnabled) {
+    // Entrambi i provider decidono da soli se disegnare o pulire in base a
+    // state.enabled/state.inlineGhostEnabled (vedi ghostValues.ts e
+    // formulaOutlineProvider.ts) — prima qui c'era anche un controllo
+    // state.enabled/inlineGhostEnabled lato chiamante che, quando falso,
+    // saltava del tutto la chiamata: il provider non veniva MAI invocato
+    // per pulire le decorazioni già disegnate in precedenza, che restavano
+    // visibili a schermo anche dopo aver disabilitato CalcDocs o i soli
+    // ghost values. Va sempre chiamato: decide lui cosa fare.
+    if (editor) {
       ghostProvider.update(editor);
-    }
-
-    if (editor && state.enabled) {
       formulaOutlineProvider.refreshDecorations();
     }
 
@@ -647,6 +672,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         } catch (error: unknown) {
           const message = getErrorMessage(error);
           state.output.warn(`[background full scan] errore inatteso: ${message}`);
+          if (!token.isStale()) {
+            refreshUi(state, { editor: vscode.window.activeTextEditor });
+          }
         } finally {
           backgroundScanInFlight = false;
           endAnalysisWork();
@@ -667,7 +695,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const runAnalysisAndRefreshUi = async (): Promise<void> => {
     const token = analysisGuard.start();
     beginAnalysisWork();
-    const activeEditor = vscode.window.activeTextEditor;
 
     try {
       if (!state.enabled) {
@@ -676,9 +703,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         clearInlineCalcDiagnostics(state);
 
         if (token.isStale()) return;
-        refreshUi(state, { editor: activeEditor });
+        refreshUi(state);
         return;
       }
+
+      const activeEditor = vscode.window.activeTextEditor;
       const activeFsPath = activeEditor?.document.uri.fsPath;
 
       if (isCppFileEditor(activeEditor)) {
@@ -704,6 +733,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     } catch (error: unknown) {
       const message = getErrorMessage(error);
       state.output.warn(`[runAnalysisAndRefreshUi] errore inatteso: ${message}`);
+      // Anche in caso di errore, se questo è ancora il tentativo più
+      // recente, la UI va comunque riallineata allo stato disponibile
+      // (che potrebbe già contenere dati validi da prima dell'errore).
+      // Prima questo `catch` si limitava a loggare: un singolo errore
+      // transitorio sull'analisi più recente lasciava ghost/status bar
+      // bloccati sui dati vecchi, perché la guardia "latest wins" impedisce
+      // a un tentativo precedente di ridisegnare al posto suo - solo un
+      // trigger completamente nuovo (es. cambio file) poteva sbloccare la
+      // situazione.
+      if (!token.isStale()) {
+        refreshUi(state, { editor: vscode.window.activeTextEditor });
+      }
     } finally {
       endAnalysisWork();
     }
@@ -723,6 +764,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     } catch (error: unknown) {
       const message = getErrorMessage(error);
       state.output.warn(`[runActiveCppAnalysisAndRefreshUi] errore inatteso: ${message}`);
+      refreshUi(state, { editor });
     } finally {
       endAnalysisWork();
     }
@@ -733,6 +775,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   resourceMonitor = new ExtensionResourceMonitor(
     (snapshot) => {
       lastResourceSnapshot = snapshot;
+
+      // Watchdog: la status bar non deve mai restare bloccata su
+      // "working" a tempo indeterminato. Vedi il commento su
+      // analysisBusySince più sopra per lo scenario che questo copre.
+      if (
+        analysisBusySince !== undefined &&
+        Date.now() - analysisBusySince > STUCK_BUSY_THRESHOLD_MS
+      ) {
+        state.output.warn(
+          `[watchdog] La status bar era bloccata su "working" da oltre ${Math.round(
+            STUCK_BUSY_THRESHOLD_MS / 1000
+          )}s (analisi rimasta sospesa senza mai risolversi né fallire) - stato ripristinato automaticamente. Se lo vedi spesso, un "Restart CalcDocs" o una segnalazione con i dettagli di cosa stavi facendo aiutano a trovare la causa.`
+        );
+        analysisBusyCount = 0;
+        analysisBusySince = undefined;
+      }
+
       refreshRuntimeStatus();
     },
     {
@@ -941,6 +1000,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       // ridisegniamo subito con i dati correnti, che sono già validi.
       if (
         activeEditor &&
+        state.inlineGhostEnabled &&
         !event.affectsConfiguration("calcdocs.enabled")
       ) {
         ghostProvider.update(activeEditor);

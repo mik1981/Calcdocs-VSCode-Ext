@@ -100,8 +100,8 @@ The same engineering logic can now:
 ✅ propagate through dependencies automatically  
 ✅ stay permanently aligned with the firmware implementation  
 ✅ visualize real output distributions with Monte Carlo sampling and a new Distribution tab  
-✅ propagate uncertainty through dependency graphs using probabilistic models
-✅ estimate output distributions via Monte Carlo sampling
+✅ propagate uncertainty through dependency graphs using probabilistic models  
+✅ estimate output distributions via Monte Carlo sampling  
 ✅ model engineering uncertainty with `uncertainty`, `distribution`, and automatic propagation
 
 
@@ -125,6 +125,34 @@ No parallel maintenance.
 | Inside **formulas\*.yaml** | ![Macro Chain Revelation in formulas](./resources/macro_chain_revelation_formulas.gif) |
 
 👉 [Interactive Formula Viewer](https://github.com/mik1981/Calcdocs-VSCode-Ext/blob/main/docs/interactive-formula-viewer.md)
+
+---
+
+# 🚀 Try It Yourself
+
+The fastest way to discover what CalcDocs can do is to open the built-in example workspace.
+
+After installing the extension:
+
+1. Open the Command Palette (`Ctrl+Shift+P`)
+2. Run:
+
+```
+CalcDocs: Open Extension Test Folder
+```
+
+This opens a ready-to-use project demonstrating:
+
+- ✅ Inline engineering calculations
+- ✅ Ghost values
+- ✅ Macro chain revelation
+- ✅ Interactive Formula Viewer
+- ✅ YAML ↔ C synchronization
+- ✅ Unit conversions
+- ✅ Tolerance propagation
+- ✅ Probabilistic modeling examples
+
+Explore the sample files, visualize Monte Carlo tolerance propagation, modify engineering formulas, and see how results update instantly in real time.
 
 ---
 

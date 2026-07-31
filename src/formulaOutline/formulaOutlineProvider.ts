@@ -201,7 +201,7 @@ export class FormulaOutlineProvider implements vscode.FoldingRangeProvider {
       if (doc.languageId === 'yaml' && /.*formulas.*\.yaml$/i.test(doc.fileName.toLowerCase())) {
         await this._registry.parseDocument(doc);
         await this.updateFolding(doc);
-        this.applyDecorations(editor);
+        this.applyDecorationsIfEnabled(editor);
       }
     }
   }
@@ -216,14 +216,14 @@ export class FormulaOutlineProvider implements vscode.FoldingRangeProvider {
     // Immediate activation for active editor
     const activeEditor = vscode.window.activeTextEditor;
     if (activeEditor?.document === doc) {
-      this.applyDecorations(activeEditor);
+      this.applyDecorationsIfEnabled(activeEditor);
     }
 
     // Fallback for visible editors (reduced delay)
     setTimeout(() => {
       const editors = vscode.window.visibleTextEditors.filter(ed => ed.document === doc);
       for (const editor of editors) {
-        this.applyDecorations(editor);
+        this.applyDecorationsIfEnabled(editor);
       }
     }, 0);
   }
@@ -234,7 +234,7 @@ export class FormulaOutlineProvider implements vscode.FoldingRangeProvider {
         editor.document.languageId === 'yaml' &&
         /.*formulas.*\.yaml$/i.test(editor.document.fileName.toLowerCase())
       ) {
-        this.applyDecorations(editor);
+        this.applyDecorationsIfEnabled(editor);
       }
     });
   }
@@ -247,8 +247,50 @@ export class FormulaOutlineProvider implements vscode.FoldingRangeProvider {
     await this.updateFolding(e.document);
     const editors = vscode.window.visibleTextEditors.filter(ed => ed.document === e.document);
     for (const editor of editors) {
-      this.applyDecorations(editor);
+      this.applyDecorationsIfEnabled(editor);
     }
+  }
+
+  /**
+   * Clears every decoration type this provider owns on the given editor.
+   * Mirrors exactly the set applied at the end of applyDecorations() — kept
+   * as one explicit list so the two can't silently drift (a decoration type
+   * added to one and forgotten in the other would either linger on screen
+   * after a clear, or never render at all).
+   */
+  private clearDecorations(editor: vscode.TextEditor): void {
+    editor.setDecorations(this.decorations, []);
+    editor.setDecorations(this.keyDecoConstant, []);
+    editor.setDecorations(this.keyDecoFull, []);
+    editor.setDecorations(this.keyDecoParam, []);
+    editor.setDecorations(this.keyDecoExternal, []);
+    editor.setDecorations(this.fieldDeco, []);
+    editor.setDecorations(this.opDeco, []);
+    editor.setDecorations(this.missingVarDeco, []);
+    editor.setDecorations(this.commentDeco, []);
+  }
+
+  /**
+   * Single gate for "should this editor actually show decorations right
+   * now": every internal trigger (typing, opening a file, switching tabs)
+   * goes through here instead of calling applyDecorations() directly.
+   *
+   * Before this existed, only the ONE external call from extension.ts's
+   * refreshUi() checked state.enabled (via `if (editor && state.enabled)`)
+   * — but this provider also redraws on its own, independently, from
+   * onDidChangeTextDocument/onDidOpenTextDocument/onDidChangeVisibleTextEditors,
+   * none of which checked it. So editing or reopening a formulas*.yaml file
+   * while CalcDocs was disabled would make the highlighting pop right back
+   * up. Gating once here, at the one place all five paths funnel through,
+   * fixes it everywhere instead of needing five separate checks that could
+   * individually be forgotten again later.
+   */
+  private applyDecorationsIfEnabled(editor: vscode.TextEditor): void {
+    if (this._getState && !this._getState().enabled) {
+      this.clearDecorations(editor);
+      return;
+    }
+    void this.applyDecorations(editor);
   }
 
   // ---------------------------------------------------------------------------
@@ -266,7 +308,7 @@ export class FormulaOutlineProvider implements vscode.FoldingRangeProvider {
         editor.document.languageId === 'yaml' &&
         /.*formulas.*\.yaml$/i.test(editor.document.fileName.toLowerCase())
       ) {
-        this.applyDecorations(editor);
+        this.applyDecorationsIfEnabled(editor);
       }
     }
   }

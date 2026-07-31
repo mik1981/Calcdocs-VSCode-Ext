@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.4.5] - 07/31/2026
+
+- Fixed stale inline ghost values and YAML highlights not clearing when CalcDocs was disabled. Rendering is now managed directly by the providers, ensuring all decorations are properly removed and cannot reappear while disabled.
+- Improved analysis pipeline resilience by fixing stale UI after failed analysis runs and adding a watchdog to automatically recover from rare stuck busy states, preventing ghost values and status indicators from remaining outdated.
+
 ## [0.4.4] - 07/30/2026
 
 - Fixed a minor issue with the Force command and Restart command.
