@@ -11,9 +11,9 @@ import {
   UNIT_ALIASES as ENGINE_UNIT_ALIASES,
 } from "../engine/units";
 
-export type InlineCalcSeverity = "error" | "warning" | "info";
+type InlineCalcSeverity = "error" | "warning" | "info";
 
-export type IgnoreDirectives = {
+type IgnoreDirectives = {
   all: boolean;
   error: boolean;
   warning: boolean;
@@ -87,7 +87,7 @@ export type InlineCalcResult = {
   ignore: IgnoreDirectives;
 };
 
-export type InlineCalcEvaluationOptions = {
+type InlineCalcEvaluationOptions = {
   includeSuppressed?: boolean;
   includeAssignments?: boolean;
 };
@@ -1152,22 +1152,18 @@ function isLikelyInlineCalculationExpression(
   const trimmed = expression.trim();
 
   if (!trimmed) {
-    // state.output.appendLine(`${logPrefix} trimmed=<empty>\n`);
     return false;
   }
 
   if (DECORATIVE_ONLY_RX.test(trimmed)) {
-    // state.output.appendLine(`${logPrefix} trimmed=${trimmed} -> DECORATIVE_ONLY_RX\n`);
     return false;
   }
 
   if (DECORATIVE_EQUALS_RX.test(trimmed)) {
-    // state.output.appendLine(`${logPrefix} trimmed=${trimmed} -> DECORATIVE_EQUALS_RX\n`);
     return false;
   }
 
   if (trimmed.startsWith("==") && !/\d|@/.test(trimmed)) {
-    // state.output.appendLine(`${logPrefix} trimmed=${trimmed} -> startsWith== without digit/@\n`);
     return false;
   }
 
@@ -1211,23 +1207,8 @@ function isLikelyInlineCalculationExpression(
 
   const nonNumericTextTokens = tokens.filter((t) => !/^\d+$/.test(t));
 
-  // state.output.appendLine(
-  //   [
-  //     `${logPrefix} trimmed=${trimmed}`,
-  //     `hasNumber=${hasNumber}`,
-  //     `hasAtVariable=${hasAtVariable}`,
-  //     `hasMathOperator=${hasMathOperator}`,
-  //     `hasFunctionCall=${hasFunctionCall}`,
-  //     `hasQuantity=${hasQuantity}`,
-  //     `tokens=${JSON.stringify(tokens)}`,
-  //     `hasKnownSymbolToken=${hasKnownSymbolToken}`,
-  //     `hasOnlyUnknownWords=${hasOnlyUnknownWords}`,
-  //     `nonNumericTextTokens=${JSON.stringify(nonNumericTextTokens)}`
-  //   ].join(" | ") + "\n"
-  // );
 
   if (hasOnlyUnknownWords) {
-    // state.output.appendLine(`${logPrefix} trimmed=${trimmed} -> false (hasOnlyUnknownWords)\n`);
     return false;
   }
 
@@ -1238,7 +1219,6 @@ function isLikelyInlineCalculationExpression(
     !hasFunctionCall &&
     !hasQuantity
   ) {
-    // state.output.appendLine(`${logPrefix} trimmed=${trimmed} -> false (too many text tokens)\n`);
     return false;
   }
 
@@ -1250,7 +1230,6 @@ function isLikelyInlineCalculationExpression(
     hasQuantity ||
     hasKnownSymbolToken;
 
-  // state.output.appendLine(`${logPrefix} trimmed=${trimmed} -> result=${result}\n`);
   return result;
 }
 

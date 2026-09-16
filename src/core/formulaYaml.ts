@@ -42,7 +42,7 @@ import {
   validateDistribution,
 } from "../types/toleranceModel";
 
-export const FORMULA_YAML_FILE_RX = /(^|[\\/])formulas?.*\.ya?ml$/i;
+const FORMULA_YAML_FILE_RX = /(^|[\\/])formulas?.*\.ya?ml$/i;
 
 // ─── Tipo canonico per la tolleranza di un simbolo ───────────────────────────
 
@@ -50,7 +50,7 @@ export const FORMULA_YAML_FILE_RX = /(^|[\\/])formulas?.*\.ya?ml$/i;
  * ParsedInputTolerance — tolleranza di un simbolo input (const).
  * Contiene i tre livelli separati.
  */
-export interface ParsedInputTolerance {
+interface ParsedInputTolerance {
   uncertainty: UncertaintySpec;
   distribution: DistributionSpec;
   /** Issue di validazione riscontrate durante il parsing. */
@@ -62,7 +62,7 @@ export interface ParsedInputTolerance {
 /**
  * ParsedOutputPropagation — metodo di propagazione per un simbolo output (expr).
  */
-export interface ParsedOutputPropagation {
+interface ParsedOutputPropagation {
   method: PropagationMethod;
   confidence?: number;
   samples?: number;

@@ -233,7 +233,7 @@ export type YamlSymbolLocationEntry = {
 
 
 
-export function createDefaultAnalysisStackUsage(): AnalysisStackUsage {
+function createDefaultAnalysisStackUsage(): AnalysisStackUsage {
   return {
     usedDepth: 0,
     depthLimit: 0,
@@ -272,7 +272,7 @@ export function createCalcDocsState(
     symbolDefs: new Map<string, SymbolDefinitionLocation>(),
     headerIndex: new Map<string, string[]>(),
     headerIndexNeedsLiveRefresh: false,
-    megaBudgetOverrides: { maxChars: 0, maxTimeMs: 0, maxDepth: 0 },
+    megaBudgetOverrides: { maxChars: 0, maxTimeMs: 0, maxDepth: 1 },
     symbolConditionalDefs: new Map<string, SymbolConditionalDefinition[]>(),
     symbolAmbiguityRoots: new Map<string, string[]>(),
     allDefines: new Map<string, string>(),

@@ -107,7 +107,7 @@ export const UNIT_SYMBOLS: ReadonlySet<string> = new Set([
  *   resolveUnitFactor('ms')  → 1e-3
  *   resolveUnitFactor(undefined) → 1
  */
-export function resolveUnitFactor(unit: string | undefined): number {
+function resolveUnitFactor(unit: string | undefined): number {
   if (!unit) return 1;
   const spec = getUnitSpec(unit);
   return spec?.factorToSi ?? UNIT_SCALE_FACTORS.get(normalizeUnitToken(unit)) ?? 1;
@@ -138,14 +138,6 @@ export function scaleValueToUnit(rawValue: number, unit: string | undefined): nu
   }
   const converted = convertSiToUnit(rawValue, unit);
   return converted.ok ? converted.value : rawValue;
-}
-
-/**
- * Return is a unit is known or not
-*/
-export function isKnownUnit(unit: string | undefined): boolean {
-  if (!unit) return true;
-  return Boolean(getUnitSpec(unit));
 }
 
 function toDeclaredUnitInternalValue(value: number, unit: string | undefined): number {
@@ -340,7 +332,7 @@ function shouldTagLookupResultWithDeclaredUnit(formula: OutlineFormula): boolean
 // Core evaluator
 // ---------------------------------------------------------------------------
 
-export type LookupResolver = (
+type LookupResolver = (
   functionName: string, 
   args: Array<string | number>, 
   yamlPath?: string
@@ -391,7 +383,7 @@ function toUnitAwareSiValue(value: unknown, unit: unknown): number {
  * @param yamlPath Optional path for relative lookups
  * @returns      Finite numeric result, or null if unresolvable / invalid
  */
-export function evaluateFormulaExpression(
+function evaluateFormulaExpression(
   expr: string,
   vars: FormulaRuntimeScope,
   lookupResolver?: LookupResolver,

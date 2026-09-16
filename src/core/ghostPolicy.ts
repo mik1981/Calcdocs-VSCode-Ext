@@ -85,7 +85,7 @@ export function shouldRenderGhostInsteadOfCodeLens(
   return true;
 }
 
-export function getPotentialGhostItems(
+function getPotentialGhostItems(
   document: vscode.TextDocument,
   line: number,
   state: CalcDocsState,
@@ -103,7 +103,7 @@ export function getPotentialGhostItems(
   );
 }
 
-export function shouldRenderGhost(
+function shouldRenderGhost(
   document: vscode.TextDocument,
   line: number,
   state: CalcDocsState
@@ -123,7 +123,7 @@ export function shouldRenderGhost(
   return false;
 }
 
-export function shouldShowCodeLens(
+function shouldShowCodeLens(
   document: vscode.TextDocument,
   line: number,
   state: CalcDocsState
@@ -146,7 +146,7 @@ export function shouldShowCodeLens(
   );
 }
 
-export function hasRichHoverContent(state: CalcDocsState): boolean {
+function hasRichHoverContent(state: CalcDocsState): boolean {
   return (
     state.cppHover.showFormulaSection ||
     state.cppHover.showConditionalDefinitions ||
@@ -158,7 +158,7 @@ export function hasRichHoverContent(state: CalcDocsState): boolean {
   );
 }
 
-export type LineDisplayPriority = {
+type LineDisplayPriority = {
   showGhost: boolean;
   showCodeLens: boolean;
   showHover: boolean;

@@ -7,15 +7,15 @@ import {
   type FormulaInspection,
 } from "./explainMode";
 
-export type InspectionExportFormat = "markdown" | "json";
+type InspectionExportFormat = "markdown" | "json";
 
-export type InspectionExportReport = {
+type InspectionExportReport = {
   generatedAt: string;
   activeDocument: string;
   formulas: FormulaInspection[];
 };
 
-export function buildInspectionExportReport(
+function buildInspectionExportReport(
   state: CalcDocsState,
   editor: vscode.TextEditor | undefined = vscode.window.activeTextEditor
 ): InspectionExportReport | undefined {
@@ -40,11 +40,11 @@ export function buildInspectionExportReport(
   };
 }
 
-export function exportReportToJson(report: InspectionExportReport): string {
+function exportReportToJson(report: InspectionExportReport): string {
   return `${JSON.stringify(report, null, 2)}\n`;
 }
 
-export function exportReportToMarkdown(report: InspectionExportReport): string {
+function exportReportToMarkdown(report: InspectionExportReport): string {
   const lines: string[] = [
     "# CalcDocs Formula Report",
     "",

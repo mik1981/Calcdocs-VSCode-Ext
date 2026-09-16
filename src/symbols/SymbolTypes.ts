@@ -4,9 +4,9 @@ export type SourceType = "clangd" | "parser" | "mixed" | "unknown";
 
 export type SymbolKindType = "macro" | "const" | "enum" | "variable";
 
-export type SymbolFieldName = "value" | "unit" | "type" | "location" | "expression";
+type SymbolFieldName = "value" | "unit" | "type" | "location" | "expression";
 
-export type SymbolFieldSources = Partial<Record<SymbolFieldName, SourceType>>;
+type SymbolFieldSources = Partial<Record<SymbolFieldName, SourceType>>;
 
 export interface CSymbol {
   name: string;
@@ -38,7 +38,7 @@ export function computeConfidence(symbol: CSymbol): number {
   return 0.3;
 }
 
-export function clampConfidence(value: number): number {
+function clampConfidence(value: number): number {
   if (!Number.isFinite(value)) {
     return 0;
   }

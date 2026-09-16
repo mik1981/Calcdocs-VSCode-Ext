@@ -32,31 +32,6 @@ function createInfoItem(label: string): vscode.TreeItem {
   return item;
 }
 
-function toInlineFormulaKind(result: InlineCalcResult): "constant" | "formula" {
-  if (result.kind === "assign") {
-    const expr = result.expression.trim();
-    const isPureConstant = /^-?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?\s*([A-Za-z%][A-Za-z0-9_%\u00B5\u03BC\u03A9/^*+\-.]*)?$/.test(
-      expr
-    );
-    if (isPureConstant) return "constant";
-    return "formula";
-  }
-  return "formula";
-}
-
-function toItemIcon(result: InlineCalcResult): vscode.ThemeIcon {
-  if (result.severity === "error") {
-    return new vscode.ThemeIcon("error");
-  }
-  if (result.severity === "warning") {
-    return new vscode.ThemeIcon("warning");
-  }
-
-  const kind = toInlineFormulaKind(result);
-  return new vscode.ThemeIcon(kind === "constant" ? "symbol-constant" : "symbol-function");
-}
-
-
 function toFormulaItemIcon(formula: OutlineFormula): vscode.ThemeIcon {
   if (formula.expr && formula.expr.length > 0) {
     return new vscode.ThemeIcon("symbol-function");

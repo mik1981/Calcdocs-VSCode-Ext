@@ -1,4 +1,5 @@
 import * as fsp from "fs/promises";
+import * as path from "path";
 import * as vscode from "vscode";
 
 import { registerCommands } from "./commands/commands";
@@ -45,6 +46,7 @@ import {
   createRuntimeStatusBar,
   updateRuntimeStatusBar,
 } from "./ui/statusBar";
+import { runProgressiveAnalysis, type ProgressiveAnalysisNotice } from "./utils/progressiveAnalysis";
 import { ClangdSymbolProvider } from "./symbols/ClangdSymbolProvider";
 import { HybridSymbolProvider } from "./symbols/HybridSymbolProvider";
 import { LegacyParserProvider } from "./symbols/LegacyParserProvider";
@@ -168,7 +170,7 @@ let resourceMonitor: ExtensionResourceMonitor | undefined;
 let clangdService: ClangdService | undefined;
 
 
-export function registerGuideCommands(context: vscode.ExtensionContext): void {
+function registerGuideCommands(context: vscode.ExtensionContext): void {
   // Comando per aprire la guida interattiva (per .c files e formula*.yaml)
   context.subscriptions.push(
     vscode.commands.registerCommand("calcdocs.openGuide", async () => {
@@ -497,6 +499,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     refreshRuntimeStatus();
   }
 
+  // Messaggio della status bar per il fallback progressivo su progetti
+  // enormi (vedi runProgressiveCppAnalysis più sotto). Deliberatamente
+  // NON legato al contatore busy: un avviso "truncated" deve restare
+  // visibile come stato stabile anche dopo che endAnalysisWork() ha
+  // riportato il contatore a zero, non sparire nello stesso istante in
+  // cui compare (vanificherebbe lo scopo di comunicare il motivo
+  // dell'interruzione). Ogni nuova generazione di analisi lo azzera
+  // esplicitamente all'inizio, e runProgressiveCppAnalysis lo re-imposta
+  // solo se e quando serve davvero.
+  let progressiveNotice: ProgressiveAnalysisNotice | undefined;
+
+  function setProgressiveNotice(notice: ProgressiveAnalysisNotice | undefined): void {
+    progressiveNotice = notice;
+    refreshRuntimeStatus();
+  }
+
   /**
    * Returns dynamic clangd status label based on live service status and active editor.
    */
@@ -544,7 +562,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       config.resourceCpuThreshold,
       state.lastAnalysisStackUsage,
       runtimeBackendLabel,
-      analysisBusyCount > 0
+      analysisBusyCount > 0,
+      progressiveNotice
     );
 
     const shouldShow = !state.enabled || lastResourceSnapshot.shouldShowStatus;
@@ -563,7 +582,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       refreshDiagnostics?: boolean;
     } = {}
   ): void {
-    const { editor, refreshDiagnostics = true } = options;
+    const { refreshDiagnostics = true } = options;
+    // Fallback all'editor attivo quando il chiamante non ne passa uno
+    // esplicito (es. il ramo "disabilitato" di runAnalysisAndRefreshUi
+    // chiama refreshUi(state) senza editor): prima questo fallback
+    // esisteva solo più sotto, per un altro scopo, e QUI sopra restava
+    // `if (editor)` — false in quei casi — quindi ghostProvider.update()
+    // non veniva mai chiamato per il file attivo. Risultato: disabilitare
+    // CalcDocs (o i soli ghost value) non aveva effetto visibile finché
+    // non si cambiava file attivo (quel trigger passa sempre un editor
+    // esplicito). Ora l'editor attivo viene risolto una sola volta qui,
+    // e usato ovunque in questa funzione.
+    const activeEditor = options.editor ?? vscode.window.activeTextEditor;
 
     refreshRuntimeStatus();
     invalidatePriorityCache();
@@ -585,12 +615,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // per pulire le decorazioni già disegnate in precedenza, che restavano
     // visibili a schermo anche dopo aver disabilitato CalcDocs o i soli
     // ghost values. Va sempre chiamato: decide lui cosa fare.
-    if (editor) {
-      ghostProvider.update(editor);
+    if (activeEditor) {
+      ghostProvider.update(activeEditor);
       formulaOutlineProvider.refreshDecorations();
     }
 
-    const activeEditor = editor ?? vscode.window.activeTextEditor;
     const hasFormulas =
       state.formulaIndex.size > 0 || isActiveFormulaYamlWithEntries(activeEditor, state);
     void vscode.commands.executeCommand(
@@ -662,7 +691,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         backgroundScanInFlight = true;
         beginAnalysisWork();
         try {
-          await runAnalysis(state, clangdService);
+          await runAnalysis(state, clangdService, () => token.isCancelled());
           if (token.isStale()) {
             // Una richiesta più recente (es. un toggle enable/disable nel
             // frattempo) ha già preso il sopravvento: non tocchiamo la UI.
@@ -692,9 +721,61 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // isolamento, senza dipendenze da vscode).
   const analysisGuard = createLatestWinsGuard();
 
+  /**
+   * Analisi C/C++ del file attivo con fallback progressivo per progetti
+   * così grandi da mettere in difficoltà anche clangd: dopo 5s senza che
+   * l'analisi completa sia arrivata, mostra dei ghost value "best
+   * effort" calcolati solo dal file attivo + i suoi #include diretti
+   * (scope "shallow", niente clangd), poi continua ad aggiornare a
+   * intervalli crescenti mentre l'analisi completa prosegue in
+   * background. Se il tempo totale supera
+   * config.largeProjectAnalysisTimeoutMs, rinuncia per questo giro e lo
+   * comunica chiaramente nella status bar - non ha senso restare
+   * "working" per minuti. Se l'analisi completa arriva comunque più
+   * tardi in background, i risultati migliori vengono comunque
+   * applicati appena pronti.
+   *
+   * Logica di race/checkpoint/troncamento estratta ed effettivamente
+   * testata in utils/progressiveAnalysis.ts (con fake timer) — qui c'è
+   * solo il collegamento a state/UI/status bar.
+   */
+  async function runProgressiveCppAnalysis(
+    sourcePath: string,
+    editor: vscode.TextEditor | undefined,
+    token: LatestWinsToken
+  ): Promise<void> {
+    await runProgressiveAnalysis({
+      runFull: () =>
+        runActiveCppFileAnalysis(state, sourcePath, clangdService, "full", () =>
+          token.isCancelled()
+        ),
+      runShallow: () =>
+        runActiveCppFileAnalysis(state, sourcePath, clangdService, "shallow", () =>
+          token.isCancelled()
+        ),
+      isStale: () => token.isStale(),
+      cancel: () => token.cancel(),
+      timeoutMs: config.largeProjectAnalysisTimeoutMs,
+      onNotice: (notice) => {
+        setProgressiveNotice(notice);
+        refreshUi(state, { editor });
+        if (notice.kind === "truncated") {
+          state.output.warn(
+            `[progressive] Analisi completa troncata (e fermata) dopo ${Math.round(notice.elapsedMs / 1000)}s su "${path.basename(sourcePath)}" (progetto molto grande) — mostrati solo i valori calcolabili dal file attivo e dai suoi #include diretti.`
+          );
+        }
+      },
+      onResolved: () => {
+        setProgressiveNotice(undefined);
+        refreshUi(state, { editor: vscode.window.activeTextEditor });
+      },
+    });
+  }
+
   const runAnalysisAndRefreshUi = async (): Promise<void> => {
     const token = analysisGuard.start();
     beginAnalysisWork();
+    setProgressiveNotice(undefined);
 
     try {
       if (!state.enabled) {
@@ -712,17 +793,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
       if (isCppFileEditor(activeEditor)) {
         // Active file + its resolved includes only - no workspace scan.
-        await runActiveCppFileAnalysis(state, activeFsPath!, clangdService);
+        // Progressive fallback kicks in on its own past 5s (see
+        // runProgressiveCppAnalysis); identical single-await behavior
+        // otherwise.
+        await runProgressiveCppAnalysis(activeFsPath!, activeEditor, token);
         if (token.isStale()) return; // una richiesta più recente ha già preso il sopravvento
         // @config.<hint>.<var> inline-calc references explicitly name a
         // config.c/config.h file by convention - not something reached via
         // #include, so it needs its own (cached, filename-only) lookup.
-        await ensureConfigVarsLoaded(state);
+        await ensureConfigVarsLoaded(state, () => token.isCancelled());
         if (token.isStale()) return; // una richiesta più recente ha già preso il sopravvento
       } else if (activeFsPath && isFormulaYamlFileName(activeFsPath)) {
         // Self-contained YAML -> zero C/C++ parsing. Otherwise, a targeted
         // lookup for only the missing symbols (see scopedYamlAnalysis.ts).
-        await runScopedYamlAnalysis(state, activeFsPath, clangdService);
+        await runScopedYamlAnalysis(state, activeFsPath, clangdService, () => token.isCancelled());
         if (token.isStale()) return; // una richiesta più recente ha già preso il sopravvento
       } else if (!state.hasFormulasFile && state.formulaIndex.size === 0) {
         scheduleBackgroundFullScan(token);
@@ -757,14 +841,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       return;
     }
 
+    // Condivide la stessa guardia "latest wins" di runAnalysisAndRefreshUi
+    // invece di averne una propria separata: sono comunque due modi di
+    // avviare la STESSA categoria di lavoro (analisi del file attivo), e
+    // un cambio file rapido deve rendere stale un fallback progressivo
+    // avviato da QUALUNQUE dei due punti di ingresso, non solo dal suo.
+    const token = analysisGuard.start();
     beginAnalysisWork();
+    setProgressiveNotice(undefined);
     try {
-      await runActiveCppFileAnalysis(state, editor.document.uri.fsPath, clangdService);
+      await runProgressiveCppAnalysis(editor.document.uri.fsPath, editor, token);
+      if (token.isStale()) return;
       refreshUi(state, { editor });
     } catch (error: unknown) {
       const message = getErrorMessage(error);
       state.output.warn(`[runActiveCppAnalysisAndRefreshUi] errore inatteso: ${message}`);
-      refreshUi(state, { editor });
+      if (!token.isStale()) {
+        refreshUi(state, { editor });
+      }
     } finally {
       endAnalysisWork();
     }
@@ -886,11 +980,27 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       inlineCalcResultsViewProvider.setActiveEditor(editor);
       inlineCalcCodeLensProvider.refresh();
 
+      if (editor && isCppFileEditor(editor)) {
+        // NIENTE refreshUi() immediato per i file C/C++: in questo
+        // istante state.symbolValues contiene ancora i simboli
+        // dell'analisi del file PRECEDENTE. Disegnare subito i ghost
+        // value da quello stato li fa comparire con valori che
+        // *sembrano* giusti (su header condivisi spesso lo sono), per
+        // poi vederli sparire un attimo dopo, quando l'analisi del file
+        // appena attivato completa e riscrive la tabella dei simboli
+        // (applyCppSymbols con resetSymbolValues: true) — che su un
+        // progetto grande può risolverne meno di quelli mostrati un
+        // istante prima. Era esattamente il "appaiono e subito
+        // scompaiono" segnalato. Il refresh corretto lo fa
+        // runActiveCppAnalysisAndRefreshUi quando i valori sono
+        // davvero quelli di QUESTO file.
+        void runActiveCppAnalysisAndRefreshUi(editor);
+        return;
+      }
+
       if (editor) {
         refreshUi(state, { editor });
       }
-
-      void runActiveCppAnalysisAndRefreshUi(editor);
     })
   );
 

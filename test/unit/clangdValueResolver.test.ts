@@ -158,12 +158,15 @@ describe("clangd value resolution", () => {
 
     const clangd = new ClangdService(
       new FakeClangdBackend(true, (lineText) => {
-        // if (lineText.includes("MODE_BASE")) {
+        // Match on the identifier actually being *defined* on this line
+        // (leading token), not merely referenced somewhere in it -- the
+        // MODE_ACTIVE line also contains the substring "MODE_BASE" as part
+        // of its initializer expression, so a plain `.includes()` check
+        // here would misidentify which symbol is being hovered.
         const trimmed = lineText.trim();
         if (/^MODE_BASE\b/.test(trimmed)) {
           return "```c\nMODE_BASE = 3\n```";
         }
-        // if (lineText.includes("MODE_ACTIVE")) {
         if (/^MODE_ACTIVE\b/.test(trimmed)) {
           return "```c\nMODE_ACTIVE = 7\n```";
         }
@@ -175,5 +178,54 @@ describe("clangd value resolution", () => {
 
     expect(state.symbolValues.get("MODE_BASE")).toBe(3);
     expect(state.symbolValues.get("MODE_ACTIVE")).toBe(7);
+  });
+
+  it("stops querying clangd immediately once isCancelled() becomes true, instead of working through the whole candidate list", async () => {
+    // Regressione: un'analisi abbandonata (troncata dal fallback
+    // progressivo, o superata da un trigger più recente) continuava a
+    // interrogare clangd per OGNI candidato rimanente invece di fermarsi
+    // subito, intasando la coda condivisa di clangd - compresa la
+    // richiesta di hover REALE dell'utente, che finiva dietro decine di
+    // richieste ormai inutili emesse da un'analisi già abbandonata.
+    const sourcePath = path.join(workspaceRoot, "main.c");
+    await fsp.writeFile(
+      sourcePath,
+      ["#define A 1", "#define B 2", "#define C 3", "#define D 4", "#define E 5", ""].join("\n"),
+      "utf8"
+    );
+
+    let hoverCalls = 0;
+    const clangd = new ClangdService(
+      new FakeClangdBackend(true, (lineText) => {
+        hoverCalls += 1;
+        const match = lineText.match(/^#define (\w+) (\d+)/);
+        return match ? `\`\`\`c\n#define ${match[1]} ${match[2]}\n\`\`\`` : null;
+      })
+    );
+
+    // Si "cancella" subito dopo la primissima richiesta hover, come farebbe
+    // un token superato o rinunciato a metà del ciclo.
+    const isCancelled = () => hoverCalls >= 1;
+
+    await runActiveCppFileAnalysis(state, sourcePath, clangd, "full", isCancelled);
+
+    expect(hoverCalls).toBe(1);
+  });
+
+  it("skips clangd augmentation entirely if isCancelled() is already true before starting", async () => {
+    const sourcePath = path.join(workspaceRoot, "main.c");
+    await fsp.writeFile(sourcePath, "#define A 1\n", "utf8");
+
+    let hoverCalls = 0;
+    const clangd = new ClangdService(
+      new FakeClangdBackend(true, () => {
+        hoverCalls += 1;
+        return "```c\n#define A 1\n```";
+      })
+    );
+
+    await runActiveCppFileAnalysis(state, sourcePath, clangd, "full", () => true);
+
+    expect(hoverCalls).toBe(0);
   });
 });

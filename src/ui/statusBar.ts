@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import type { AnalysisStackUsage, YamlParseErrorInfo } from "../core/state";
 import { localize } from "../utils/localize";
+import type { ProgressiveAnalysisNotice } from "../utils/progressiveAnalysis";
 
 /**
  * Colori della status bar per i diversi stati dell'estensione.
@@ -43,6 +44,15 @@ export function createRuntimeStatusBar(
 }
 
 /**
+ * Dettaglio mostrato al posto del generico "busy" quando l'analisi del
+ * file attivo è entrata nel fallback progressivo per progetti enormi
+ * (vedi runProgressiveCppAnalysis in extension.ts / utils/progressiveAnalysis.ts):
+ * "partial" mentre si mostrano risultati ridotti in attesa che l'analisi
+ * completa finisca, "truncated" quando ci si è arresi definitivamente
+ * per questo giro.
+ */
+
+/**
  * Aggiorna la status bar runtime con lo stato corrente di abilitazione,
  * le statistiche di utilizzo delle risorse (CPU e RAM) e se un'analisi è
  * in corso ("working"). Cambia colore in base allo stato: enabled=verde,
@@ -56,6 +66,8 @@ export function createRuntimeStatusBar(
  * @param stackUsage - Statistiche sull'utilizzo dello stack
  * @param runtimeBackendLabel - Etichetta del backend attivo (clangd/legacy)
  * @param busy - True mentre un'analisi (foreground o background) è in corso
+ * @param progressiveNotice - Se presente, sostituisce il generico "busy"
+ *   con un messaggio più specifico su un fallback per progetto enorme
  */
 export function updateRuntimeStatusBar(
   statusBar: vscode.StatusBarItem,
@@ -65,10 +77,11 @@ export function updateRuntimeStatusBar(
   cpuThreshold: number,
   stackUsage: AnalysisStackUsage,
   runtimeBackendLabel?: string,
-  busy?: boolean
+  busy?: boolean,
+  progressiveNotice?: ProgressiveAnalysisNotice
 ): void {
   // Se l'estensione è disabilitata, mostra stato OFF: ha sempre priorità
-  // visiva, anche su un eventuale "busy" transitorio residuo.
+  // visiva, anche su un eventuale "busy"/notice transitorio residuo.
   if (!enabled) {
     statusBar.text = "$(circle-slash) " + localize("statusBar.runtimeOff"); //+ backendText;
     statusBar.tooltip = localize("statusBar.clickToOpenMenu");
@@ -83,11 +96,6 @@ export function updateRuntimeStatusBar(
       ? localize("statusBar.stackUsage", stackUsage.usedDepth, stackUsage.depthLimit)
       : "";
 
-  statusBar.text = busy
-    ? "$(sync~spin) " + localize("statusBar.runtimeWorking")
-    : "$(pulse) " + localize("statusBar.runtimeOn");
-
-  // Tooltip diverso in base allo stato di degradazione
   const backendText = runtimeBackendLabel ? `${runtimeBackendLabel}` : "No clangd.";
   const statsTooltip =
     stackUsage.degraded
@@ -99,6 +107,24 @@ export function updateRuntimeStatusBar(
           cpuLabel, memoryLabel, stackLabel, cpuThreshold,
           backendText
         );
+
+  if (progressiveNotice) {
+    const elapsedSeconds = Math.round(progressiveNotice.elapsedMs / 1000);
+    if (progressiveNotice.kind === "truncated") {
+      statusBar.text = "$(warning) " + localize("statusBar.runtimeTruncated", elapsedSeconds);
+      statusBar.tooltip = `${localize("statusBar.runtimeTruncatedTooltip", elapsedSeconds)}\n\n${statsTooltip}`;
+      statusBar.color = StatusBarColors.warning;
+      return;
+    }
+    statusBar.text = "$(sync~spin) " + localize("statusBar.runtimePartial", elapsedSeconds);
+    statusBar.tooltip = `${localize("statusBar.runtimePartialTooltip")}\n\n${statsTooltip}`;
+    statusBar.color = StatusBarColors.enabled;
+    return;
+  }
+
+  statusBar.text = busy
+    ? "$(sync~spin) " + localize("statusBar.runtimeWorking")
+    : "$(pulse) " + localize("statusBar.runtimeOn");
 
   statusBar.tooltip = busy
     ? `${localize("statusBar.runtimeWorkingTooltip")}\n${statsTooltip}`

@@ -149,7 +149,7 @@ export type EvalStep = {
 
 
 /** Full snapshot of every computed intermediate value during one evaluation. */
-export type EvaluationState = {
+type EvaluationState = {
   /** Raw user-supplied inputs (overrides). */
   params: Record<string, number>;
   /** All intermediate + final values produced by the engine. */
@@ -158,7 +158,7 @@ export type EvaluationState = {
 
 // ─── History ──────────────────────────────────────────────────────────────────
 
-export type HistoryDirection = 'forward' | 'inverse';
+type HistoryDirection = 'forward' | 'inverse';
 
 /**
  * One entry in the modification history.
@@ -166,7 +166,7 @@ export type HistoryDirection = 'forward' | 'inverse';
  * `forward`  = user edited an input  → engine propagated forward to output.
  * `inverse`  = user edited the output → engine back-solved a chosen input.
  */
-export type HistoryEntry = {
+type HistoryEntry = {
   id: string;
   ts: number;
   formulaId: string;
@@ -181,7 +181,7 @@ export type HistoryEntry = {
 
 // ─── Named snapshots (user-saved) ────────────────────────────────────────────
 
-export type InteractiveSnapshot = {
+type InteractiveSnapshot = {
   id: string;
   ts: number;
   formulaId: string;

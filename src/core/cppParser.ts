@@ -30,7 +30,7 @@ export type CollectedCppSymbols = {
   locations: Map<string, SymbolDefinitionLocation>;
 };
 
-export type CollectOptions = {
+type CollectOptions = {
   resolveIncludes?: boolean;
   output?: ColoredOutput;
   workspaceRoot?: string;
@@ -49,6 +49,15 @@ export type CollectOptions = {
    * mega-content espanso tra una sessione di VS Code e l'altra.
    * undefined = nessuna persistenza su disco, solo cache in RAM. */
   megaContentCacheDir?: string;
+  /**
+   * Controllato ad ogni yield cooperativo del ciclo di espansione
+   * #include (vedi YIELD_EVERY_N_INCLUDES più sotto): se true, interrompe
+   * l'espansione appena possibile invece di proseguire fino al budget di
+   * tempo/dimensione. Serve a far cessare SUBITO il lavoro di una
+   * generazione abbandonata (superata da una più recente, o che ha
+   * rinunciato da sola), non solo a scartarne il risultato alla fine.
+   */
+  isCancelled?: () => boolean;
 };
 
 type ParsedDefineDirective = {
@@ -528,10 +537,25 @@ async function pruneMegaDiskCache(cacheDir: string, maxEntries: number, output?:
  */
 export type MegaBudget = {
   remainingChars: number;
+  /** Stop-everything: tempo/caratteri esauriti, o cancellazione
+   * esplicita. Una volta true, ogni ulteriore locateAndReadInclude()
+   * ritorna immediatamente null senza fare altro lavoro. */
   truncated: boolean;
+  /** Almeno un ramo è stato interrotto dal limite di profondità.
+   * A differenza di `truncated`, NON ferma gli altri rami (fratelli
+   * allo stesso livello continuano normalmente) — ma il risultato
+   * complessivo resta comunque incompleto per lo stesso motivo: va
+   * trattato come `truncated` ai fini della cache su disco (mai
+   * persistere un risultato incompleto), pur non fermando l'espansione
+   * degli altri rami in corso. */
+  depthLimited: boolean;
   deadline: number;
   maxDepth: number;
   resolvedCount: number;
+  /** Controllato ad ogni yield cooperativo dentro resolveInclude(): se
+   * presente e restituisce true, l'espansione si interrompe subito
+   * invece di proseguire fino al budget di tempo/dimensione. */
+  isCancelled?: () => boolean;
 };
 
 export type MegaBudgetOverrides = {
@@ -588,7 +612,8 @@ function computeAdaptiveMegaCharBudget(cacheEntries: number): number {
  */
 export function computeMegaBudget(
   cacheEntries: number,
-  overrides?: MegaBudgetOverrides
+  overrides?: MegaBudgetOverrides,
+  isCancelled?: () => boolean
 ): MegaBudget {
   const remainingChars =
     overrides?.maxChars && overrides.maxChars > 0
@@ -601,16 +626,18 @@ export function computeMegaBudget(
       : DEFAULT_MEGA_TIME_BUDGET_MS;
 
   const maxDepth =
-    overrides?.maxDepth && overrides.maxDepth > 0
+    overrides?.maxDepth !== undefined && overrides.maxDepth >= 0
       ? overrides.maxDepth
       : DEFAULT_MEGA_INCLUDE_MAX_DEPTH;
 
   return {
     remainingChars,
     truncated: false,
+    depthLimited: false,
     deadline: Date.now() + timeBudgetMs,
     maxDepth,
     resolvedCount: 0,
+    isCancelled,
   };
 }
 
@@ -630,16 +657,48 @@ function isVersionedPackageSegment(segment: string): boolean {
   return parts.slice(-3).every((p) => /^\d+$/.test(p));
 }
 
+/**
+ * Segmenti di percorso che, nella convenzione standard di progetti
+ * generati da STM32CubeMX/STM32CubeIDE (praticamente universale in
+ * tutto l'ecosistema STM32), identificano codice vendor: CMSIS, i
+ * driver HAL (cartelle tipo "STM32H7xx_HAL_Driver"), i componenti BSP,
+ * le librerie middleware di terze parti. Codice enorme, stabile, mai
+ * scritto o modificato dall'utente.
+ *
+ * Trovata analizzando un log reale di un progetto STM32H7 con TouchGFX
+ * e diverse librerie middleware: senza questo riconoscimento, il budget
+ * di tempo dell'espansione #include si esauriva ricorsivamente dentro
+ * Drivers/CMSIS PRIMA di leggere anche solo una volta il contenuto dei
+ * file applicativi dell'utente (Macchina/db.h, par.h, macchina.h...),
+ * elencati subito dopo main.h negli #include diretti del file
+ * analizzato — perché isVendorPackagePath() riconosceva solo pacchetti
+ * "versionati" in stile npm/node_modules (segmenti come "1.2.3"), una
+ * convenzione del tutto assente nei progetti STM32CubeMX.
+ */
+const KNOWN_VENDOR_DIR_SEGMENT_RX = /^(CMSIS|BSP|Third_Party)$/i;
+const HAL_DRIVER_DIR_SEGMENT_RX = /_HAL_Driver$/i;
+
 function isVendorPackagePath(absPath: string): boolean {
-  return absPath.split(path.sep).some(isVersionedPackageSegment);
+  return absPath.split(path.sep).some(
+    (segment) =>
+      isVersionedPackageSegment(segment) ||
+      KNOWN_VENDOR_DIR_SEGMENT_RX.test(segment) ||
+      HAL_DRIVER_DIR_SEGMENT_RX.test(segment)
+  );
 }
 
-/*
- * Adapted from analysis.ts createMegaSourceFile logic.
+/**
+ * Trova e legge il contenuto di UN SOLO #include (controlli di budget +
+ * ricerca su disco/headerIndex), SENZA espanderne i #include annidati.
+ * Blocco riusabile condiviso tra resolveInclude() (che lo usa e poi
+ * espande subito i nested, comportamento invariato per la ricorsione
+ * profonda) e buildMegaContent() (che per i fratelli diretti del file
+ * radice lo usa SENZA espandere subito — vedi il commento sul ciclo
+ * radice più sotto per il perché).
  */
-async function resolveInclude(
-  relIncludePath: string, 
-  baseDir: string, 
+async function locateAndReadInclude(
+  relIncludePath: string,
+  baseDir: string,
   workspaceRoot: string,
   output: ColoredOutput | undefined,
   visited: Set<string>,
@@ -647,10 +706,51 @@ async function resolveInclude(
   budget: MegaBudget,
   depth: number,
   headerIndex?: Map<string, string[]>
-): Promise<string> {
-// FIXED: Prioritize inc/test/inc dirs for external headers
-  // output?.appendLine(`[ResolveInclude] 🔍 Searching "${relIncludePath}" (baseDir="${path.relative(workspaceRoot, baseDir)}")`);
-  
+): Promise<{ absIncludePath: string; content: string; skipNestedExpansion: boolean } | null> {
+  if (budget.truncated) {
+    return null;
+  }
+  if (budget.isCancelled?.()) {
+    budget.truncated = true;
+    output?.appendLine(
+      `[Mega] 🛑 Generazione abbandonata prima di "${relIncludePath}" — interrompo l'espansione (superata da un'analisi più recente, o rinuncia esplicita).`
+    );
+    return null;
+  }
+  if (depth > budget.maxDepth) {
+    // Fence strutturale PER-RAMO, non un segnale globale di resa: se
+    // "main.h" sfonda il limite di profondità, questo NON deve impedire
+    // di provare "db.h" o "par.h" (fratelli allo stesso livello del
+    // file attivo) — solo bloccare la discesa ulteriore lungo QUESTO
+    // ramo specifico. budget.truncated (stop-everything) resta
+    // riservato a esaurimento di tempo/caratteri o cancellazione
+    // esplicita: quelli sì sono risorse condivise, genuinamente finite
+    // per l'intera operazione. Il risultato complessivo resta comunque
+    // incompleto per lo stesso motivo, quindi segnamo depthLimited
+    // (che la cache su disco tratta come equivalente a truncated ai
+    // fini "non persistere un risultato incompleto") senza fermare gli
+    // altri rami.
+    budget.depthLimited = true;
+    output?.appendLine(
+      `[Mega] ⚠️ Include depth limit (${budget.maxDepth}) reached at "${relIncludePath}" — questo ramo si ferma qui (altri #include allo stesso livello proseguono normalmente).`
+    );
+    return null;
+  }
+  if (budget.remainingChars <= 0) {
+    budget.truncated = true;
+    output?.appendLine(
+      `[Mega] ⚠️ Char budget esaurito prima di "${relIncludePath}" — interrompo l'espansione di ulteriori #include.`
+    );
+    return null;
+  }
+  if (Date.now() > budget.deadline) {
+    budget.truncated = true;
+    output?.appendLine(
+      `[Mega] ⚠️ Time budget esaurito prima di "${relIncludePath}" — interrompo l'espansione di ulteriori #include (macchina lenta o albero #include molto ampio: normale, non è un errore).`
+    );
+    return null;
+  }
+
   const candidateDirs = [
     path.join(baseDir, '..', 'inc'),     // 0. Sibling inc/ (test/src → test/inc)
     path.join(workspaceRoot, 'test', 'inc'), // 1. Explicit test/inc
@@ -661,7 +761,7 @@ async function resolveInclude(
     workspaceRoot,                       // 6. Root
     path.join(workspaceRoot, 'src')      // 7. src/
   ];
-  
+
   let absIncludePath: string | null = null;
   let triedPaths: string[] = [];
   
@@ -677,7 +777,7 @@ async function resolveInclude(
       // Continue to next directory
     }
   }
-  
+
   if (!absIncludePath && headerIndex) {
     // FALLBACK: le candidateDirs sopra sono un elenco di convenzioni
     // indovinate (inc/, include/, headers/...) e non coprono layout
@@ -703,41 +803,13 @@ async function resolveInclude(
   }
 
   if (!absIncludePath) {
-    // output?.appendLine(`[ResolveInclude] ❌ NOT FOUND: ${relIncludePath} (tried ${triedPaths.slice(0,5).join(' → ')}${triedPaths.length>5 ? '...' : ''})`);
-    return '';
+    return null;
   }
-  
+
   const key = normalizeCacheKey(absIncludePath);
-  // output?.appendLine(`[ResolveInclude] Entry: ${relIncludePath} → ${key} (ext: ${path.extname(relIncludePath)})`);
 
   if (visited.has(key)) {
-    // output?.appendLine(`[ResolveInclude] SKIP recursive include: ${path.basename(relIncludePath)}`);
-    return '';
-  }
-
-  if (budget.truncated) {
-    return '';
-  }
-  if (depth > budget.maxDepth) {
-    budget.truncated = true;
-    output?.appendLine(
-      `[Mega] ⚠️ Include depth limit (${budget.maxDepth}) reached at "${relIncludePath}" — interrompo l'espansione di ulteriori #include.`
-    );
-    return '';
-  }
-  if (budget.remainingChars <= 0) {
-    budget.truncated = true;
-    output?.appendLine(
-      `[Mega] ⚠️ Char budget esaurito prima di "${relIncludePath}" — interrompo l'espansione di ulteriori #include.`
-    );
-    return '';
-  }
-  if (Date.now() > budget.deadline) {
-    budget.truncated = true;
-    output?.appendLine(
-      `[Mega] ⚠️ Time budget esaurito prima di "${relIncludePath}" — interrompo l'espansione di ulteriori #include (macchina lenta o albero #include molto ampio: normale, non è un errore).`
-    );
-    return '';
+    return null;
   }
 
   visited.add(key);
@@ -757,7 +829,7 @@ async function resolveInclude(
     // output?.appendLine(`[ResolveInclude] Read ${relIncludePath}: lines=${content.split('\n').length}`);
   } catch (err) {
     // output?.appendLine(`[ResolveInclude] Failed read ${relIncludePath}: ${err}`);
-    return '';
+    return null;
   }
 
   budget.remainingChars -= content.length;
@@ -768,24 +840,44 @@ async function resolveInclude(
       `[Mega] 📦 Vendor package header "${path.relative(workspaceRoot || '.', absIncludePath)}": incluso ma i suoi #include annidati NON vengono espansi (evita l'esplosione dell'intero SDK per header ombrello tipo stm32_hal.h).`
     );
   }
-  
+
+  return { absIncludePath, content, skipNestedExpansion };
+}
+
+/**
+ * Espande i #include annidati DENTRO un contenuto già letto (via
+ * locateAndReadInclude). Riusata sia da resolveInclude() per la
+ * ricorsione profonda normale, sia da buildMegaContent() per la FASE 2
+ * (espansione) dei fratelli diretti del file radice già letti in FASE 1.
+ */
+async function expandIncludesInContent(
+  content: string,
+  baseDir: string,
+  workspaceRoot: string,
+  output: ColoredOutput | undefined,
+  visited: Set<string>,
+  dependencyTracker: Set<string>,
+  budget: MegaBudget,
+  depth: number,
+  skipNestedExpansion: boolean,
+  headerIndex?: Map<string, string[]>
+): Promise<string> {
   const lines = content.split(/\r?\n/);
   let processedContent = `\n`;
-  
+
   for (const line of lines) {
-  const includeMatch = line.match(INCLUDE_RX);
+    const includeMatch = line.match(INCLUDE_RX);
     if (includeMatch && !skipNestedExpansion) {
       // output?.appendLine(`[ResolveInclude] Found include match: ${includeMatch[1]}`);
       const nested = await resolveInclude(
-
-        includeMatch[1], 
-        path.dirname(absIncludePath), 
+        includeMatch[1],
+        baseDir,
         workspaceRoot,
         output,
         visited,
         dependencyTracker,
         budget,
-        depth + 1,
+        depth,
         headerIndex
       );
       processedContent += nested || line + '\n';
@@ -793,8 +885,40 @@ async function resolveInclude(
       processedContent += line + '\n';
     }
   }
-  
+
   return processedContent;
+}
+
+async function resolveInclude(
+  relIncludePath: string, 
+  baseDir: string, 
+  workspaceRoot: string,
+  output: ColoredOutput | undefined,
+  visited: Set<string>,
+  dependencyTracker: Set<string>,
+  budget: MegaBudget,
+  depth: number,
+  headerIndex?: Map<string, string[]>
+): Promise<string> {
+  const found = await locateAndReadInclude(
+    relIncludePath, baseDir, workspaceRoot, output, visited, dependencyTracker, budget, depth, headerIndex
+  );
+  if (!found) {
+    return '';
+  }
+
+  return expandIncludesInContent(
+    found.content,
+    path.dirname(found.absIncludePath),
+    workspaceRoot,
+    output,
+    visited,
+    dependencyTracker,
+    budget,
+    depth + 1,
+    found.skipNestedExpansion,
+    headerIndex
+  );
 }
 
 /**
@@ -807,7 +931,8 @@ async function buildMegaContent(
   maxMegaCacheEntries: number,
   headerIndex?: Map<string, string[]>,
   budgetOverrides?: MegaBudgetOverrides,
-  cacheDir?: string
+  cacheDir?: string,
+  isCancelled?: () => boolean
 ): Promise<string> {
   // Force clear cache for test files to avoid stale data
   if (sourcePath.includes('test')) {
@@ -837,7 +962,7 @@ async function buildMegaContent(
   // Il budget va calcolato PRIMA di poter controllare la cache su disco:
   // la firma del budget (budgetSignature) fa parte della validità di
   // un'eventuale entry persistita — vedi commento su MegaDiskCacheEntry.
-  const budget: MegaBudget = computeMegaBudget(maxMegaCacheEntries, budgetOverrides);
+  const budget: MegaBudget = computeMegaBudget(maxMegaCacheEntries, budgetOverrides, isCancelled);
   const budgetSignature = megaBudgetSignature(budget);
 
   if (cacheDir) {
@@ -872,11 +997,31 @@ async function buildMegaContent(
   
   const mainLines = mainContent.split(/\r?\n/);
   
-  for (const line of mainLines) {
-    const includeMatch = line.match(INCLUDE_RX);
-    if (includeMatch) {
-      const included = await resolveInclude(
-        includeMatch[1], 
+  type RootIncludeSlot = {
+    line: string;
+    includeMatch: RegExpMatchArray | null;
+    found?: { absIncludePath: string; content: string; skipNestedExpansion: boolean };
+  };
+  const slots: RootIncludeSlot[] = mainLines.map((line) => ({
+    line,
+    includeMatch: line.match(INCLUDE_RX),
+  }));
+
+  // FASE 1 (respiro): legge il contenuto di OGNI #include diretto del
+  // file attivo — main.h, db.h, par.h, ... nell'ordine in cui compaiono
+  // — SENZA ancora espanderne i #include annidati. Garantisce che
+  // TUTTI i fratelli diretti vengano letti almeno una volta prima che
+  // il budget possa esaurirsi dentro il sottoalbero di uno solo di
+  // loro. A differenza del riconoscimento vendor per nome
+  // (isVendorPackagePath, utile ma necessariamente incompleto — ci
+  // sarà sempre un vendor non ancora riconosciuto), questo funziona
+  // per QUALSIASI albero enorme, indipendentemente da come si chiama o
+  // da chi lo distribuisce: è la risposta strutturale, non basata su
+  // un elenco di nomi, alla stessa classe di problema.
+  for (const slot of slots) {
+    if (!slot.includeMatch) continue;
+    const found = await locateAndReadInclude(
+      slot.includeMatch[1],
         mainDir, 
         workspaceRoot,
         output,
@@ -886,16 +1031,38 @@ async function buildMegaContent(
         0,
         headerIndex
       );
-      if (included) {
-      output?.appendLine(`[Mega] included ${includeMatch[1]} in ${mainDir}`);
+    if (found) {
+      slot.found = found;
       }
-      megaContent += included || line + '\n';
-    } else {
-      megaContent += line + '\n';
     }
+
+  // FASE 2 (profondità): espande ricorsivamente ognuno dei fratelli
+  // letti in FASE 1, nell'ordine originale, finché il budget lo consente.
+  for (const slot of slots) {
+    if (!slot.includeMatch || !slot.found) {
+      megaContent += slot.line + '\n';
+      continue;
   }
 
-  if (budget.truncated) {
+    const expanded = await expandIncludesInContent(
+      slot.found.content,
+      path.dirname(slot.found.absIncludePath),
+      workspaceRoot,
+      output,
+      visited,
+      dependencyTracker,
+      budget,
+      1,
+      slot.found.skipNestedExpansion,
+      headerIndex
+    );
+    output?.appendLine(`[Mega] included ${slot.includeMatch[1]} in ${mainDir}`);
+    megaContent += expanded;
+  }
+
+  const resultIsIncomplete = budget.truncated || budget.depthLimited;
+
+  if (resultIsIncomplete) {
     output?.appendLine(
       `[Mega] ⚠️ ${path.basename(sourcePath)}: espansione #include troncata per limite di dimensione/profondità.`
     );
@@ -921,7 +1088,7 @@ async function buildMegaContent(
   megaCache.set(cacheKey, cacheEntry);
   evictOldMegaEntries(maxMegaCacheEntries, output);
 
-  if (cacheDir && !budget.truncated) {
+  if (cacheDir && !resultIsIncomplete) {
     // MAI persistere una build TRONCATA: se il budget adattivo scade a
     // metà (es. per un momento di carico elevato all'avvio, pura
     // sfortuna di timing), il risultato è incompleto — potrebbe mancare
@@ -939,7 +1106,7 @@ async function buildMegaContent(
     // fallire l'analisi in corso, e' solo un'ottimizzazione per la
     // PROSSIMA sessione di VS Code.
     scheduleMegaContentDiskWrite(cacheDir, cacheKey, cacheEntry, budgetSignature, maxMegaCacheEntries, output);
-  } else if (cacheDir && budget.truncated) {
+  } else if (cacheDir && resultIsIncomplete) {
     output?.appendLine(
       `[MegaDisk] ⏭️ ${path.basename(sourcePath)}: build troncata, NON persistita su disco (verrà ritentata al prossimo trigger).`
     );
@@ -1638,7 +1805,7 @@ export async function collectDefinesAndConsts(
   options: CollectOptions = {}
 ): Promise<CollectedCppSymbols> {
 
-  const { resolveIncludes = false, output, maxMegaCacheEntries, headerIndex, megaBudgetOverrides, megaContentCacheDir } = options;
+  const { resolveIncludes = false, output, maxMegaCacheEntries, headerIndex, megaBudgetOverrides, megaContentCacheDir, isCancelled } = options;
   const effectiveCacheLimit = clampMegaCacheEntries(maxMegaCacheEntries);
 
   output?.appendLine(
@@ -1663,6 +1830,10 @@ export async function collectDefinesAndConsts(
 
   // ========== FIRST PASS: Collect unconditional defines/consts ==========
   for (const filePath of effectiveFiles) {
+    if (isCancelled?.()) {
+      output?.appendLine(`[CPP] 🛑 Analisi abbandonata (FIRST PASS) prima di ${path.basename(filePath)}`);
+      break;
+    }
     const seenDefinesInFile = new Set<string>(); // Track defines per file
 
     let text: string;
@@ -1675,7 +1846,8 @@ export async function collectDefinesAndConsts(
         effectiveCacheLimit,
         headerIndex,
         megaBudgetOverrides,
-        megaContentCacheDir
+        megaContentCacheDir,
+        isCancelled
       );
     } else {
       try {
@@ -1856,7 +2028,7 @@ export async function collectDefinesAndConsts(
         }
 
         if (member.value !== undefined && !consts.has(member.name)) {
-          consts.set(member.name, member.value);   // consts SOLO se davvero piegato
+          consts.set(member.name, member.value);
         }
 
         defineConditions.set(member.name, "always");
@@ -1873,6 +2045,10 @@ export async function collectDefinesAndConsts(
 
   // ========== SECOND PASS: Conditional-aware processing ==========
   for (const filePath of effectiveFiles) {
+    if (isCancelled?.()) {
+      output?.appendLine(`[CPP] 🛑 Analisi abbandonata (SECOND PASS) prima di ${path.basename(filePath)}`);
+      break;
+    }
     const seenDefinesInFile = new Set<string>();
 
     let text: string;    
@@ -1884,7 +2060,8 @@ export async function collectDefinesAndConsts(
         effectiveCacheLimit,
         headerIndex,
         megaBudgetOverrides,
-        megaContentCacheDir
+        megaContentCacheDir,
+        isCancelled
       );
     } else {
       try {

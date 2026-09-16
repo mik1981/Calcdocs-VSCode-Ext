@@ -25,19 +25,6 @@ import type { DimResult, DimCacheEntry } from "./dimTypes";
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-/** Sentinel for unknown dimensions */
-const UNKNOWN_DIM: DimensionVector = {
-  M: Number.NaN,
-  L: Number.NaN,
-  T: Number.NaN,
-  I: Number.NaN,
-  K: Number.NaN,
-};
-
-function isUnknownDim(v: DimensionVector): boolean {
-  return Number.isNaN(v.M);
-}
-
 // ---------------------------------------------------------------------------
 // Expression tokenizer for dimensional analysis
 // ---------------------------------------------------------------------------
@@ -419,16 +406,6 @@ function tokensToRpn(tokens: DimToken[]): RpnToken[] | { error: string } {
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
-
-function formatDim(v: DimensionVector): string {
-  const parts: string[] = [];
-  if (v.M !== 0) parts.push(`M^${v.M}`);
-  if (v.L !== 0) parts.push(`L^${v.L}`);
-  if (v.T !== 0) parts.push(`T^${v.T}`);
-  if (v.I !== 0) parts.push(`I^${v.I}`);
-  if (v.K !== 0) parts.push(`K^${v.K}`);
-  return parts.length === 0 ? "dimensionless" : parts.join("·");
-}
 
 /**
  * Compute the dimensional vector for a formula expression.

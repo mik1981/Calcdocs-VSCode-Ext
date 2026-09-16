@@ -2,7 +2,7 @@ import * as fsp from "fs/promises";
 import * as path from "path";
 import { CalcDocsState } from "./state";
 
-export type ConfigVarValue = {
+type ConfigVarValue = {
   value: number | string;
   comment: string;
   line: number;
@@ -10,7 +10,7 @@ export type ConfigVarValue = {
 
 export type FileConfigVars = Map<string, ConfigVarValue>;
 
-export function parseConfigComments(
+function parseConfigComments(
   text: string,
   relativePath: string,
   state: CalcDocsState

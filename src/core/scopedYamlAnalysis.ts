@@ -85,7 +85,8 @@ export function clearScopedYamlAnalysisCache(): void {
 export async function runScopedYamlAnalysis(
   state: CalcDocsState,
   yamlPath: string,
-  clangdService?: ClangdService
+  clangdService?: ClangdService,
+  isCancelled?: () => boolean
 ): Promise<void> {
   const loadedYaml = await loadYamlOrReportError(state, yamlPath);
   if (!loadedYaml) {
@@ -119,7 +120,8 @@ export async function runScopedYamlAnalysis(
       state,
       yamlPath,
       missing,
-      clangdService
+      clangdService,
+      isCancelled
     );
     usedWorkspaceSearch = outcome.usedWorkspaceSearch;
     for (const [name, value] of outcome.values) {
@@ -169,7 +171,8 @@ async function resolveMissingExternalSymbols(
   state: CalcDocsState,
   yamlPath: string,
   missing: Set<string>,
-  clangdService?: ClangdService
+  clangdService?: ClangdService,
+  isCancelled?: () => boolean
 ): Promise<{
   values: Map<string, number>;
   units: Map<string, string>;
@@ -182,6 +185,7 @@ async function resolveMissingExternalSymbols(
 
   // Phase 1: try the persistent cache for each symbol.
   for (const symbol of missing) {
+    if (isCancelled?.()) break;
     const cacheKey = yamlSymbolCacheKey(yamlPath, symbol);
     const cached = state.yamlSymbolLocations.get(cacheKey);
     if (!cached) {
@@ -201,7 +205,8 @@ async function resolveMissingExternalSymbols(
       state,
       symbol,
       cached,
-      clangdService
+      clangdService,
+      isCancelled
     );
     if (refreshed) {
       state.yamlSymbolLocations.set(cacheKey, refreshed);
@@ -216,11 +221,11 @@ async function resolveMissingExternalSymbols(
 
   // Phase 2: workspace search, only for symbols that were never cached or
   // whose remembered location stopped panning out.
-  if (needsResolution.size > 0) {
+  if (needsResolution.size > 0 && !isCancelled?.()) {
     usedWorkspaceSearch = true;
-    const bySymbol = await locateDefiningFiles(needsResolution, state.workspaceRoot, state);
+    const bySymbol = await locateDefiningFiles(needsResolution, state.workspaceRoot, state, isCancelled);
 
-    if (bySymbol.size > 0) {
+    if (bySymbol.size > 0 && !isCancelled?.()) {
       const config = getConfig();
       const foundFiles = Array.from(new Set(bySymbol.values()));
 
@@ -237,12 +242,14 @@ async function resolveMissingExternalSymbols(
         resolveIncludes: false,
         output: state.output,
         maxMegaCacheEntries: config.cppCacheMaxEntries,
+        isCancelled,
       });
       cppSymbols = await augmentCppSymbolsWithClangd(
         state,
         cppSymbols,
         expandedFiles,
-        clangdService
+        clangdService,
+        isCancelled
       );
 
       applyCppSymbols(state, cppSymbols, {
@@ -323,7 +330,8 @@ async function reparseClosureForSymbol(
   state: CalcDocsState,
   symbol: string,
   cached: YamlSymbolLocationEntry,
-  clangdService?: ClangdService
+  clangdService?: ClangdService,
+  isCancelled?: () => boolean
 ): Promise<YamlSymbolLocationEntry | null> {
   const config = getConfig();
   const closureFiles = await expandWithLocalIncludes(
@@ -337,12 +345,14 @@ async function reparseClosureForSymbol(
     resolveIncludes: false,
     output: state.output,
     maxMegaCacheEntries: config.cppCacheMaxEntries,
+    isCancelled,
   });
   cppSymbols = await augmentCppSymbolsWithClangd(
     state,
     cppSymbols,
     closureFiles,
-    clangdService
+    clangdService,
+    isCancelled
   );
 
   applyCppSymbols(state, cppSymbols, {
@@ -524,7 +534,8 @@ async function expandWithLocalIncludes(
 export async function locateDefiningFiles(
   missing: Set<string>,
   workspaceRoot: string,
-  state: CalcDocsState
+  state: CalcDocsState,
+  isCancelled?: () => boolean
 ): Promise<Map<string, string>> {
   const config = getConfig();
   refreshIgnoredDirs(state, config);
@@ -532,7 +543,8 @@ export async function locateDefiningFiles(
   const allFiles = await listFilesRecursive(
     workspaceRoot,
     (absoluteDirPath) => isIgnoredFsPath(state, absoluteDirPath),
-    state
+    state,
+    isCancelled
   );
 
   const sourceFiles = allFiles
@@ -543,7 +555,7 @@ export async function locateDefiningFiles(
   const found = new Map<string, string>();
 
   for (const file of sourceFiles) {
-    if (remaining.size === 0) {
+    if (remaining.size === 0 || isCancelled?.()) {
       break;
     }
 

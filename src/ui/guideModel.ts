@@ -4,23 +4,18 @@ import type {
   UncertaintySpec,
   UncertaintyType,
 } from "../types/toleranceModel";
-import {
-  computeStdDev,
-  normalizeUncertainty,
-  type NormalizedUncertainty,
-} from "../types/toleranceModel";
-import { propagate, runMonteCarlo, type UnifiedInput } from "../engine/monteCarlo";
-import type { PropagationResult, OutputDistribution, PropagationSpec } from "../types/toleranceModel";
+import { propagate, type UnifiedInput } from "../engine/monteCarlo";
+import type { OutputDistribution, PropagationSpec } from "../types/toleranceModel";
 
-export type GuideInputDistribution = "uniform" | "normal" | "triangular";
+type GuideInputDistribution = "uniform" | "normal" | "triangular";
 
-export type GuideUncertainty = {
+type GuideUncertainty = {
   type: UncertaintyType;
   value: number; // for percent/absolute/sigma; ignored for range
   range?: { min: number; max: number };
 };
 
-export type GuideScenario = {
+type GuideScenario = {
   nominal: number;
   uncertainty: GuideUncertainty;
   distribution: DistributionSpec;
@@ -46,26 +41,6 @@ function buildUncertaintySpec(u: GuideUncertainty): UncertaintySpec {
         max: u.range?.max,
       };
   }
-}
-
-function normalizeInput(
-  nominal: number,
-  u: GuideUncertainty
-): NormalizedUncertainty | undefined {
-  const unc = buildUncertaintySpec(u);
-  return normalizeUncertainty(unc, nominal);
-}
-
-function buildDistributionSpec(d: GuideInputDistribution, sigmaLevel: number): DistributionSpec {
-  if (d === "normal") return { type: "normal", sigma_level: sigmaLevel };
-  if (d === "triangular") return { type: "triangular" };
-  return { type: "uniform" };
-}
-
-function pickOutputMethodLabel(method: PropagationMethod): string {
-  if (method === "worst_case") return "worst_case";
-  if (method === "rss") return "rss";
-  return "monte_carlo";
 }
 
 export type GuideComputed = {

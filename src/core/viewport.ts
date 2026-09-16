@@ -14,7 +14,6 @@ export type LineTextSource = {
 
 export const VIEWPORT_REFRESH_DEBOUNCE_MS = 80;
 export const CODELENS_DENSE_LINE_ITEM_LIMIT = 1;
-export const GHOST_CACHE_MAX_ENTRIES = 48;
 
 type ViewportLimitConfig = {
   maxItemsPerViewport?: number;
@@ -44,7 +43,7 @@ export function getMaxItemsPerViewport(
   return Number.isFinite(configured) ? Math.max(1, Math.floor(configured)) : fallback;
 }
 
-export function getVisibleEditorsForDocument(
+function getVisibleEditorsForDocument(
   document: vscode.TextDocument
 ): vscode.TextEditor[] {
   const editors = vscode.window.visibleTextEditors.filter((editor) =>
@@ -140,13 +139,6 @@ export function viewportRangesKey(ranges: readonly ViewportLineRange[]): string 
   return ranges
     .map((range) => `${range.startLine}-${range.endLine}`)
     .join(",");
-}
-
-export function viewportDocumentCacheKey(
-  document: vscode.TextDocument,
-  ranges: readonly ViewportLineRange[]
-): string {
-  return `${document.uri.toString()}@${document.version}:${viewportRangesKey(ranges)}`;
 }
 
 export function debugViewportLog(

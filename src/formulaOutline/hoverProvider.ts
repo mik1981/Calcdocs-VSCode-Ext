@@ -30,7 +30,7 @@ function inferCanonicalUnitFromDim(dim: Dim): string | undefined {
   return undefined;
 }
 
-export class FormulaHoverProvider implements vscode.HoverProvider {
+class FormulaHoverProvider implements vscode.HoverProvider {
   constructor(
     private readonly registry: FormulaRegistry,
     private readonly getState?: () => CalcDocsState | undefined

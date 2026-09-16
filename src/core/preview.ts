@@ -11,7 +11,7 @@ import {
   toHexString,
 } from "../utils/nformat";
 
-export type ExpressionPreview = {
+type ExpressionPreview = {
   expanded: string;
   value: number | null;
   error: CompositeExpressionPreviewError | null;

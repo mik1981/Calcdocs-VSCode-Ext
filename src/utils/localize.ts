@@ -1,6 +1,4 @@
 ﻿import * as vscode from "vscode";
-import * as path from "path";
-import * as fs from "fs";
 
 // Stable key -> English message map used by call sites.
 const fallbackEn: Record<string, string> = {
@@ -43,6 +41,10 @@ const fallbackEn: Record<string, string> = {
   "statusBar.runtimeOff": "CalcDocs OFF",
   "statusBar.runtimeWorking": "CalcDocs working…",
   "statusBar.runtimeWorkingTooltip": "CalcDocs is analyzing right now.",
+  "statusBar.runtimePartial": "CalcDocs: partial results ({0}s)…",
+  "statusBar.runtimePartialTooltip": "Large project: showing ghost values computed from the active file and its direct #includes only, while the full analysis (including clangd) keeps running in the background. Updating every few seconds.",
+  "statusBar.runtimeTruncated": "CalcDocs: analysis reduced (timeout {0}s)",
+  "statusBar.runtimeTruncatedTooltip": "The full analysis was taking too long (over {0}s) on this large project, so it was abandoned for now. Showing values computed from the active file and its direct #includes only. If the full analysis finishes in the background, results will update automatically.",
   "statusBar.clickToOpenMenu": "Click to open CalcDocs quick menu.",
   "statusBar.clickToDisable": "Click to disable CalcDocs",
   "statusBar.clickToEnable": "CalcDocs disabled. Click to enable.",
@@ -61,6 +63,8 @@ const fallbackEn: Record<string, string> = {
   "command.toggleGhostValues.disabled": "CalcDocs ghost values disabled.",
   "command.restart.done": "CalcDocs restarted: caches cleared, settings and watchers re-applied.",
   "command.restart.reloadWindowAction": "Reload Window (full restart)",
+  "command.configWriteFailed.warning": "CalcDocs couldn't save \"{0}\" to workspace settings ({1}). Applied for this session only — it will revert next time you restart or reopen this workspace, until the settings file is fixed.",
+  "command.configWriteFailed.openSettingsAction": "Open Workspace Settings",
   "command.runtimeMenu.placeholder": "Choose a quick CalcDocs action",
   "command.setUiInvasiveness.updated": "CalcDocs UI invasiveness set to {0}.",
   "command.goToCounterpart.warningDisabled": "CalcDocs is disabled. Re-enable it to use Go to Counterpart.",
@@ -125,36 +129,4 @@ export function localize(key: string, ...args: (string | number | boolean)[]): s
   }
   
   return translated;
-}
-
-export function test_lang(ctx: vscode.ExtensionContext, console: vscode.OutputChannel) {
-  const root = vscode.Uri.joinPath(ctx.extensionUri, '.');        // root del pacchetto estensione
-  const l10nDir = vscode.Uri.joinPath(ctx.extensionUri, 'l10n');  // dove deve stare la cartella
-  const lang = vscode.env.language;                                // locale attivo (es. "en", "it")
-
-  const fallback = vscode.Uri.joinPath(l10nDir, 'bundle.l10n.json');
-  const forLang = vscode.Uri.joinPath(l10nDir, `bundle.l10n.${lang}.json`);
-
-  const toFsPath = (u: vscode.Uri) => (process.platform === 'win32' ? u.fsPath : u.fsPath);
-
-  console.appendLine('EXT ROOT =' + toFsPath(root));
-  console.appendLine('L10N DIR  =' + toFsPath(l10nDir));
-  console.appendLine('LANG      =' + lang);
-  console.appendLine('HAS fallback bundle =' + fs.existsSync(toFsPath(fallback)));
-  console.appendLine('HAS lang bundle     =' + fs.existsSync(toFsPath(forLang)));
-  console.appendLine("HAS L10N =" + typeof vscode.l10n?.t);
-
-  // Test di risoluzione diretta della chiave
-  console.appendLine(`T() PROBE =` + vscode.l10n.t('statusBar.initializing'));
-
-  // (Facoltativo) prova anche a leggere/parsing del JSON per.appendLinegare eventuali errori
-  try {
-    if (fs.existsSync(toFsPath(fallback))) {
-      const txt = fs.readFileSync(toFsPath(fallback), 'utf8');
-      JSON.parse(txt); // se fallisce, il bundle è malformato
-      console.appendLine('fallback bundle JSON parse: OK');
-    }
-  } catch (e) {
-    console.appendLine('[ERROR] fallback bundle JSON parse: ERROR ' + e);
-  }
 }

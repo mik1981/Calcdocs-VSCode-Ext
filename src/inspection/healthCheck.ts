@@ -13,9 +13,9 @@ import {
   hasParametricUnitMismatch,
 } from "./parametricAnalysis";
 
-export type LocalHealthSeverity = "error" | "warning" | "info";
+type LocalHealthSeverity = "error" | "warning" | "info";
 
-export type LocalHealthIssue = {
+type LocalHealthIssue = {
   severity: LocalHealthSeverity;
   category: "missing-symbol" | "invalid-value" | "unit-mismatch" | "diagnostic" | "parametric";
   formulaId?: string;
@@ -23,7 +23,7 @@ export type LocalHealthIssue = {
   message: string;
 };
 
-export type LocalHealthReport = {
+type LocalHealthReport = {
   activeDocument: string;
   checkedFormulaCount: number;
   issues: LocalHealthIssue[];
@@ -208,7 +208,7 @@ function dedupeIssues(issues: readonly LocalHealthIssue[]): LocalHealthIssue[] {
   return result;
 }
 
-export function buildLocalFormulaHealthCheck(
+function buildLocalFormulaHealthCheck(
   state: CalcDocsState,
   editor: vscode.TextEditor | undefined = vscode.window.activeTextEditor
 ): LocalHealthReport | undefined {
@@ -255,7 +255,7 @@ function severityRank(severity: LocalHealthSeverity): number {
   return 2;
 }
 
-export function localHealthCheckToMarkdown(report: LocalHealthReport): string {
+function localHealthCheckToMarkdown(report: LocalHealthReport): string {
   const sortedIssues = [...report.issues].sort((left, right) => {
     const severity = severityRank(left.severity) - severityRank(right.severity);
     if (severity !== 0) {

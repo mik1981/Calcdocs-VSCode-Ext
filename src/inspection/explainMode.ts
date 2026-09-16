@@ -163,7 +163,7 @@ function parseLocalFormulaYamlDocument(
   return result;
 }
 
-export type InspectionSymbolSource = "formula" | "c-symbol";
+type InspectionSymbolSource = "formula" | "c-symbol";
 
 export type InspectionSymbol = {
   name: string;
@@ -248,7 +248,7 @@ export function formulaEntryMatchesDocument(
   return !entry._filePath && documentMatchesPath(document, state.lastYamlPath);
 }
 
-export type DocumentFormulaContext = {
+type DocumentFormulaContext = {
   entries: FormulaEntry[];
   // Presente solo quando le entry derivano da parseLocalFormulaYamlDocument
   // (documento diverso dal file YAML indicizzato globalmente). Serve ai
@@ -299,7 +299,7 @@ export function getDocumentFormulaContext(
   return { entries: [] };
 }
 
-export function getFormulaEntriesForDocument(
+function getFormulaEntriesForDocument(
   state: CalcDocsState,
   editor: vscode.TextEditor | undefined
 ): FormulaEntry[] {
@@ -400,7 +400,7 @@ export function getActiveFormulaContext(
  *                   (ma il chiamante dovrebbe passare lastValidEditor per evitare
  *                   che il pannello webview oscuri il contesto).
  */
-export function getActiveFormulaEntry(
+function getActiveFormulaEntry(
   state: CalcDocsState,
   editor?: vscode.TextEditor
 ): FormulaEntry | undefined {
@@ -648,7 +648,7 @@ export function buildExplainModePayload(
   };
 }
 
-export function explainModeToMarkdown(payload: ExplainModePayload): string {
+function explainModeToMarkdown(payload: ExplainModePayload): string {
   const lines: string[] = [
     `# CalcDocs Explain: ${payload.formula.id}`,
     "",

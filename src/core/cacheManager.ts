@@ -8,7 +8,7 @@ import { clearGhostPriorityCache } from "./ghostPolicy";
 import { invalidateHeaderIndex } from "./analysis";
 import { CalcDocsState } from "./state";
 
-export type CacheInvalidationOptions = {
+type CacheInvalidationOptions = {
   /**
    * true = anche i file di cache persistiti su disco (mega-content-cache,
    * header-index-cache.json) vengono cancellati, non solo la RAM.

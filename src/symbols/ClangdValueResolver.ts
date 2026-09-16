@@ -18,7 +18,7 @@ type ClangdValueCandidate = {
   location: SymbolDefinitionLocation;
 };
 
-export type ClangdResolvedValueSymbol = {
+type ClangdResolvedValueSymbol = {
   name: string;
   kind: ClangdValueCandidateKind;
   value?: number;
@@ -26,7 +26,7 @@ export type ClangdResolvedValueSymbol = {
   location: SymbolDefinitionLocation;
 };
 
-export type ClangdResolvedValueSet = {
+type ClangdResolvedValueSet = {
   symbols: Map<string, ClangdResolvedValueSymbol>;
   queriedCandidates: number;
   skippedConflicts: string[];
@@ -38,7 +38,7 @@ export type ClangdResolvedValueSet = {
   truncated: boolean;
 };
 
-export type ClangdValueResolverOptions = {
+type ClangdValueResolverOptions = {
   headerIndex?: Map<string, string[]>;
   maxIncludeDepth?: number;
   maxCandidates?: number;
@@ -48,6 +48,15 @@ export type ClangdValueResolverOptions = {
   timeBudgetMs?: number;
   /** Per textDocument/hover request timeout (ms). */
   hoverTimeoutMs?: number;
+  /**
+   * Checked before EVERY hover request (not just once per pass): if it
+   * returns true, stop querying clangd immediately and return whatever
+   * has been resolved so far. This matters more than the time budget
+   * alone — a generation that's been superseded or has given up must
+   * stop adding new requests to clangd's queue right away, or it keeps
+   * starving the real, interactive hover the person is trying to use.
+   */
+  isCancelled?: () => boolean;
 };
 
 const SOURCE_EXTS = new Set([".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx"]);
@@ -194,7 +203,7 @@ async function expandFilesWithIncludes(
     // wide #include graph (e.g. "db.h" pulling in hundreds of headers) can
     // still enumerate huge numbers of files well within maxDepth. Guard on
     // total file count and elapsed time as well.
-    if (output.length >= maxFiles || Date.now() > deadline) {
+    if (options.isCancelled?.() || output.length >= maxFiles || Date.now() > deadline) {
       truncated = true;
       break;
     }
@@ -617,15 +626,17 @@ export async function resolveClangdValuesForFiles(
   );
   result.truncated = includesTruncated;
 
+  const isCancelled = options.isCancelled ?? (() => false);
+
   for (const filePath of filesToScan) {
-    if (result.queriedCandidates >= maxCandidates || Date.now() > deadline) {
+    if (isCancelled() || result.queriedCandidates >= maxCandidates || Date.now() > deadline) {
       result.truncated = true;
       break;
     }
 
     const candidates = await collectCandidatesForFile(filePath, workspaceRoot);
     for (const candidate of candidates) {
-      if (result.queriedCandidates >= maxCandidates || Date.now() > deadline) {
+      if (isCancelled() || result.queriedCandidates >= maxCandidates || Date.now() > deadline) {
         result.truncated = true;
         break;
       }

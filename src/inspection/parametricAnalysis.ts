@@ -31,13 +31,13 @@ import {
   type DimensionVector,
 } from "../engine/units";
 
-export type ParameterHypothesis = {
+type ParameterHypothesis = {
   paramName: string;
   assumedUnit: string;
   assumedDim: Dim;
 };
 
-export type ParametricAnalysisResult =
+type ParametricAnalysisResult =
   | {
       compatible: true;
       hypotheses: ParameterHypothesis[];

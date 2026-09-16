@@ -2,7 +2,7 @@ import * as fsp from "fs/promises";
 import * as path from "path";
 import * as vscode from "vscode";
 
-import { getConfig } from "../core/config";
+import { getConfig, setSessionConfigOverride, clearSessionConfigOverride, type CalcDocsConfig } from "../core/config";
 import { invalidateAllCalcDocsCaches } from "../core/cacheManager";
 import { CalcDocsState, SymbolDefinitionLocation } from "../core/state";
 import { AnalysisScheduler } from "../infra/watchers";
@@ -41,6 +41,107 @@ export function registerCommands({
   formulaRegistry,
   reapplyConfig,
 }: RegisterCommandsParams): void {
+  async function toggleWorkspaceBoolean(
+    settingKey: string,
+    fallbackValue: boolean,
+    applyToConfig: (config: CalcDocsConfig, nextValue: boolean) => void
+  ): Promise<void> {
+    const cfg = vscode.workspace.getConfiguration("calcdocs");
+    const nextValue = !cfg.get<boolean>(settingKey, fallbackValue);
+    await updateConfigWithFallback(settingKey, nextValue, (config) => {
+      applyToConfig(config, nextValue);
+    });
+  }
+
+  async function promptAndSetUiInvasiveness(): Promise<void> {
+    const current = getConfig().uiInvasiveness;
+    const picks: Array<
+      vscode.QuickPickItem & {
+        value: "minimal" | "standard" | "verbose";
+      }
+    > = [
+      {
+        label: "Minimal",
+        description: "Less visual noise, fewer hints",
+        value: "minimal",
+      },
+      {
+        label: "Standard",
+        description: "Balanced details (default)",
+        value: "standard",
+      },
+      {
+        label: "Verbose",
+        description: "Maximum details and hints",
+        value: "verbose",
+      },
+    ];
+
+    const selected = await vscode.window.showQuickPick(picks, {
+      placeHolder: `Current UI invasiveness: ${current}`,
+    });
+    if (!selected) {
+      return;
+    }
+
+    await updateConfigWithFallback("ui.invasiveness", selected.value, (cfg) => {
+      cfg.uiInvasiveness = selected.value;
+    });
+    await vscode.window.showInformationMessage(
+      localize("command.setUiInvasiveness.updated", selected.label)
+    );
+  }
+
+  /**
+   * Scrive una impostazione calcdocs.* nel workspace. Se la scrittura
+   * fallisce — tipicamente perché .vscode/settings.json ha errori o
+   * avvisi che VS Code non riesce a unire in sicurezza, il classico
+   * "Unable to write into workspace settings. Please open the
+   * workspace settings to correct errors/warnings in the file and try
+   * again." — applica comunque il valore in memoria per la sessione
+   * corrente invece di lasciare il comando senza alcun effetto
+   * visibile: l'utente ha premuto un bottone, si aspetta un effetto
+   * SUBITO, non un errore silenzioso.
+   *
+   * Al prossimo riavvio/apertura del workspace si torna al valore
+   * ancora scritto nel file (finché non viene corretto).
+   *
+   * @param settingKey stessa stringa passata a cfg.update(), usata
+   *   anche come chiave dell'override di sessione (vedi config.ts)
+   * @param applyToConfig applica il nuovo valore al CalcDocsConfig
+   *   risultante, cosi' getConfig() lo restituisce da subito anche
+   *   quando la scrittura su disco non è riuscita
+   * @returns true se la scrittura su disco è riuscita
+   */
+  async function updateConfigWithFallback(
+    settingKey: string,
+    value: unknown,
+    applyToConfig: (config: CalcDocsConfig) => void
+  ): Promise<boolean> {
+    const cfg = vscode.workspace.getConfiguration("calcdocs");
+    try {
+      await cfg.update(settingKey, value, vscode.ConfigurationTarget.Workspace);
+      // Una scrittura riuscita rende obsoleto un eventuale override di
+      // sessione lasciato da un tentativo fallito in precedenza.
+      clearSessionConfigOverride(settingKey);
+      return true;
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      setSessionConfigOverride(settingKey, applyToConfig);
+      reapplyConfig();
+
+      const openSettingsAction = localize("command.configWriteFailed.openSettingsAction");
+      const choice = await vscode.window.showWarningMessage(
+        localize("command.configWriteFailed.warning", settingKey, message),
+        openSettingsAction
+      );
+      if (choice === openSettingsAction) {
+        await vscode.commands.executeCommand("workbench.action.openWorkspaceSettingsFile");
+      }
+      return false;
+    }
+  }
+
   /**
    * "Restart CalcDocs": the closest an extension can safely get to
    * re-running its own activation without VS Code's help. It cannot
@@ -122,20 +223,23 @@ export function registerCommands({
 
       const nextInterval = Number(input);
 
-      await vscode.workspace
-        .getConfiguration("calcdocs")
-        .update("scanInterval", nextInterval, vscode.ConfigurationTarget.Workspace);
-
-      scheduler.applyConfiguration(context, getConfig());
+      const written = await updateConfigWithFallback("scanInterval", nextInterval, (cfg) => {
+        cfg.scanInterval = nextInterval;
+      });
+      if (written) {
+        scheduler.applyConfiguration(context, getConfig());
+      }
+      // Se la scrittura è fallita, updateConfigWithFallback ha già
+      // chiamato reapplyConfig() (che riarma anche lo scheduler).
     }),
 
     vscode.commands.registerCommand("calcdocs.toggleEnabled", async () => {
       const currentEnabled = getConfig().enabled;
       const nextEnabled = !currentEnabled;
 
-      await vscode.workspace
-        .getConfiguration("calcdocs")
-        .update("enabled", nextEnabled, vscode.ConfigurationTarget.Workspace);
+      await updateConfigWithFallback("enabled", nextEnabled, (cfg) => {
+        cfg.enabled = nextEnabled;
+      });
 
       const stateLabel = nextEnabled ? localize("command.toggleEnabled.enabled") : localize("command.toggleEnabled.disabled");
       await vscode.window.showInformationMessage(stateLabel);
@@ -145,9 +249,9 @@ export function registerCommands({
       const config = getConfig();
       const nextEnabled = !config.inlineGhostEnable;
 
-      await vscode.workspace
-        .getConfiguration("calcdocs")
-        .update("inline.ghost.enabled", nextEnabled, vscode.ConfigurationTarget.Workspace);
+      await updateConfigWithFallback("inline.ghost.enabled", nextEnabled, (cfg) => {
+        cfg.inlineGhostEnable = nextEnabled;
+      });
 
       const stateLabel = nextEnabled
         ? localize("command.toggleGhostValues.enabled")
@@ -300,7 +404,7 @@ export function registerCommands({
       },
       {
         label: "$(sync~spin) Restart CalcDocs",
-        description: "Force Recompute",
+        description: "Force Recompute, plus re-apply settings and re-arm watchers",
         action: "restart",
       },
       {
@@ -395,22 +499,30 @@ export function registerCommands({
         await generateFormulaHeader([], outputPath, state);
         return;
       case "toggleEnabled":
-        await toggleWorkspaceBoolean("enabled", config.enabled);
+        await vscode.commands.executeCommand("calcdocs.toggleEnabled");
         return;
       case "setInvasiveness":
         await promptAndSetUiInvasiveness();
         return;
       case "toggleCppCodeLens":
-        await toggleWorkspaceBoolean("cpp.codeLens.enabled", config.cppCodeLens.enabled);
+        await toggleWorkspaceBoolean("cpp.codeLens.enabled", config.cppCodeLens.enabled, (cfg, next) => {
+          cfg.cppCodeLens = { ...cfg.cppCodeLens, enabled: next };
+        });
         return;
       case "toggleCppHover":
-        await toggleWorkspaceBoolean("cpp.hover.enabled", config.cppHover.enabled);
+        await toggleWorkspaceBoolean("cpp.hover.enabled", config.cppHover.enabled, (cfg, next) => {
+          cfg.cppHover = { ...cfg.cppHover, enabled: next };
+        });
         return;
       case "toggleInlineCodeLens":
-        await toggleWorkspaceBoolean("inline.codeLens.enabled", config.inlineCodeLens.enabled);
+        await toggleWorkspaceBoolean("inline.codeLens.enabled", config.inlineCodeLens.enabled, (cfg, next) => {
+          cfg.inlineCodeLens = { ...cfg.inlineCodeLens, enabled: next };
+        });
         return;
       case "toggleInlineHover":
-        await toggleWorkspaceBoolean("inline.hover.enabled", config.inlineHover.enabled);
+        await toggleWorkspaceBoolean("inline.hover.enabled", config.inlineHover.enabled, (cfg, next) => {
+          cfg.inlineHover = { ...cfg.inlineHover, enabled: next };
+        });
         return;
       case "toggleGhostValues":
         await vscode.commands.executeCommand("calcdocs.toggleGhostValues");
@@ -434,53 +546,7 @@ export function registerCommands({
   }
 }
 
-async function toggleWorkspaceBoolean(
-  settingKey: string,
-  fallbackValue: boolean
-): Promise<void> {
-  const cfg = vscode.workspace.getConfiguration("calcdocs");
-  const currentValue = cfg.get<boolean>(settingKey, fallbackValue);
-  await cfg.update(settingKey, !currentValue, vscode.ConfigurationTarget.Workspace);
-}
 
-async function promptAndSetUiInvasiveness(): Promise<void> {
-  const current = getConfig().uiInvasiveness;
-  const picks: Array<
-    vscode.QuickPickItem & {
-      value: "minimal" | "standard" | "verbose";
-    }
-  > = [
-    {
-      label: "Minimal",
-      description: "Less visual noise, fewer hints",
-      value: "minimal",
-    },
-    {
-      label: "Standard",
-      description: "Balanced details (default)",
-      value: "standard",
-    },
-    {
-      label: "Verbose",
-      description: "Maximum details and hints",
-      value: "verbose",
-    },
-  ];
-
-  const selected = await vscode.window.showQuickPick(picks, {
-    placeHolder: `Current UI invasiveness: ${current}`,
-  });
-  if (!selected) {
-    return;
-  }
-
-  await vscode.workspace
-    .getConfiguration("calcdocs")
-    .update("ui.invasiveness", selected.value, vscode.ConfigurationTarget.Workspace);
-  await vscode.window.showInformationMessage(
-    localize("command.setUiInvasiveness.updated", selected.label)
-  );
-}
 
 async function openInlineCalcGuide(
   context: vscode.ExtensionContext

@@ -38,22 +38,6 @@ export function getUnitDim(unit?: string): Dim | null {
 
 // -------------------- C SYMBOL DIM PROPAGATION --------------------
 
-export type CSymbolDimMap = Map<string, Dim>;
-
-export function buildCSymbolDimTable(
-  formulas: OutlineFormula[]
-): CSymbolDimMap {
-
-  const map = new Map<string, Dim>();
-
-  for (const f of formulas) {
-    const dim = getUnitDim(f.unit);
-    if (dim) map.set(f.id, dim);
-  }
-
-  return map;
-}
-
 // -------------------- FUNCTION RULES --------------------
 
 function applyFunction(name: string, args: Dim[]): Dim {

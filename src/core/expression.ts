@@ -110,7 +110,7 @@ function preprocessSizeofAlignof(expr: string): string {
   );
 }
 
-export function detectExpressionNumericFormat(expr: string): NumericDisplayFormat {
+function detectExpressionNumericFormat(expr: string): NumericDisplayFormat {
   if (HEX_LITERAL_DETECT_RX.test(expr) || BITWISE_OP_DETECT_RX.test(expr)) {
     return 'hex';
   }
@@ -128,7 +128,7 @@ export function detectExpressionNumericFormat(expr: string): NumericDisplayForma
   return 'decimal';
 }
 
-export type CompositeExpressionPreview = {
+type CompositeExpressionPreview = {
   expanded: string;
   value: number | null;
   error: CompositeExpressionPreviewError | null;
@@ -228,13 +228,6 @@ function buildUnsignedIntegerCast(
   };
 }
 
-function uintCastRange(bits: number): IntegerCastRange {
-  return {
-    min: 0,
-    max: 2 ** bits - 1,
-  };
-}
-
 function intCastRange(bits: number): IntegerCastRange {
   const signBit = 2 ** (bits - 1);
   return {
@@ -243,7 +236,7 @@ function intCastRange(bits: number): IntegerCastRange {
   };
 }
 
-export function getCastOverflowInfo(error: unknown): CastOverflowInfo | null {
+function getCastOverflowInfo(error: unknown): CastOverflowInfo | null {
   if (!error || typeof error !== "object") {
     return null;
   }
@@ -332,7 +325,7 @@ export type SymbolResolutionStats = {
   cycleSamples: string[];
 };
 
-export type SymbolResolutionSnapshot = {
+type SymbolResolutionSnapshot = {
   usedDepth: number;
   depthLimit: number;
   cycleCount: number;
@@ -1769,24 +1762,6 @@ function preprocessUnsignedBitwiseOps(
   return output.replace(SIGNED_RIGHT_SHIFT_RX, ">>>");
 }
 
-// const C_QUALIFIER_PATTERN =
-//   "volatile|const|restrict|__restrict__|__restrict|__volatile__|__volatile|__const__|__const|__extension__";
-// const C_TYPE_PATTERN =
-//   "(?:u?int|UINT|INT)(?:8|16|32)(?:_t)?|float|double|bool|char|short|long|unsigned|signed|int";
-// // const C_TYPE_PATTERN =
-// //   /\(\s*(u?int(?:8|16|32)(?:_t)?|UINT(?:8|16|32)|INT(?:8|16|32)|uint(?:8|16|32)|int(?:8|16|32)|float|double|bool|char|short|long|unsigned|signed|int)\s*\)\s*(?!\()([-+~]?(?:0[xX][\dA-Fa-f]+|0[bB][01]+|0[oO][0-7]+|(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?|[A-Za-z_]\w*)(?!\s*\())/gi
-// //   // "u?int(?:8|16|32)(?:_t)?|UINT(?:8|16|32)|INT(?:8|16|32)|uint(?:8|16|32)|int(?:8|16|32)|float|double|bool|char|short|long|unsigned|signed|int";
-// const C_CAST_WITH_QUALIFIER_RX = new RegExp(
-//   `\\(\\s*(?:(?:${C_QUALIFIER_PATTERN})\\s+)+(${C_TYPE_PATTERN})\\s*\\)`,
-//   "gi"
-// );
-// const C_CAST_UNPAREN_RX = new RegExp(
-//   `\\(\\s*(${C_TYPE_PATTERN})\\s*\\)` +
-//     `\\s*(?!\\()` +
-//     `([-+~]?(?:0[xX][\\dA-Fa-f]+|0[bB][01]+|0[oO][0-7]+|(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?|[A-Za-z_]\\w*)(?!\\s*\\()))`,
-//   "gi"
-// );
-
 const C_QUALIFIER_PATTERN =
   "volatile|const|restrict|__restrict__|__restrict|__volatile__|__volatile|__const__|__const|__extension__";
 
@@ -2331,7 +2306,7 @@ export function expandExpression(
  * Returns true when expression is already a pure numeric literal.
  * Example: " 42UL " -> true
  */
-export function isPureNumericExpression(expr: string): boolean {
+function isPureNumericExpression(expr: string): boolean {
   const sanitized = unwrapParens(stripComments(expr));
   return NUM_LITERAL_RX.test(sanitized);
 }
@@ -2580,23 +2555,13 @@ export function buildCompositeExpressionPreview(
 
   expanded = resolveInlineLookups(expanded, context);
   const evaluableExpanded = expanded;
-  
-  // DEBUG STEPS
-  // console.log("STEP 1 - raw input:", expr);
-  
+
   let simplifiedExpanded = simplifyNumericFragments(evaluableExpanded, context);
-  // console.log("STEP 2 - after numeric simplification:", simplifiedExpanded);
-  
-  // DEBUG: Check defines and symbolValues
-  // console.log("DEFINES map size:", allDefines.size);
-  // console.log("SYMBOLVALUES map size:", symbolValues.size);
-  // console.log("RESOLVED map size:", resolvedMap.size);
-  
+
   // After simplification, do a second pass of token replacement for any remaining identifiers
   // This ensures macro names like FINAL are replaced after numeric simplification
   // Example: (FINAL*(2+0.01)) -> (FINAL*2.01) -> (80*2.01)
   const tokens = simplifiedExpanded.match(TOKEN_RX) ?? [];
-  // console.log("TOKENS found after simplification:", tokens);
 
   for (const token of tokens) {
     if (/^(?:0[xX][0-9a-fA-F]+|0[bB][01]+|0[oO][0-7]+|\d+)$/.test(token)) {
@@ -2605,7 +2570,6 @@ export function buildCompositeExpressionPreview(
 
     // Already in symbolValues? Skip it
     if (symbolValues.has(token)) {
-      // console.log(`  Token "${token}" already in symbolValues: ${symbolValues.get(token)}`);
       continue;
     }
 
@@ -2614,30 +2578,24 @@ export function buildCompositeExpressionPreview(
       resolvedMap.get(token) ??
       null;
 
-    // console.log(`  Token "${token}" resolved to:`, value);
 
     if (value != null) {
-      // console.log(`  >> Replacing "${token}" with "${value}"`);
       simplifiedExpanded = replaceIdentifiersOutsideStrings(
         simplifiedExpanded,
         (t) => (t === token ? numericSubstitution(value)/*String(value)*/ : t)
       );
-      // console.log(`  >> After replacement:`, simplifiedExpanded);
     }
   }
 
-  // console.log("STEP 3 - after token resolution:", simplifiedExpanded);
   
   // One more simplify pass to clean up numbers
   simplifiedExpanded = simplifyNumericFragments(simplifiedExpanded, context);
   simplifiedExpanded = removeRedundantParens(simplifiedExpanded);
-  // console.log("STEP 4 - final simplified:", simplifiedExpanded);
   
   const errors: unknown[] = [];
 
   try {
     const value = safeEval(evaluableExpanded, context);
-    // console.log("EVAL SUCCESS on evaluableExpanded:", value);
     return {
       expanded: unwrapParens(simplifiedExpanded),
       value,
@@ -2647,11 +2605,9 @@ export function buildCompositeExpressionPreview(
       numericFormat,
     };
   } catch (error) {
-    // console.log("EVAL FAILED on evaluableExpanded:", error);
     errors.push(error);
     try {
       const value = safeEval(simplifiedExpanded, context);
-      // console.log("EVAL SUCCESS on simplifiedExpanded:", value);
       return {
         expanded: unwrapParens(simplifiedExpanded),
         value,
@@ -2661,7 +2617,6 @@ export function buildCompositeExpressionPreview(
         numericFormat,
       };
     } catch (nextError) {
-      // console.log("EVAL FAILED on simplifiedExpanded:", nextError);
       errors.push(nextError);
       return {
         expanded: unwrapParens(simplifiedExpanded),
@@ -2673,26 +2628,4 @@ export function buildCompositeExpressionPreview(
       };
     }
   }
-}
-
-/**
- * Computes numeric value for composite expressions after token resolution.
- * Returns null when unresolved identifiers remain.
- */
-export function evaluateCompositeExpression(
-  expr: string,
-  symbolValues: Map<string, number>,
-  allDefines: Map<string, string>,
-  functionDefines: Map<string, FunctionMacroDefinition> = new Map(),
-  context: EvaluationContext = {},
-  defineConditions: Map<string, string> = new Map<string, string>()
-): number | null {
-  return buildCompositeExpressionPreview(
-    expr,
-    symbolValues,
-    allDefines,
-    functionDefines,
-    context,
-    defineConditions
-  ).value;
 }

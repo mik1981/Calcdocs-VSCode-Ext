@@ -7,7 +7,7 @@ export const DEFINE_DIRECTIVE_RX = /^\s*#\s*define\b/;
 const CONTROL_FLOW_RX = /^\s*(else\s+if|if|while|for|switch|return|do)\b/;
 const MAX_LOGICAL_LINE_CONTINUATION_LINES = 128;
 
-export type DocumentSymbolDefinition = {
+type DocumentSymbolDefinition = {
   line: number;
   lineText: string;
   isDefineLine: boolean;

@@ -6,15 +6,26 @@ import { CalcDocsState } from "./state";
 /**
  * Recursively lists files under root, skipping directories matched by callback.
  * Example: `(name) => name === "node_modules"` avoids scanning dependencies.
+ *
+ * @param isCancelled - Controllato prima di scendere in ogni directory:
+ *   se true, interrompe la scansione appena possibile e restituisce
+ *   quello che ha raccolto fin qui, invece di continuare a leggere il
+ *   filesystem per un'analisi ormai abbandonata (es. superata da un
+ *   trigger più recente, o rinunciata dal fallback progressivo).
  */
 export async function listFilesRecursive(
   root: string,
   isIgnoredDir: (absoluteDirPath: string, dirName: string) => boolean,
-  state: CalcDocsState
+  state: CalcDocsState,
+  isCancelled?: () => boolean
 ): Promise<string[]> {
   const collectedFiles: string[] = [];
 
   async function walk(currentDir: string): Promise<void> {
+    if (isCancelled?.()) {
+      return;
+    }
+
     let entries: Dirent[];
 
     try {
@@ -26,15 +37,17 @@ export async function listFilesRecursive(
     }
 
     for (const entry of entries) {
+      if (isCancelled?.()) {
+        return;
+      }
+
       const entryName = String(entry.name);
       const absolutePath = path.join(currentDir, entryName);
 
       if (entry.isDirectory()) {
         if (!isIgnoredDir(absolutePath, entryName)) {
-          // state.output.appendLine(`************** ${entryName} -- ${absolutePath}`);
           await walk(absolutePath);
         // } else {
-        //   state.output.appendLine(`Ignorata ${entryName} -- ${absolutePath}`);
         }
         continue;
       }

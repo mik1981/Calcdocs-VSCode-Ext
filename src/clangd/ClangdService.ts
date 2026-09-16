@@ -39,47 +39,6 @@ type HoverPayload =
   | null
   | undefined;
 
-type DefinitionPayload =
-  | {
-      uri: string;
-      range: {
-        start: { line: number; character: number };
-        end: { line: number; character: number };
-      };
-    }
-  | Array<{
-      uri?: string;
-      range?: {
-        start: { line: number; character: number };
-        end: { line: number; character: number };
-      };
-      targetUri?: string;
-      targetSelectionRange?: {
-        start: { line: number; character: number };
-        end: { line: number; character: number };
-      };
-    }>
-  | null
-  | undefined;
-
-function protocolRangeToVscodeRange(
-  range:
-    | {
-        start: { line: number; character: number };
-        end: { line: number; character: number };
-      }
-    | undefined
-): vscode.Range | undefined {
-  if (!range) {
-    return undefined;
-  }
-
-  return new vscode.Range(
-    new vscode.Position(range.start.line, range.start.character),
-    new vscode.Position(range.end.line, range.end.character)
-  );
-}
-
 function markupToText(contents: unknown): string {
   if (typeof contents === "string") {
     return contents;
@@ -115,48 +74,6 @@ function markupToText(contents: unknown): string {
   }
 
   return "";
-}
-
-function firstDefinitionLocation(
-  payload: DefinitionPayload
-): vscode.Location | null {
-  if (!payload) {
-    return null;
-  }
-
-  if (Array.isArray(payload)) {
-    if (payload.length === 0) {
-      return null;
-    }
-
-    for (const entry of payload) {
-      const uri = entry.uri ?? entry.targetUri;
-      const range = entry.range ?? entry.targetSelectionRange;
-      if (!uri || !range) {
-        continue;
-      }
-
-      return new vscode.Location(vscode.Uri.parse(uri), protocolRangeToVscodeRange(range)!);
-    }
-    return null;
-  }
-
-  return new vscode.Location(
-    vscode.Uri.parse(payload.uri),
-    protocolRangeToVscodeRange(payload.range)!
-  );
-}
-
-function protocolKindToVscodeKind(value: unknown): vscode.SymbolKind {
-  if (typeof value !== "number") {
-    return vscode.SymbolKind.Variable;
-  }
-
-  if (value >= 1 && value <= 26) {
-    return value as vscode.SymbolKind;
-  }
-
-  return vscode.SymbolKind.Variable;
 }
 
 export class ClangdService {

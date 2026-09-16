@@ -49,7 +49,7 @@ export type UiInvasivenessLevel = "minimal" | "standard" | "verbose";
  * - "apostrophe": apostrofo (Svizzera)
  * - "narrowNoBreakSpace": narrow no-break space (U+202F)
  */
-export type ThousandsSeparator = "none" | "space" | "dot" | "comma" | "apostrophe" | "narrowNoBreakSpace";
+type ThousandsSeparator = "none" | "space" | "dot" | "comma" | "apostrophe" | "narrowNoBreakSpace";
 
 export type CppCodeLensConfig = {
   enabled: boolean;
@@ -91,7 +91,7 @@ export type InlineHoverConfig = {
   showErrors: boolean;
 };
 
-export type InlineDiagnosticsConfig = {
+type InlineDiagnosticsConfig = {
   level: InlineCalcDiagnosticsLevel;
 };
 
@@ -138,6 +138,20 @@ export type CalcDocsConfig = {
    * (il budget di tempo/memoria e' la protezione primaria; questo resta
    * solo un backstop strutturale contro cicli/ricorsioni patologiche). */
   megaContentMaxIncludeDepth: number;
+  /**
+   * Su progetti la cui analisi completa (incluso clangd) impiega troppo,
+   * CalcDocs mostra dopo 5s dei ghost value "best effort" calcolati solo
+   * dal file attivo + suoi #include diretti, poi continua l'analisi
+   * completa in background aggiornando la UI a intervalli crescenti
+   * (10s, 20s, 30s, poi ogni 30s). Se il tempo TOTALE trascorso supera
+   * questo valore, l'analisi completa viene abbandonata per questo giro
+   * (si torna stabilmente allo scope ridotto, motivo indicato nella
+   * status bar) anziché lasciarla proseguire per minuti indefinitamente.
+   * Se l'analisi completa finisce comunque in background dopo il
+   * timeout, i risultati migliori vengono comunque applicati appena
+   * pronti. In millisecondi.
+   */
+  largeProjectAnalysisTimeoutMs: number;
     /** Abilita integrazione clangd come backend LSP opzionale */
   useClangd: boolean;
   /** Abilita/disabilita i CodeLens per inline calc nei commenti */
@@ -342,6 +356,7 @@ const FLAT_DEFAULTS = {
   megaContentMaxCharsPerFile: 0,
   megaContentMaxTimeMsPerFile: 0,
   megaContentMaxIncludeDepth: 0,
+  largeProjectAnalysisTimeoutMs: 120_000,
   formulaHeaderOutputPath: "macro_generate.h",
   formulaHeaderIncludeResolvedValues: true,
 } satisfies {
@@ -358,6 +373,7 @@ const FLAT_DEFAULTS = {
   megaContentMaxCharsPerFile: number;
   megaContentMaxTimeMsPerFile: number;
   megaContentMaxIncludeDepth: number;
+  largeProjectAnalysisTimeoutMs: number;
   formulaHeaderOutputPath: string;
   formulaHeaderIncludeResolvedValues: boolean;
 };
@@ -376,6 +392,7 @@ function getDefaultConfig(): CalcDocsConfig {
     megaContentMaxCharsPerFile: FLAT_DEFAULTS.megaContentMaxCharsPerFile,
     megaContentMaxTimeMsPerFile: FLAT_DEFAULTS.megaContentMaxTimeMsPerFile,
     megaContentMaxIncludeDepth: FLAT_DEFAULTS.megaContentMaxIncludeDepth,
+    largeProjectAnalysisTimeoutMs: FLAT_DEFAULTS.largeProjectAnalysisTimeoutMs,
     useClangd: FLAT_DEFAULTS.useClangd,
     inlineGhostEnable: true,
     inlineCalcEnableCodeLens: true,
@@ -399,11 +416,61 @@ function getDefaultConfig(): CalcDocsConfig {
  * 
  * @returns Oggetto di configurazione con i valori attuali
  */
+/**
+ * Override di sessione per impostazioni calcdocs.* che un comando ha
+ * provato a scrivere su disco senza riuscirci — tipicamente perché
+ * .vscode/settings.json ha errori/avvisi che VS Code non riesce a unire
+ * in sicurezza (l'errore "Unable to write into workspace settings.
+ * Please open the workspace settings to correct errors/warnings in the
+ * file and try again."). Senza questo, un comando come "Disable
+ * CalcDocs" premuto in quella situazione non avrebbe ALCUN effetto
+ * visibile — né sul file (la scrittura fallisce) né sulla sessione
+ * corrente (getConfig() continuerebbe a leggere il vecchio valore dal
+ * file) — un pulsante premuto che sembra non fare nulla.
+ *
+ * Con questo, il comando ha comunque effetto SUBITO per la sessione
+ * corrente; il file su disco resta quello con l'errore, quindi al
+ * prossimo riavvio/apertura del workspace si torna al valore ancora lì
+ * scritto, finché l'utente non corregge il file — scelta deliberata:
+ * CalcDocs non tenta di riparare il file dell'utente, solo di non
+ * bloccare la sessione corrente per un problema che non riguarda il
+ * valore in sé.
+ *
+ * Chiavi in Map = stessa stringa passata a
+ * getConfiguration("calcdocs").update(key, ...), così un secondo
+ * tentativo sulla STESSA impostazione sostituisce l'override precedente
+ * invece di accumularsi.
+ */
+const sessionConfigOverrides = new Map<string, (config: CalcDocsConfig) => void>();
+
+export function setSessionConfigOverride(
+  settingKey: string,
+  patch: (config: CalcDocsConfig) => void
+): void {
+  sessionConfigOverrides.set(settingKey, patch);
+}
+
+export function clearSessionConfigOverride(settingKey: string): void {
+  sessionConfigOverrides.delete(settingKey);
+}
+
+export function hasSessionConfigOverride(settingKey: string): boolean {
+  return sessionConfigOverrides.has(settingKey);
+}
+
 export function getConfig(): CalcDocsConfig {
-  // Quando vscode non è disponibile (es. test), restituisci configurazione di default
+  // Quando vscode non è disponibile (es. test — require("vscode") non
+  // risolve l'alias ESM di Vitest, solo import lo fa) restituisci la
+  // configurazione di default, ma applica comunque eventuali override
+  // di sessione: è il comportamento corretto a prescindere dal motivo
+  // per cui questo ramo viene preso, non solo un espediente per i test.
   const v = getVscode();
   if (!v || !v.workspace) {
-    return getDefaultConfig();
+    const defaults = getDefaultConfig();
+    for (const patch of sessionConfigOverrides.values()) {
+      patch(defaults);
+    }
+    return defaults;
   }
   const cfg = v.workspace.getConfiguration("calcdocs");
   
@@ -456,6 +523,11 @@ export function getConfig(): CalcDocsConfig {
   const megaContentMaxIncludeDepth = Number.isFinite(rawMegaContentMaxIncludeDepth) && rawMegaContentMaxIncludeDepth >= 0
     ? Math.floor(rawMegaContentMaxIncludeDepth)
     : FLAT_DEFAULTS.megaContentMaxIncludeDepth;
+
+  const rawLargeProjectAnalysisTimeoutMs = Number(cfg.get<number>("largeProjectAnalysisTimeoutMs", FLAT_DEFAULTS.largeProjectAnalysisTimeoutMs));
+  const largeProjectAnalysisTimeoutMs = Number.isFinite(rawLargeProjectAnalysisTimeoutMs) && rawLargeProjectAnalysisTimeoutMs > 0
+    ? Math.floor(rawLargeProjectAnalysisTimeoutMs)
+    : FLAT_DEFAULTS.largeProjectAnalysisTimeoutMs;
 
   const uiInvasiveness = normalizeUiInvasiveness(
     cfg.get<string>("ui.invasiveness", DEFAULT_UI_PROFILE)
@@ -620,7 +692,7 @@ export function getConfig(): CalcDocsConfig {
   const inlineCalcEnableHover = inlineHover.enabled;
   const inlineCalcDiagnosticsLevel = inlineDiagnostics.level;
 
-  return {
+  const config: CalcDocsConfig = {
     enabled: cfg.get<boolean>("enabled", FLAT_DEFAULTS.enabled),
     scanInterval:
       Number.isFinite(scanInterval) && scanInterval >= 0 ? scanInterval : FLAT_DEFAULTS.scanInterval,
@@ -634,6 +706,7 @@ export function getConfig(): CalcDocsConfig {
     megaContentMaxCharsPerFile,
     megaContentMaxTimeMsPerFile,
     megaContentMaxIncludeDepth,
+    largeProjectAnalysisTimeoutMs,
     useClangd: cfg.get<boolean>("useClangd", FLAT_DEFAULTS.useClangd),
     inlineGhostEnable,
     inlineCalcEnableCodeLens,
@@ -647,6 +720,18 @@ export function getConfig(): CalcDocsConfig {
     inlineHover,
     inlineDiagnostics,
   };
+
+  // Applica sopra eventuali override di sessione (impostazioni che un
+  // comando ha provato a scrivere su disco senza riuscirci — vedi
+  // setSessionConfigOverride) PRIMA di restituire: cosi' il comando ha
+  // comunque effetto immediato per la sessione corrente anche quando
+  // .vscode/settings.json ha errori che impediscono la scrittura, senza
+  // dover toccare ogni singolo cfg.get() qui sopra.
+  for (const patch of sessionConfigOverrides.values()) {
+    patch(config);
+  }
+
+  return config;
 }
 
 /**

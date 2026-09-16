@@ -114,6 +114,74 @@ export async function createDeepIncludeChain(
   return { entryPath: path.join(root, entryFile) };
 }
 
+/**
+ * Crea un albero che simula un progetto STM32CubeMX/STM32CubeIDE reale:
+ * un file .c che include "main.h" (che a sua volta fa esplodere un
+ * intero albero Drivers/CMSIS + Drivers/<Family>_HAL_Driver, come fa
+ * davvero stm32h7xx_hal.h) SEGUITO da alcuni header applicativi
+ * dell'utente inclusi direttamente (come db.h, par.h nel progetto
+ * reale che ha fatto emergere questo problema). La convenzione di
+ * naming vendor qui (CMSIS, *_HAL_Driver) è deliberatamente DIVERSA da
+ * quella "Publisher.Package.1.0.0" di createVendorPackageFixture: è
+ * proprio quella che isVendorPackagePath() non riconosceva prima del
+ * fix, causando l'esaurimento del budget dentro l'albero vendor prima
+ * di leggere mai il contenuto degli header applicativi.
+ */
+export async function createStm32VendorFixture(
+  root: string,
+  opts: { halNestedHeaderCount?: number } = {}
+): Promise<{ entryPath: string }> {
+  const halNestedHeaderCount = opts.halNestedHeaderCount ?? 20;
+
+  const entryPath = await writeFixtureFile(
+    root,
+    "Macchina/macchina.c",
+    [
+      `#include "main.h"`,
+      `#include "db.h"`,
+      `#include "par.h"`,
+      "",
+    ].join("\n")
+  );
+
+  await writeFixtureFile(
+    root,
+    "Core/Inc/main.h",
+    `#include "stm32h7xx_hal.h"\n#define MAIN_CANARY 1\n`
+  );
+
+  // L'header "ombrello" HAL, come stm32h7xx_hal.h nel progetto reale:
+  // include CMSIS più una lunga serie di header dei singoli periferici.
+  let halUmbrella = `#include "cmsis_core.h"\n`;
+  for (let i = 1; i <= halNestedHeaderCount; i += 1) {
+    halUmbrella += `#include "stm32h7xx_hal_periph_${i}.h"\n`;
+  }
+  await writeFixtureFile(
+    root,
+    "Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal.h",
+    halUmbrella
+  );
+
+  await writeFixtureFile(
+    root,
+    "Drivers/CMSIS/Include/cmsis_core.h",
+    `#define CMSIS_CORE_CANARY 1\n`
+  );
+
+  for (let i = 1; i <= halNestedHeaderCount; i += 1) {
+    await writeFixtureFile(
+      root,
+      `Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_periph_${i}.h`,
+      `#define HAL_PERIPH_${i}_ENABLED 1\n`
+    );
+  }
+
+  await writeFixtureFile(root, "Macchina/db.h", `#define DB_MAX_RECORDS 128\n`);
+  await writeFixtureFile(root, "Macchina/par.h", `#define PAR_VERSION 7\n`);
+
+  return { entryPath };
+}
+
 /** Crea un albero che simula un package manager vendor versionato, es. Publisher.Package.1.0.0/. */
 export async function createVendorPackageFixture(
   root: string,

@@ -27,7 +27,7 @@ const CODELENS_PREVIEW_MAX_LEN = 140;
 const MISMATCH_THRESHOLD = 0.01;
 const IDENTIFIER_RX = /\b[A-Za-z_]\w*\b/g;
 
-export type CppCodeLensItemKind =
+type CppCodeLensItemKind =
   | "ambiguity"
   | "castOverflow"
   | "mismatch"
@@ -45,7 +45,7 @@ export type CppCodeLensItem = {
   arguments?: unknown[];
 };
 
-export type CollectCppCodeLensItemsOptions = {
+type CollectCppCodeLensItemsOptions = {
   lineRanges?: readonly ViewportLineRange[];
 };
 

@@ -79,7 +79,7 @@ export function toHexString(n: number): string {
 }
 
 
-export function toBinaryString(n: number): string {
+function toBinaryString(n: number): string {
   if (!isInteger(n) || n < 0) {
     return "";
   }
@@ -98,6 +98,64 @@ export function toBinaryString(n: number): string {
   return "0b" + groups.join(separator);
 }
 
+
+/**
+ * Soglia oltre la quale un intero decimale viene affiancato dal suo
+ * equivalente esadecimale nei ghost value. 65536 = 0x10000: sotto i 4
+ * nibble l'esadecimale aggiunge poco e ruberebbe spazio prezioso nella
+ * riga, mentre da qui in su si tratta quasi sempre di indirizzi,
+ * maschere o valori di registro — dove l'esadecimale è la forma in cui
+ * si ragiona davvero (es. 2'156'920'832 → 0x8086'0000).
+ */
+const LARGE_INT_HEX_THRESHOLD = 0x10000;
+
+function escapeForRegExp(literal: string): string {
+  return literal.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Affianca l'equivalente esadecimale, tra parentesi tonde, a ogni
+ * intero decimale "grande" presente nel testo già formattato (quindi
+ * con i separatori delle migliaia già applicati).
+ *
+ * Volutamente NON tocca:
+ * - i numeri già in esadecimale o binario (0x.../0b...): il lookbehind
+ *   esclude le cifre precedute da un carattere di parola, quindi le
+ *   cifre interne a "0x1000" non vengono mai considerate;
+ * - i valori sotto soglia e i non interi;
+ * - i numeri a cui è già stato affiancato un "(0x...)", per non
+ *   duplicarlo se la funzione venisse applicata due volte.
+ */
+export function appendHexToLargeIntegers(state: CalcDocsState, text: string): string {
+  const config = getConfig();
+  const separator = getThousandsSeparatorChar(config.thousandsSeparator);
+  const sep = escapeForRegExp(separator);
+
+  // Un intero "grande" e' o un numero raggruppato dal separatore
+  // (1'234'567) oppure una sequenza lunga di cifre senza separatore
+  // (quando il separatore e' disabilitato). In entrambi i casi il
+  // lookbehind/lookahead evitano di agganciare cifre che fanno parte di
+  // un identificatore, di un letterale 0x/0b o di un decimale.
+  const pattern = separator
+    ? new RegExp(`(?<![\\w.])(\\d{1,3}(?:${sep}\\d{3})+|\\d{5,})(?![\\w.])`, "g")
+    : new RegExp(`(?<![\\w.])(\\d{5,})(?![\\w.])`, "g");
+
+  return text.replace(pattern, (match, digits: string, offset: number) => {
+    const numeric = Number(separator ? digits.split(separator).join("") : digits);
+    if (!Number.isFinite(numeric) || !Number.isInteger(numeric) || numeric < LARGE_INT_HEX_THRESHOLD) {
+      return match;
+    }
+
+    // Gia' annotato (es. doppia applicazione): non duplicare.
+    const rest = text.slice(offset + match.length);
+    if (/^\s*\(0[xX]/.test(rest)) {
+      return match;
+    }
+
+    const hex = toHexString(numeric);
+    return hex ? `${match} (${hex})` : match;
+  });
+}
 
 /**
  * Formatta un numero secondo il formato rilevato dall'espressione sorgente:
@@ -190,6 +248,5 @@ export function formatNumbersWithThousandsSeparator(state: CalcDocsState, text: 
     return formattedInteger;
   });
 
-  // state.output.detail(`${text} → ${ret}`)
   return ret
 }

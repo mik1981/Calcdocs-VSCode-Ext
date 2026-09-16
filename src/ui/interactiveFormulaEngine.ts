@@ -45,7 +45,7 @@ import {
 } from "../types/toleranceModel";
 import type { McSampleSpec } from "../engine/tolerance";
 
-export const MAX_INTERACTIVE_DEPTH = 5;
+const MAX_INTERACTIVE_DEPTH = 5;
 
 type FormulaKind = "formula" | "constant" | "leaf";
 
@@ -59,7 +59,7 @@ type SymbolEvaluation = {
   warnings: string[];
 };
 
-export type InteractiveEvaluationResult = {
+type InteractiveEvaluationResult = {
   rootId: string;
   value: number | null;
   unit?: string;

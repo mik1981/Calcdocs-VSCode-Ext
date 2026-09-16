@@ -13,27 +13,23 @@ function toAbsolute(p: string): string {
   return normalize(path.resolve(p));
 }
 
-function toAbsoluteFromRoot(root: string, p: string): string {
-  return normalize(path.resolve(root, p));
-}
-
 // -----------------------------------------------------------------------------
 // TYPES
 // -----------------------------------------------------------------------------
 
-export interface Configuration {
+interface Configuration {
   projectRoot: string;
   exclusions: string[];
   compileFlags: string[];
 }
 
-export interface CompileCommand {
+interface CompileCommand {
   directory: string;
   command: string;
   file: string;
 }
 
-export interface GenerationResult {
+interface GenerationResult {
   commands: CompileCommand[];
   processedFiles: number;
   includeDirectories: number;
@@ -247,7 +243,7 @@ export function generateCompileCommands(config: Configuration): GenerationResult
 // WRITE FILE
 // -----------------------------------------------------------------------------
 
-export function writeCompileCommandsToFile(
+function writeCompileCommandsToFile(
   result: GenerationResult,
   outputPath: string
 ): void {

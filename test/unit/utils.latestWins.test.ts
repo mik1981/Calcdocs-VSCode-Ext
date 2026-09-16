@@ -107,4 +107,53 @@ describe("utils/latestWins.ts — guardia anti-race 'vince l'ultima richiesta'",
     // token emessi da guardA.
     assert.equal(tokenA.isStale(), false);
   });
+
+  it("isCancelled() è false finché non diventa stale né viene chiamato cancel()", () => {
+    const guard = createLatestWinsGuard();
+    const token = guard.start();
+    assert.equal(token.isCancelled(), false);
+  });
+
+  it("isCancelled() diventa true non appena il token diventa stale, anche senza chiamare cancel()", () => {
+    const guard = createLatestWinsGuard();
+    const first = guard.start();
+    assert.equal(first.isCancelled(), false);
+
+    guard.start(); // supera il primo token
+    assert.equal(
+      first.isCancelled(),
+      true,
+      "una generazione superata deve risultare cancellata, cosi' il lavoro sottostante (es. richieste a clangd) si ferma subito invece di continuare inutilmente"
+    );
+  });
+
+  it("cancel() rende isCancelled() true SUBITO, anche se il token non è (ancora) stale", () => {
+    const guard = createLatestWinsGuard();
+    const token = guard.start();
+
+    assert.equal(token.isCancelled(), false);
+    assert.equal(token.isStale(), false);
+
+    token.cancel();
+
+    assert.equal(
+      token.isCancelled(),
+      true,
+      "cancel() deve bastare da solo, senza bisogno che un'altra generazione superi questa"
+    );
+    // cancel() non è la stessa cosa di "superato da una richiesta più
+    // recente": isStale() resta false, solo isCancelled() riflette la
+    // rinuncia esplicita.
+    assert.equal(token.isStale(), false);
+  });
+
+  it("cancel() su un token non influenza altri token della stessa generazione corrente o di altre guardie", () => {
+    const guard = createLatestWinsGuard();
+    const tokenA = guard.start();
+    tokenA.cancel();
+
+    const guardB = createLatestWinsGuard();
+    const tokenB = guardB.start();
+    assert.equal(tokenB.isCancelled(), false, "cancel() su un'altra guardia non deve avere effetto");
+  });
 });

@@ -34,15 +34,16 @@ import { CalcDocsState } from "./state";
 
 const CONFIG_FILE_RX = /[\\/]config\.[ch]$/i;
 
-export async function ensureConfigVarsLoaded(state: CalcDocsState): Promise<void> {
+export async function ensureConfigVarsLoaded(state: CalcDocsState, isCancelled?: () => boolean): Promise<void> {
   if (state.configVarsSourceFiles.size === 0) {
-    await performWorkspaceSearch(state);
+    await performWorkspaceSearch(state, false, isCancelled);
     return;
   }
 
   let anyMissing = false;
 
   for (const [filePath, rememberedMtime] of Array.from(state.configVarsSourceFiles)) {
+    if (isCancelled?.()) break;
     let stat;
     try {
       stat = await fsp.stat(filePath);
@@ -66,14 +67,15 @@ export async function ensureConfigVarsLoaded(state: CalcDocsState): Promise<void
     state.configVarsSourceFiles.set(filePath, stat.mtimeMs);
   }
 
-  if (anyMissing) {
-    await performWorkspaceSearch(state, /* mergeOnly */ true);
+  if (anyMissing && !isCancelled?.()) {
+    await performWorkspaceSearch(state, /* mergeOnly */ true, isCancelled);
   }
 }
 
 async function performWorkspaceSearch(
   state: CalcDocsState,
-  mergeOnly = false
+  mergeOnly = false,
+  isCancelled?: () => boolean
 ): Promise<void> {
   const config = getConfig();
   refreshIgnoredDirs(state, config);
@@ -81,7 +83,8 @@ async function performWorkspaceSearch(
   const allFiles = await listFilesRecursive(
     state.workspaceRoot,
     (absoluteDirPath) => isIgnoredFsPath(state, absoluteDirPath),
-    state
+    state,
+    isCancelled
   );
 
   const configFiles = allFiles.filter((file) => CONFIG_FILE_RX.test(file));

@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { appendHexToLargeIntegers } from "../utils/nformat";
 
 import { collectCppCodeLensItems } from "./cppCodeLensItems";
 import { shouldRenderGhostInsteadOfCodeLens } from "./ghostPolicy";
@@ -106,7 +107,10 @@ export class GhostValueProvider {
           continue;
         }
 
-        const normalizedTitle = extractPureGhostValue(item.title, item.kind);
+        const normalizedTitle = appendHexToLargeIntegers(
+          this.state,
+          extractPureGhostValue(item.title, item.kind)
+        );
         if (!normalizedTitle) {
           continue;
         }

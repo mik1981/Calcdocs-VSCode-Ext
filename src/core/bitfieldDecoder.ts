@@ -1,7 +1,7 @@
 import { resolveSymbol } from "./expression";
 import type { CalcDocsState } from "./state";
 
-export type BitfieldMember = {
+type BitfieldMember = {
   name: string;
   fullName: string;
   mask: number;
@@ -10,7 +10,7 @@ export type BitfieldMember = {
   comment?: string;
 };
 
-export type BitfieldField = {
+type BitfieldField = {
   kind: "field";
   name: string;
   fullName: string;
@@ -21,7 +21,7 @@ export type BitfieldField = {
   comment?: string;
 };
 
-export type BitfieldFlag = {
+type BitfieldFlag = {
   kind: "flag";
   name: string;
   fullName: string;
@@ -33,7 +33,7 @@ export type BitfieldFlag = {
 
 export type BitfieldEntry = BitfieldField | BitfieldFlag;
 
-export type BitfieldDecodeResult = {
+type BitfieldDecodeResult = {
   target: string | null;
   value: number;
   fields: Array<{
@@ -53,7 +53,7 @@ export type BitfieldDecodeResult = {
 
 export type BitfieldDecodeTheme = "light" | "dark";
 
-export type BitfieldDecodeFormatOptions = {
+type BitfieldDecodeFormatOptions = {
   theme?: BitfieldDecodeTheme;
 };
 
@@ -142,7 +142,7 @@ function evaluateDefineValue(
   }
 }
 
-export function buildBitfieldEntries(
+function buildBitfieldEntries(
   allDefines: Map<string, string>,
   state: CalcDocsState
 ): BitfieldEntry[] {

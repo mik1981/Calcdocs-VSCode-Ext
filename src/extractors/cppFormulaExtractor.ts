@@ -104,7 +104,7 @@ function extractUnit(comment: string): string | undefined {
  * - Binary literals: `0b1010` → `10`
  * - Boolean literals: `true`/`false` → `1`/`0`
  */
-export function normalizeExpression(expr: string): string {
+function normalizeExpression(expr: string): string {
   let normalized = expr
     .trim()
     // Remove explicit C-style casts
@@ -140,13 +140,6 @@ export function normalizeExpression(expr: string): string {
   );
 
   return normalized;
-}
-
-/**
- * Computes the 0-based line number for a given string index within the source.
- */
-function lineOf(source: string, index: number): number {
-  return source.slice(0, index).split(/\r?\n/).length - 1;
 }
 
 /**
@@ -292,23 +285,6 @@ export function extractFormulasFromCpp(
   }
 
   return entries;
-}
-
-/**
- * Detects the language of a file based on its extension.
- */
-export function detectLanguage(uri: vscode.Uri): "yaml" | "c" | "cpp" {
-  const ext = uri.fsPath.toLowerCase();
-  if (/\.(yaml|yml)$/i.test(ext)) {
-    return "yaml";
-  }
-  if (/\.(h|hpp|hxx)$/i.test(ext)) {
-    return "cpp"; // Headers treated as C++ for formula extraction
-  }
-  if (/\.(c|cc|cpp|cxx)$/i.test(ext)) {
-    return "cpp";
-  }
-  return "cpp"; // Default to cpp for unknown extensions
 }
 
 /**

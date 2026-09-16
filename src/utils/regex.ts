@@ -12,7 +12,7 @@ export const DEFINE_RX = /^\s*#define\s+([A-Za-z_]\w*)(.*)$/;
 /**
  * const TYPE NAME = EXPR matcher used for numeric extraction.
  */
-export const CONST_RX =
+const CONST_RX =
   /\b(?:static\s+)?const\s+(?:unsigned\s+)?(?:long|int|short|char|float|double|uint\d*_t|int\d*_t)\s+([A-Za-z_]\w*)\s*=\s*([^;]+)/g;
 
 /**

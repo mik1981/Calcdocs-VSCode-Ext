@@ -20,7 +20,7 @@ import { UNIT_SPECS } from '../engine/units';
 import { formatNumbersWithThousandsSeparator } from '../utils/nformat';
 import type { CalcDocsState } from '../core/state';
 
-export function normalizeGhostUnitLabel(rawUnit?: string): string | undefined {
+function normalizeGhostUnitLabel(rawUnit?: string): string | undefined {
   if (!rawUnit) {
     return undefined;
   }
@@ -41,7 +41,7 @@ export function normalizeGhostUnitLabel(rawUnit?: string): string | undefined {
   return cleaned;
 }
 
-export function formatGhostParamEntry(name: string, value: number, rawUnit?: string): string {
+function formatGhostParamEntry(name: string, value: number, rawUnit?: string): string {
   const valueText = `${name}=${formatGhostNumber(value)}`;
   const unitText = normalizeGhostUnitLabel(rawUnit);
   if (!unitText) {

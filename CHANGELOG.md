@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.4.6] - 09/16/2026
+
+- Added a progressive analysis fallback for very large projects. After 5 seconds, CalcDocs starts showing best-effort ghost values based on the active file and its direct `#includes` only, then keeps refining them while the full analysis, including clangd, runs in the background. If the analysis exceeds the configurable `largeProjectAnalysisTimeoutMs` timeout (default: 120s), it is abandoned and a dedicated partial/truncated status is shown in the status bar.
+
+- Made analysis cancellable end to end. A latest-wins guard and explicit cancellation signal are now checked during workspace scanning, `#include` expansion, and before every clangd hover request. Superseded or timed-out analyses can therefore stop promptly, avoiding unnecessary clangd queue buildup and preventing older results from overwriting newer ones. Also fixed ghost values flickering when switching between active C/C++ files.
+
+- Improved vendor SDK handling for STM32CubeMX-style projects, including CMSIS, HAL drivers, BSP, and middleware. Vendor headers are now included without recursively expanding their nested `#includes`. Depth limiting no longer stops sibling branches, and missing or circular includes are handled cleanly without polluting the disk cache.
+
+- Ghost values now show the hexadecimal equivalent alongside large decimal integers (≥ `0x10000`), such as addresses and masks.
+
+- Commands now take effect immediately even when workspace settings cannot be saved, for example because of a broken `.vscode/settings.json`. The new value is applied for the current session, with a warning and an “Open Workspace Settings” action. The value is restored from disk on the next restart.
+
+- Fixed an issue where disabling CalcDocs, or ghost values alone, did not clear the current file until switching editors.
+
+
 ## [0.4.5] - 07/31/2026
 
 - Fixed stale inline ghost values and YAML highlights not clearing when CalcDocs was disabled. Rendering is now managed directly by the providers, ensuring all decorations are properly removed and cannot reappear while disabled.

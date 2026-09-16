@@ -1,6 +1,6 @@
 ﻿import * as fsp from "fs/promises";
 
-import { collectDefinesAndConsts, parseCppSymbolDefinition } from "./cppParser";
+import { collectDefinesAndConsts, parseCppSymbolDefinition, type MegaBudgetOverrides } from "./cppParser";
 import { extractConfigVarsFromFile } from "./configParser";
 import * as path from "path";
 import { listFilesRecursive, findFormulaYamlFile } from "./files";
@@ -57,7 +57,7 @@ import * as crypto from "crypto";
  * Risultato dell'analisi del workspace.
  * Indica se il file formulas YAML è cambiato dall'ultima analisi.
  */
-export type AnalysisResult = {
+type AnalysisResult = {
   /** True se il file formulas.yaml è stato aggiunto o rimosso */
   hasFormulasFileChanged: boolean;
 };
@@ -181,10 +181,14 @@ export async function augmentCppSymbolsWithClangd(
   state: CalcDocsState,
   cppSymbols: CollectedCppSymbols,
   files: readonly string[],
-  clangdService?: ClangdService
+  clangdService?: ClangdService,
+  isCancelled?: () => boolean
 ): Promise<CollectedCppSymbols> {
   const status = clangdService?.getStatus();
   if (!clangdService?.isAvailable() || !status?.available || !status.hasCompileCommands) {
+    return cppSymbols;
+  }
+  if (isCancelled?.()) {
     return cppSymbols;
   }
 
@@ -194,6 +198,7 @@ export async function augmentCppSymbolsWithClangd(
     clangdService,
     {
       headerIndex: state.headerIndex,
+      isCancelled,
     }
   );
 
@@ -229,7 +234,8 @@ export async function augmentCppSymbolsWithClangd(
  */
 export async function runAnalysis(
   state: CalcDocsState,
-  clangdService?: ClangdService
+  clangdService?: ClangdService,
+  isCancelled?: () => boolean
 ): Promise<AnalysisResult> {
   clearFormulaDiagnostics(state);
   state.configVars.clear();
@@ -240,11 +246,16 @@ export async function runAnalysis(
 
   try {
     // Scansiona il workspace per ottenere lista file e trovare YAML
-    const workspaceScan = await scanWorkspace(state);
+    const workspaceScan = await scanWorkspace(state, isCancelled);
+
+    if (isCancelled?.()) {
+      return { hasFormulasFileChanged: workspaceScan.hasFormulasFileChanged };
+    }
 
     // Parse config files for @config.*
     const configFiles = workspaceScan.files.filter(f => /[\\/]config\.[ch]$/i.test(f));
     for (const configFile of configFiles) {
+      if (isCancelled?.()) break;
       const configVars = await extractConfigVarsFromFile(configFile, state.workspaceRoot, state);
       if (configVars) {
         const relPath = path.relative(state.workspaceRoot, configFile);
@@ -257,7 +268,7 @@ export async function runAnalysis(
     if (!workspaceScan.yamlPath) {
       state.yamlDiagnostics = [];
       state.missingYamlSuggestions = [];
-      await runCppOnlyAnalysis(state, workspaceScan.files, stackStats, clangdService);
+      await runCppOnlyAnalysis(state, workspaceScan.files, stackStats, clangdService, isCancelled);
       updateStateStackUsage(state, stackStats);
       logStackUsageIfNeeded(state, stackStats);
       return {
@@ -283,7 +294,8 @@ export async function runAnalysis(
       workspaceScan.yamlPath,
       loadedYaml,
       stackStats,
-      clangdService
+      clangdService,
+      isCancelled
     );
     
     // Report formula discrepancies after analysis
@@ -319,13 +331,41 @@ export async function runAnalysis(
  * @param state - Stato corrente dell'estensione
  * @param sourcePath - Percorso assoluto del file C/C++ attivo
  */
+/**
+ * Budget MegaBudget esplicito per la modalità "shallow": profondità 0
+ * (SOLO gli #include diretti del file attivo — depth=0 nel budget
+ * corrisponde esattamente ai target dei suoi #include, non ai LORO a
+ * loro volta) e
+ * tempo breve. Passato come override ESPLICITO a collectDefinesAndConsts
+ * — non tocca mai state.megaBudgetOverrides — proprio perché una
+ * passata "full" può già essere in corso in background sullo stesso
+ * state, e mutare un campo condiviso la corromperebbe silenziosamente.
+ * maxChars resta al default adattivo: a profondità 1 non è comunque il
+ * fattore limitante.
+ */
+const SHALLOW_MEGA_BUDGET_OVERRIDES: MegaBudgetOverrides = {
+  maxDepth: 1,
+  maxTimeMs: 1500,
+};
+
+type CppAnalysisScope = "full" | "shallow";
+
 export async function runActiveCppFileAnalysis(
   state: CalcDocsState,
   sourcePath: string,
-  clangdService?: ClangdService
+  clangdService?: ClangdService,
+  scope: CppAnalysisScope = "full",
+  isCancelled?: () => boolean
 ): Promise<void> {
   const normalizedSourcePath = path.resolve(sourcePath);
   if (!ANALYSIS_EXTS.has(path.extname(normalizedSourcePath).toLowerCase())) {
+    return;
+  }
+  if (isCancelled?.()) {
+    // Già abbandonata prima ancora di iniziare (es. il fallback
+    // progressivo continua a rilanciare passate shallow ai checkpoint,
+    // ma nel frattempo questa generazione è stata superata o ha già
+    // rinunciato): non ha senso nemmeno partire.
     return;
   }
 
@@ -334,7 +374,19 @@ export async function runActiveCppFileAnalysis(
   try {
     const config = getConfig();
 
-    await ensureHeaderIndexPopulated(state, config);
+    if (scope === "full") {
+      // Lo scan di popolamento dell'header index (potenzialmente un giro
+      // completo del workspace) ha senso solo per la passata completa.
+      // In modalità shallow lo saltiamo: le altre euristiche di
+      // resolveInclude() (percorso relativo, Inc/, include/, headers/...)
+      // bastano per trovare gli #include diretti nella stragrande
+      // maggioranza dei progetti, e non vogliamo né il costo né il
+      // rischio di due scan concorrenti sullo stesso state.headerIndex
+      // mentre una passata full è già in volo.
+      await ensureHeaderIndexPopulated(state, config, isCancelled);
+    }
+
+    if (isCancelled?.()) return;
 
     let cppSymbols = await collectDefinesAndConsts(
       [normalizedSourcePath],
@@ -344,15 +396,33 @@ export async function runActiveCppFileAnalysis(
         output: state.output,
         maxMegaCacheEntries: config.cppCacheMaxEntries,
         headerIndex: state.headerIndex,
-        megaBudgetOverrides: state.megaBudgetOverrides,
+        megaBudgetOverrides:
+          scope === "shallow" ? SHALLOW_MEGA_BUDGET_OVERRIDES : state.megaBudgetOverrides,
+        isCancelled,
       } as any 
     );
-    cppSymbols = await augmentCppSymbolsWithClangd(
-      state,
-      cppSymbols,
-      [normalizedSourcePath],
-      clangdService
-    );
+
+    if (scope === "full" && !isCancelled?.()) {
+      cppSymbols = await augmentCppSymbolsWithClangd(
+        state,
+        cppSymbols,
+        [normalizedSourcePath],
+        clangdService,
+        isCancelled
+      );
+    }
+    // scope === "shallow": clangd deliberatamente saltato. Questa
+    // modalità esiste apposta per i progetti dove clangd è già in
+    // difficoltà (vedi runProgressiveCppAnalysis in extension.ts) —
+    // interrogarlo qui vanificherebbe lo scopo del fallback rapido.
+
+    if (isCancelled?.()) {
+      // Il lavoro fin qui va scartato: applicare comunque i risultati
+      // di una passata abbandonata potrebbe sovrascrivere con dati
+      // vecchi/incompleti quelli di una generazione più recente che nel
+      // frattempo ha già finito e applicato i suoi.
+      return;
+    }
 
     applyCppSymbols(state, cppSymbols, {
       resetSymbolValues: true,
@@ -384,7 +454,7 @@ export async function runActiveCppFileAnalysis(
  * @param state - Stato corrente dell'estensione
  * @returns Risultato della scansione con file e percorso YAML
  */
-async function scanWorkspace(state: CalcDocsState): Promise<WorkspaceScan> {
+async function scanWorkspace(state: CalcDocsState, isCancelled?: () => boolean): Promise<WorkspaceScan> {
   const config = getConfig();
   refreshIgnoredDirs(state, config);
 
@@ -392,7 +462,8 @@ async function scanWorkspace(state: CalcDocsState): Promise<WorkspaceScan> {
   const files = await listFilesRecursive(
     state.workspaceRoot,
     (absoluteDirPath) => isIgnoredFsPath(state, absoluteDirPath),
-    state
+    state,
+    isCancelled
   );
 
   // Trova il file formulas YAML
@@ -444,7 +515,8 @@ function rebuildHeaderIndex(state: CalcDocsState, files: string[]): void {
  */
 async function ensureHeaderIndexPopulated(
   state: CalcDocsState,
-  config: ReturnType<typeof getConfig>
+  config: ReturnType<typeof getConfig>,
+  isCancelled?: () => boolean
 ): Promise<void> {
   if (state.headerIndex.size > 0) {
     return;
@@ -461,7 +533,8 @@ async function ensureHeaderIndexPopulated(
   const files = await listFilesRecursive(
     state.workspaceRoot,
     (absoluteDirPath) => isIgnoredFsPath(state, absoluteDirPath),
-    state
+    state,
+    isCancelled
   );
   rebuildHeaderIndex(state, files);
   void saveHeaderIndexToDisk(state);
@@ -602,7 +675,8 @@ async function runCppOnlyAnalysis(
   state: CalcDocsState,
   files: string[],
   stackStats: SymbolResolutionStats,
-  clangdService?: ClangdService
+  clangdService?: ClangdService,
+  isCancelled?: () => boolean
 ): Promise<void> {
   if (files.length === 0) {
     return;
@@ -626,14 +700,18 @@ async function runCppOnlyAnalysis(
     maxMegaCacheEntries: config.cppCacheMaxEntries,
     headerIndex: state.headerIndex,
     megaBudgetOverrides: state.megaBudgetOverrides,
+    isCancelled,
   });
+  if (isCancelled?.()) return;
   cppSymbols = await augmentCppSymbolsWithClangd(
     state,
     cppSymbols,
     sourceFiles,
-    clangdService
+    clangdService,
+    isCancelled
   );
-  
+  if (isCancelled?.()) return;
+
   applyCppSymbols(state, cppSymbols, {
     resetSymbolValues: true,
     applyConstsBeforeResolve: false,
@@ -1116,7 +1194,8 @@ async function runYamlAnalysis(
   yamlPath: string,
   loadedYaml: LoadedYaml,
   stackStats: SymbolResolutionStats,
-  clangdService?: ClangdService
+  clangdService?: ClangdService,
+  isCancelled?: () => boolean
 ): Promise<void> {
   state.lastYamlPath = yamlPath;
   state.lastYamlRaw = loadedYaml.rawText;
@@ -1139,9 +1218,9 @@ async function runYamlAnalysis(
     headerIndex: state.headerIndex,
     megaBudgetOverrides: state.megaBudgetOverrides,
     megaContentCacheDir: state.megaContentCacheDir,
+    isCancelled,
   };
   if (sourceFiles.some(f => f.includes('test'))) {
-    // state.output.appendLine('[Analysis] 🔄 Test files detected - forcing fresh C parse (cache bypassed)');
     collectOpts.clearTestCache = true; // Trigger cache clear in cppParser
   }
   let cppSymbols = await collectDefinesAndConsts(sourceFiles, state.workspaceRoot, collectOpts);
@@ -1149,7 +1228,8 @@ async function runYamlAnalysis(
     state,
     cppSymbols,
     sourceFiles,
-    clangdService
+    clangdService,
+    isCancelled
   );
 
   applyCppSymbols(state, cppSymbols, {
@@ -1614,130 +1694,6 @@ export function rebuildFormulaIndexWithEngine(
       }
     } else if (entry.formula) {
       entry.labels = mergeEntryLabels(entry.formula, entry.labels);
-    }
-
-    state.formulaIndex.set(key, entry);
-  }
-}
-
-/**
- * Ricostruisce le entry dell'indice delle formule arricchite con espressione espansa e valore calcolato.
- * Esempio: "RHO * V * V / 2" -> "1.2 * 10 * 10 / 2" -> 60.
- * 
- * @param state - Stato corrente dell'estensione
- * @param yamlNodes - Entry YAML da processare
- * @param yamlRaw - Testo raw del YAML
- * @param yamlPath - Percorso del file YAML
- * @param defines - Mappa delle definizioni
- * @param functionDefines - Mappa delle macro funzione
- * @param evalContext - Contesto di valutazione (CSV tables, etc.)
- * @param stackStats - Statistiche di risoluzione
- */
-function rebuildFormulaIndex(
-  state: CalcDocsState,
-  yamlNodes: YamlNodeEntries,
-  yamlRaw: string,
-  yamlPath: string,
-  defines: Map<string, string>,
-  functionDefines: CalcDocsState["functionDefines"],
-  evalContext: EvaluationContext,
-  stackStats: SymbolResolutionStats
-): void {
-  state.formulaIndex.clear();
-
-  for (const [key, node] of yamlNodes) {
-    // Costruisci l'entry della formula dal nodo YAML
-    const entry = buildFormulaEntry(
-      key,
-      node,
-      yamlRaw,
-      yamlPath,
-      state.workspaceRoot
-    );
-
-    if (entry.unit) {
-      state.symbolUnits.set(key, entry.unit);
-    }
-
-    // Se c'è una formula, processa e calcola il valore
-    if (entry.formula) {
-      // Estrai unità di misura inline se presente (es. "5 * MUL -> m/s")
-      const parsed = parseExpressionUnit(entry.formula);
-      const formulaExpr = parsed.expression;
-      const outputUnit = parsed.outputUnit;
-      
-      // Salva l'unità se trovata
-      if (outputUnit) {
-        entry.unit = outputUnit;
-      }
-      
-      entry.labels = mergeEntryLabels(formulaExpr, entry.labels);
-      const ambiguousSymbols = getAmbiguousFormulaSymbols(formulaExpr, state);
-      
-      // Processa solo se non ci sono simboli ambigui
-      if (ambiguousSymbols.length === 0) {
-        const resolvedMap = new Map<string, number>();
-        const expanded = expandExpression(
-          formulaExpr,
-          defines,
-          functionDefines,
-          resolvedMap,
-          state.symbolValues,
-          evalContext,
-          stackStats,
-          state.defineConditions,
-          state.symbolUnits
-        );
-        const expandedWithLookups = resolveInlineLookups(expanded, evalContext);
-
-        entry.expanded = clampLen(expandedWithLookups);
-
-        // Prova a calcolare il valore numerico
-        try {
-          entry.valueCalc = safeEval(expandedWithLookups, evalContext);
-        } catch {
-          // Lascia valueCalc come null quando l'espressione non è numerica
-        }
-        
-        // Calcola le dimensioni fisiche se richiesto
-        if (outputUnit) {
-          const varDims = buildVariableDimensions(state);
-          const dimResult = evaluateExpressionDimensions(formulaExpr, varDims);
-          if (dimResult.dimension) {
-            // Aggiungi warning di dimensione se presente
-            const unitSpec = UNIT_SPECS.get(normalizeUnitToken(outputUnit));
-            if (unitSpec && !dimensionsEqual(dimResult.dimension, unitSpec.dimension)) {
-              state.output.warn(
-                `Formula '${entry.key}': dimension mismatch - expression is ${formatDimensionVector(dimResult.dimension)} but output unit '${unitSpec.canonical}' expects ${formatDimensionVector(unitSpec.dimension)}`
-              );
-            }
-          }
-        }
-      } else {
-        // Anche con simboli ambigui, prova a calcolare il valore per il write-back
-        const resolvedMap = new Map<string, number>();
-        const replaced = replaceTokens(formulaExpr, state.symbolValues);
-        const expanded = expandExpression(
-          replaced,
-          defines,
-          functionDefines,
-          resolvedMap,
-          state.symbolValues,
-          evalContext,
-          stackStats,
-          state.defineConditions,
-          state.symbolUnits
-        );
-        const expandedWithLookups = resolveInlineLookups(expanded, evalContext);
-
-        entry.expanded = clampLen(expandedWithLookups);
-
-        try {
-          entry.valueCalc = safeEval(expandedWithLookups, evalContext);
-        } catch {
-          // Mantieni valueCalc come null
-        }
-      }
     }
 
     state.formulaIndex.set(key, entry);
